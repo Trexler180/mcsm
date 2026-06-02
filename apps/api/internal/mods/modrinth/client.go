@@ -2,14 +2,22 @@ package modrinth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 )
 
-const baseURL = "https://api.modrinth.com/v2"
+const (
+	baseURL   = "https://api.modrinth.com/v2"
+	userAgent = "mcsm/0.1.0 (github.com/mcsm)"
+)
 
 type Client struct {
 	http *http.Client
@@ -82,30 +90,78 @@ type Dependency struct {
 	DependencyType string `json:"dependency_type"`
 }
 
-func (c *Client) Search(ctx context.Context, query, loader, mcVersion string, limit int) (*SearchResult, error) {
-	if limit <= 0 {
-		limit = 20
+// SearchParams describes a Modrinth search. Zero values are omitted.
+type SearchParams struct {
+	Query       string
+	ProjectType string   // mod, plugin, datapack, modpack, shader, resourcepack
+	Loader      string   // fabric, forge, paper, ...
+	MCVersion   string   // e.g. 1.21.4
+	Categories  []string // extra category facets (and-ed)
+	Index       string   // relevance|downloads|follows|newest|updated
+	Limit       int
+	Offset      int
+}
+
+// buildFacets composes Modrinth's nested facet array. Each inner slice is OR-ed,
+// the outer slices are AND-ed. Previously version/loader/type clobbered each
+// other (A1) — now every constraint is appended so they all apply together.
+func (p SearchParams) buildFacets() string {
+	pt := p.ProjectType
+	if pt == "" {
+		pt = "mod"
+	}
+	groups := [][]string{{"project_type:" + pt}}
+
+	if p.Loader != "" {
+		groups = append(groups, []string{"categories:" + p.Loader})
+	}
+	for _, cat := range p.Categories {
+		if cat != "" {
+			groups = append(groups, []string{"categories:" + cat})
+		}
+	}
+	if p.MCVersion != "" {
+		groups = append(groups, []string{"versions:" + p.MCVersion})
+	}
+	// Server-relevant content only: keep client-only resources out of mod/plugin
+	// searches but allow resource/shader packs (which are client_side:required).
+	if pt == "mod" || pt == "plugin" || pt == "datapack" || pt == "modpack" {
+		groups = append(groups, []string{"server_side:optional", "server_side:required"})
 	}
 
-	facets := `[["project_type:mod"],["server_side:optional","server_side:required"]]`
-	if loader != "" {
-		facets = fmt.Sprintf(`[["project_type:mod"],["categories:%s"],["server_side:optional","server_side:required"]]`, loader)
+	parts := make([]string, len(groups))
+	for i, g := range groups {
+		quoted := make([]string, len(g))
+		for j, v := range g {
+			quoted[j] = fmt.Sprintf("%q", v)
+		}
+		parts[i] = "[" + strings.Join(quoted, ",") + "]"
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func (c *Client) Search(ctx context.Context, p SearchParams) (*SearchResult, error) {
+	if p.Limit <= 0 {
+		p.Limit = 20
 	}
 
 	params := url.Values{
-		"query":  {query},
-		"facets": {facets},
-		"limit":  {fmt.Sprint(limit)},
+		"query":  {p.Query},
+		"facets": {p.buildFacets()},
+		"limit":  {fmt.Sprint(p.Limit)},
 	}
-	if mcVersion != "" {
-		params.Set("facets", fmt.Sprintf(`[["project_type:mod"],["versions:%s"],["server_side:optional","server_side:required"]]`, mcVersion))
+	if p.Offset > 0 {
+		params.Set("offset", fmt.Sprint(p.Offset))
+	}
+	if p.Index != "" {
+		params.Set("index", p.Index)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/search?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "mcsm/0.1.0 (github.com/mcsm)")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -142,7 +198,7 @@ func (c *Client) GetVersions(ctx context.Context, projectID, loader, mcVersion s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "mcsm/0.1.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -166,7 +222,7 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "mcsm/0.1.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -185,12 +241,96 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	return &p, nil
 }
 
+// LoaderForPlatform maps a server platform to the Modrinth loader facet used for
+// version compatibility filtering. Bukkit-family servers run plugins under the
+// "paper"/"spigot"/"bukkit"/"purpur" loaders; modloaders map 1:1. Vanilla has no
+// loader (datapacks only) and returns "".
+func LoaderForPlatform(platform string) string {
+	switch strings.ToLower(platform) {
+	case "fabric":
+		return "fabric"
+	case "quilt":
+		return "quilt"
+	case "forge":
+		return "forge"
+	case "neoforge":
+		return "neoforge"
+	case "paper":
+		return "paper"
+	case "purpur":
+		return "purpur"
+	case "spigot":
+		return "spigot"
+	case "bukkit":
+		return "bukkit"
+	default:
+		return ""
+	}
+}
+
+// IsPluginPlatform reports whether the platform loads Bukkit-style plugins
+// (target dir /plugins) rather than mods (/mods).
+func IsPluginPlatform(platform string) bool {
+	switch strings.ToLower(platform) {
+	case "paper", "purpur", "spigot", "bukkit":
+		return true
+	default:
+		return false
+	}
+}
+
+// Download streams a file to a temp file on disk, verifying its SHA256 against
+// wantSHA (when non-empty). Returns the temp file path; caller must remove it.
+// Streaming + temp-file avoids holding multi-MB jars in memory (A5) and lets us
+// reject a corrupt/MITM download before it ever reaches the agent (A4).
+func (c *Client) Download(ctx context.Context, fileURL, wantSHA string) (path string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+
+	tmp, err := os.CreateTemp("", "mcsm-mod-*.jar")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		tmp.Close()
+		if err != nil {
+			os.Remove(tmp.Name())
+		}
+	}()
+
+	h := sha256.New()
+	if _, err = io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+		return "", err
+	}
+
+	if wantSHA != "" {
+		got := hex.EncodeToString(h.Sum(nil))
+		if !strings.EqualFold(got, wantSHA) {
+			err = fmt.Errorf("sha256 mismatch: want %s got %s", wantSHA, got)
+			return "", err
+		}
+	}
+	return tmp.Name(), nil
+}
+
 func (c *Client) GetVersion(ctx context.Context, versionID string) (*Version, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/version/"+versionID, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "mcsm/0.1.0")
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
