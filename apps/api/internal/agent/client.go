@@ -90,6 +90,22 @@ func (c *Client) StartServer(ctx context.Context, serverID string, cfg map[strin
 	return nil
 }
 
+// Reinstall asks the agent to wipe and re-fetch the server runtime for the given
+// platform/version (used when changing Minecraft or loader versions).
+func (c *Client) Reinstall(ctx context.Context, serverID string, cfg map[string]any) error {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/reinstall", cfg)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var e map[string]string
+		json.NewDecoder(resp.Body).Decode(&e)
+		return fmt.Errorf("agent error: %s", e["error"])
+	}
+	return nil
+}
+
 func (c *Client) StopServer(ctx context.Context, serverID string, graceful bool, timeoutSec int) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/stop", map[string]any{
 		"graceful":    graceful,

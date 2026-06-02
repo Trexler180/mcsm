@@ -32,6 +32,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 
 		r.Route("/servers/{id}", func(r chi.Router) {
 			r.Post("/start", h.Start)
+			r.Post("/reinstall", h.Reinstall)
 			r.Post("/stop", h.Stop)
 			r.Post("/restart", h.Restart)
 			r.Post("/kill", h.Kill)

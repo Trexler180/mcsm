@@ -309,6 +309,47 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
 }
 
+// Reinstall stops the server and re-fetches its runtime jar for the currently
+// configured platform/version, so a version change actually applies.
+func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	srv, err := h.store.GetServer(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+
+	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 16*time.Minute)
+	defer cancel()
+
+	if err := c.RegisterDir(ctx, id, srv.DirectoryPath); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+	// Stop first so we don't swap the jar under a running process.
+	_ = c.StopServer(ctx, id, true, 30)
+
+	cfg := map[string]any{
+		"directory":   srv.DirectoryPath,
+		"platform":    srv.Platform,
+		"mc_version":  srv.MCVersion,
+		"java_binary": srv.JavaBinary,
+	}
+	if err := c.Reinstall(ctx, id, cfg); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
+	audit(h.store, r, id, "server.reinstall", map[string]any{"platform": srv.Platform, "mc_version": srv.MCVersion})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reinstalled"})
+}
+
 func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)

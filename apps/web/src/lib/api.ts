@@ -3,6 +3,7 @@ import type {
   Backup,
   BackupTarget,
   FileListing,
+  GameVersion,
   InstalledMod,
   LoginResponse,
   ModSearchParams,
@@ -157,6 +158,7 @@ export const api = {
     stop: (id: string, graceful = true) =>
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),
     restart: (id: string) => post(`/servers/${id}/restart`),
+    reinstall: (id: string) => post(`/servers/${id}/reinstall`),
     kill: (id: string) => post(`/servers/${id}/kill`),
     status: (id: string) =>
       get<{ status: string; pid?: number }>(`/servers/${id}/status`),
@@ -272,6 +274,17 @@ export const api = {
       post(`/servers/${serverId}/mods/${modId}/pin`, { pinned }),
     uninstall: (serverId: string, modId: string) =>
       del(`/servers/${serverId}/mods/${modId}`),
+  },
+
+  minecraft: {
+    versions: (platform: string, snapshots = false) =>
+      get<GameVersion[]>(
+        `/minecraft/versions?platform=${encodeURIComponent(platform)}${snapshots ? "&snapshots=true" : ""}`,
+      ),
+    loaders: (platform: string) =>
+      get<GameVersion[]>(
+        `/minecraft/loaders?platform=${encodeURIComponent(platform)}`,
+      ),
   },
 
   audit: {

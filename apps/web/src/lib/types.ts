@@ -118,6 +118,11 @@ export interface ModUpdate {
   latest_version_id: string;
 }
 
+export interface GameVersion {
+  version: string;
+  stable: boolean;
+}
+
 export interface AuditEntry {
   id: number;
   user_id: string | null;

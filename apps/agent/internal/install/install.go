@@ -31,6 +31,15 @@ const (
 
 var httpClient = &http.Client{Timeout: 15 * time.Minute}
 
+// Reinstall removes existing runtime artifacts and re-fetches them, so a changed
+// Minecraft/loader version actually takes effect (EnsureRuntime alone is a no-op
+// when a jar is already present).
+func Reinstall(ctx context.Context, dir, platform, mcVersion, javaBinary string) error {
+	_ = os.Remove(filepath.Join(dir, JarName))
+	_ = os.Remove(filepath.Join(dir, RuntimeFile))
+	return EnsureRuntime(ctx, dir, platform, mcVersion, javaBinary)
+}
+
 // EnsureRuntime makes the server runnable. Idempotent: returns nil if
 // `server.jar` or `mcsm-runtime.txt` already exists in dir.
 //
