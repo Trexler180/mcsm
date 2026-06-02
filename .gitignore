@@ -43,8 +43,9 @@ redis-data/
 *.db-wal
 *.db-shm
 
-# Per-server working dirs (created by agent at runtime)
-servers/
+# Per-server working dirs (created by agent at runtime).
+# Anchored to repo root so it does NOT match apps/web/src/routes/servers/.
+/servers/
 
 # Build caches
 apps/web/tsconfig.tsbuildinfo
