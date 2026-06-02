@@ -51,15 +51,30 @@ type ProjectHit struct {
 }
 
 type Project struct {
-	ID          string   `json:"id"`
-	Slug        string   `json:"slug"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Categories  []string `json:"categories"`
-	ClientSide  string   `json:"client_side"`
-	ServerSide  string   `json:"server_side"`
-	Downloads   int      `json:"downloads"`
-	IconURL     string   `json:"icon_url"`
+	ID          string         `json:"id"`
+	Slug        string         `json:"slug"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Body        string         `json:"body"`
+	Categories  []string       `json:"categories"`
+	ClientSide  string         `json:"client_side"`
+	ServerSide  string         `json:"server_side"`
+	Downloads   int            `json:"downloads"`
+	Followers   int            `json:"followers"`
+	IconURL     string         `json:"icon_url"`
+	ProjectType string         `json:"project_type"`
+	SourceURL   *string        `json:"source_url"`
+	IssuesURL   *string        `json:"issues_url"`
+	WikiURL     *string        `json:"wiki_url"`
+	Updated     string         `json:"updated"`
+	Gallery     []GalleryImage `json:"gallery"`
+}
+
+type GalleryImage struct {
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Featured    bool   `json:"featured"`
 }
 
 type Version struct {
