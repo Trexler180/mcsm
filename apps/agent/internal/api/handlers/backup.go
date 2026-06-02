@@ -172,6 +172,105 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Restore stops the server (if running), wipes the live server directory
+// (preserving the backups folder), and extracts the chosen backup zip back into
+// place. The caller is responsible for restarting afterwards.
+func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	backupID := chi.URLParam(r, "backupId")
+	dst, err := h.base(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	parent := filepath.Dir(dst)
+	zipPath := filepath.Join(parent, "mcsm-backups", id, backupID+".zip")
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "backup not found")
+		return
+	}
+	defer zr.Close()
+
+	// Stop the instance first; ignore "not running" so restore works offline.
+	_ = h.mgr.Stop(id, true, 30*time.Second)
+
+	// Wipe live contents except the sibling backups folder (which lives outside
+	// dst) and anything under dst/mcsm-backups (defensive).
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read dir: "+err.Error())
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == "mcsm-backups" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
+			writeError(w, http.StatusInternalServerError, "wipe: "+err.Error())
+			return
+		}
+	}
+
+	// Extract, guarding against zip-slip (entries escaping dst).
+	for _, f := range zr.File {
+		target := filepath.Join(dst, f.Name)
+		if !strings.HasPrefix(target, filepath.Clean(dst)+string(os.PathSeparator)) {
+			writeError(w, http.StatusBadRequest, "unsafe path in archive: "+f.Name)
+			return
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				writeError(w, http.StatusInternalServerError, "mkdir: "+err.Error())
+				return
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			writeError(w, http.StatusInternalServerError, "mkdir: "+err.Error())
+			return
+		}
+		rc, err := f.Open()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "open entry: "+err.Error())
+			return
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
+		if err != nil {
+			rc.Close()
+			writeError(w, http.StatusInternalServerError, "create file: "+err.Error())
+			return
+		}
+		_, copyErr := io.Copy(out, rc)
+		out.Close()
+		rc.Close()
+		if copyErr != nil {
+			writeError(w, http.StatusInternalServerError, "extract: "+copyErr.Error())
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": backupID})
+}
+
+// DeleteBackup removes a backup zip from disk (used by retention enforcement).
+func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	backupID := chi.URLParam(r, "backupId")
+	src, err := h.base(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	zipPath := filepath.Join(filepath.Dir(src), "mcsm-backups", id, backupID+".zip")
+	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
+		writeError(w, http.StatusInternalServerError, "delete: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // DownloadBackup streams a previously-created backup zip back to the caller.
 func (h *BackupHandlers) DownloadBackup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

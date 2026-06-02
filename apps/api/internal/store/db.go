@@ -670,6 +670,23 @@ func (s *Store) ListBackups(ctx context.Context, serverID string) ([]*Backup, er
 	return backups, rows.Err()
 }
 
+func (s *Store) DeleteBackup(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM backups WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) GetBackup(ctx context.Context, id string) (*Backup, error) {
+	var b Backup
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, server_id, target_id, triggered_by, trigger, status, size_bytes, snapshot_id, metadata, started_at, completed_at
+		 FROM backups WHERE id=?`, id,
+	).Scan(&b.ID, &b.ServerID, &b.TargetID, &b.TriggeredBy, &b.Trigger, &b.Status, &b.SizeBytes, &b.SnapshotID, (*jsonRaw)(&b.Metadata), &b.StartedAt, &b.CompletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("backup not found")
+	}
+	return &b, err
+}
+
 // UpdateBackupResult marks a running backup as success/failed. Pass nil
 // sizeBytes to leave the column unchanged (e.g. on failure).
 func (s *Store) UpdateBackupResult(ctx context.Context, id, status string, sizeBytes *int64, errMsg string) error {

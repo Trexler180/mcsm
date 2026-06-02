@@ -283,6 +283,8 @@ export const api = {
   backups: {
     list: (serverId: string) => get<Backup[]>(`/servers/${serverId}/backups`),
     create: (serverId: string) => post<Backup>(`/servers/${serverId}/backups`),
+    restore: (serverId: string, backupId: string) =>
+      post(`/servers/${serverId}/backups/${backupId}/restore`),
     targets: {
       list: (serverId: string) =>
         get<BackupTarget[]>(`/servers/${serverId}/backup-targets`),

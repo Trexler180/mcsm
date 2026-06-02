@@ -100,6 +100,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					// Backups
 					r.Get("/backups", backupH.ListBackups)
 					r.Post("/backups", backupH.CreateBackup)
+					r.Post("/backups/{backupId}/restore", backupH.RestoreBackup)
 					r.Get("/backup-targets", backupH.ListTargets)
 					r.Post("/backup-targets", backupH.CreateTarget)
 
