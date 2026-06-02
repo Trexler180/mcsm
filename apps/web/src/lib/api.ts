@@ -1,4 +1,5 @@
 import type {
+  AuditEntry,
   Backup,
   BackupTarget,
   FileListing,
@@ -262,6 +263,12 @@ export const api = {
       post(`/servers/${serverId}/mods/${modId}/pin`, { pinned }),
     uninstall: (serverId: string, modId: string) =>
       del(`/servers/${serverId}/mods/${modId}`),
+  },
+
+  audit: {
+    list: (limit = 100) => get<AuditEntry[]>(`/audit?limit=${limit}`),
+    forServer: (serverId: string, limit = 100) =>
+      get<AuditEntry[]>(`/servers/${serverId}/audit?limit=${limit}`),
   },
 
   nodes: {

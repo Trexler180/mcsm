@@ -149,6 +149,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 
+	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -252,6 +253,7 @@ func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	audit(h.store, r, "", "server.delete", map[string]any{"server_id": id})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -303,6 +305,7 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = h.store.UpdateServerStatus(r.Context(), id, "starting")
+	audit(h.store, r, id, "server.start", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
 }
 
@@ -336,6 +339,7 @@ func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = h.store.UpdateServerStatus(r.Context(), id, "stopping")
+	audit(h.store, r, id, "server.stop", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
 }
 
@@ -360,6 +364,7 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	audit(h.store, r, id, "server.restart", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarting"})
 }
 
@@ -385,6 +390,7 @@ func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
+	audit(h.store, r, id, "server.kill", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "offline"})
 }
 

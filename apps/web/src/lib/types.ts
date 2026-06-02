@@ -115,6 +115,16 @@ export interface ModUpdate {
   latest_version_id: string;
 }
 
+export interface AuditEntry {
+  id: number;
+  user_id: string | null;
+  server_id: string | null;
+  action: string;
+  detail: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
 export interface ModSearchHit {
   project_id: string;
   slug: string;

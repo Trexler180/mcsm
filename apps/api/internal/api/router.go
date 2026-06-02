@@ -27,6 +27,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	userH := handlers.NewUserHandlers(s, jwtSecret)
 	consoleH := handlers.NewConsoleHandlers(s)
 	playersH := handlers.NewPlayersHandlers(s)
+	auditH := handlers.NewAuditHandlers(s)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth routes
@@ -107,6 +108,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					r.Post("/tasks", taskH.Create)
 					r.Put("/tasks/{taskId}", taskH.Update)
 					r.Delete("/tasks/{taskId}", taskH.Delete)
+
+					// Per-server audit trail
+					r.Get("/audit", auditH.ListForServer)
 				})
 			})
 
@@ -117,6 +121,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 				r.Post("/", userH.Create)
 				r.Delete("/{id}", userH.Delete)
 			})
+
+			// Global audit log (admin only)
+			r.With(auth.AdminOnly).Get("/audit", auditH.List)
 		})
 	})
 
