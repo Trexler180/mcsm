@@ -257,6 +257,11 @@ export const api = {
         version_id: versionId,
         with_deps: withDeps,
       }),
+    installModpack: (serverId: string, projectId: string, versionId: string) =>
+      post(`/servers/${serverId}/mods/install-modpack`, {
+        project_id: projectId,
+        version_id: versionId,
+      }),
     updates: (serverId: string) =>
       get<ModUpdate[]>(`/servers/${serverId}/mods/updates`),
     update: (serverId: string, modId: string, versionId?: string) =>

@@ -94,6 +94,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					r.Get("/mods/project", modH.GetProject)
 					r.Get("/mods/versions", modH.GetVersions)
 					r.Post("/mods/install", modH.Install)
+					r.Post("/mods/install-modpack", modH.InstallModpack)
 					r.Get("/mods/updates", modH.Updates)
 					r.Post("/mods/{modId}/update", modH.Update)
 					r.Post("/mods/{modId}/pin", modH.Pin)
