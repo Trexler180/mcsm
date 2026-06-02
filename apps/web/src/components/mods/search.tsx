@@ -1,18 +1,50 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Package, Trash2, Download, Loader2 } from "lucide-react";
+import {
+  Search,
+  Package,
+  Trash2,
+  Download,
+  Loader2,
+  Pin,
+  PinOff,
+  ArrowUpCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
-import type { InstalledMod, ModSearchHit, ModVersion } from "@/lib/types";
+import type {
+  InstalledMod,
+  ModProjectType,
+  ModSearchHit,
+  ModSortIndex,
+  ModUpdate,
+} from "@/lib/types";
 
 interface ModSearchProps {
   serverId: string;
   loader: string;
   mcVersion: string;
 }
+
+const PROJECT_TYPES: { value: ModProjectType; label: string }[] = [
+  { value: "mod", label: "Mods" },
+  { value: "plugin", label: "Plugins" },
+  { value: "datapack", label: "Datapacks" },
+  { value: "modpack", label: "Modpacks" },
+  { value: "shader", label: "Shaders" },
+  { value: "resourcepack", label: "Resource Packs" },
+];
+
+const SORTS: { value: ModSortIndex; label: string }[] = [
+  { value: "relevance", label: "Relevance" },
+  { value: "downloads", label: "Downloads" },
+  { value: "follows", label: "Follows" },
+  { value: "newest", label: "Newest" },
+  { value: "updated", label: "Updated" },
+];
 
 function formatDownloads(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -22,19 +54,44 @@ function formatDownloads(n: number): string {
 
 function InstalledModRow({
   mod,
+  serverId,
+  update,
   onUninstall,
 }: {
   mod: InstalledMod;
+  serverId: string;
+  update?: ModUpdate;
   onUninstall: () => void;
 }) {
+  const qc = useQueryClient();
+  const { success, error } = useNotifications();
+
   const projectQuery = useQuery({
     queryKey: ["modrinth-project", mod.source_id],
     queryFn: () => api.mods.getProject(mod.server_id, mod.source_id!),
     enabled: mod.source === "modrinth" && !!mod.source_id,
     staleTime: 10 * 60_000,
   });
-
   const project = projectQuery.data;
+
+  const updateMutation = useMutation({
+    mutationFn: () => api.mods.update(serverId, mod.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      success(`Updated ${mod.name}`);
+    },
+    onError: (e: Error) => error("Update failed", e.message),
+  });
+
+  const pinMutation = useMutation({
+    mutationFn: () => api.mods.pin(serverId, mod.id, !mod.pinned),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+    },
+    onError: (e: Error) => error("Pin failed", e.message),
+  });
 
   return (
     <div className="flex items-start justify-between gap-3 px-4 py-3 hover:bg-surface-2/50 border-b border-border/50">
@@ -51,41 +108,60 @@ function InstalledModRow({
           </div>
         )}
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-medium text-text-primary truncate">
               {project?.title ?? mod.name}
             </p>
-            {project && (
-              <span className="text-xs text-text-secondary flex-shrink-0">
-                {formatDownloads(project.downloads)} ↓
+            {mod.installed_as_dep && (
+              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-2 text-text-secondary border border-border/50">
+                dependency
+              </span>
+            )}
+            {mod.pinned && (
+              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                pinned
               </span>
             )}
           </div>
-          {project?.description && (
-            <p className="text-xs text-text-secondary line-clamp-1 mt-0.5">
-              {project.description}
-            </p>
-          )}
           <p className="text-xs text-text-secondary mt-0.5">
-            {mod.version} · {mod.file_name}
+            {mod.version} · {mod.install_path}/{mod.file_name}
           </p>
-          {project?.categories && project.categories.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {project.categories.slice(0, 4).map((c) => (
-                <span
-                  key={c}
-                  className="text-xs px-1.5 py-0.5 rounded bg-surface-2 text-text-secondary border border-border/50"
-                >
-                  {c}
-                </span>
-              ))}
-            </div>
+          {update && (
+            <p className="text-xs text-green-400 mt-0.5">
+              Update available: {update.latest_version}
+            </p>
           )}
         </div>
       </div>
-      <Button size="sm" variant="ghost" onClick={onUninstall} title="Uninstall">
-        <Trash2 className="h-3.5 w-3.5 text-red-400" />
-      </Button>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {update && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => updateMutation.mutate()}
+            loading={updateMutation.isPending}
+            title={`Update to ${update.latest_version}`}
+          >
+            <ArrowUpCircle className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => pinMutation.mutate()}
+          loading={pinMutation.isPending}
+          title={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
+        >
+          {mod.pinned ? (
+            <PinOff className="h-3.5 w-3.5 text-amber-400" />
+          ) : (
+            <Pin className="h-3.5 w-3.5 text-text-secondary" />
+          )}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onUninstall} title="Uninstall">
+          <Trash2 className="h-3.5 w-3.5 text-red-400" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -105,100 +181,128 @@ function SearchHitRow({
 }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
-  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
-    null,
-  );
+  const [picking, setPicking] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState<string>("");
 
   const versionsQuery = useQuery({
     queryKey: ["mod-versions", serverId, hit.project_id, loader, mcVersion],
     queryFn: () =>
       api.mods.getVersions(serverId, hit.project_id, loader, mcVersion),
-    enabled: false,
+    enabled: picking,
   });
 
   const installMutation = useMutation({
     mutationFn: (versionId: string) =>
-      api.mods.install(serverId, "modrinth", hit.project_id, versionId),
-    onSuccess: () => {
+      api.mods.install(serverId, "modrinth", hit.project_id, versionId, true),
+    onSuccess: (created: unknown) => {
       qc.invalidateQueries({ queryKey: ["mods", serverId] });
-      success(`Installed ${hit.title}`);
+      const n = Array.isArray(created) ? created.length : 1;
+      success(
+        `Installed ${hit.title}`,
+        n > 1 ? `+ ${n - 1} dependencies` : undefined,
+      );
     },
     onError: (e: Error) => error("Install failed", e.message),
   });
 
   const isInstalled = installedIds.has(hit.project_id);
 
-  const handleInstall = async () => {
+  const handleQuickInstall = async () => {
     if (isInstalled) return;
-    let versions = versionsQuery.data;
-    if (!versions) {
-      const result = await versionsQuery.refetch();
-      versions = result.data;
-    }
-    if (!versions || versions.length === 0) {
-      error(
-        "No compatible versions",
-        `No versions found for ${loader} ${mcVersion}`,
-      );
-      return;
-    }
-    const versionId = selectedVersionId ?? versions[0].id;
-    installMutation.mutate(versionId);
+    // Empty versionId → backend resolves latest compatible.
+    installMutation.mutate("");
   };
 
   return (
-    <div className="flex items-start gap-3 px-4 py-3 hover:bg-surface-2/50 border-b border-border/50">
-      {hit.icon_url ? (
-        <img
-          src={hit.icon_url}
-          alt=""
-          className="h-9 w-9 rounded flex-shrink-0 object-cover"
-        />
-      ) : (
-        <div className="h-9 w-9 rounded bg-surface-2 flex items-center justify-center flex-shrink-0">
-          <Package className="h-4 w-4 text-text-secondary" />
-        </div>
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-text-primary truncate">
-            {hit.title}
-          </p>
-          <span className="text-xs text-text-secondary flex-shrink-0">
-            {formatDownloads(hit.downloads)} ↓
-          </span>
-        </div>
-        <p className="text-xs text-text-secondary line-clamp-1 mt-0.5">
-          {hit.description}
-        </p>
-        {hit.categories.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {hit.categories.slice(0, 4).map((c) => (
-              <span
-                key={c}
-                className="text-xs px-1.5 py-0.5 rounded bg-surface-2 text-text-secondary border border-border/50"
-              >
-                {c}
-              </span>
-            ))}
+    <div className="px-4 py-3 hover:bg-surface-2/50 border-b border-border/50">
+      <div className="flex items-start gap-3">
+        {hit.icon_url ? (
+          <img
+            src={hit.icon_url}
+            alt=""
+            className="h-9 w-9 rounded flex-shrink-0 object-cover"
+          />
+        ) : (
+          <div className="h-9 w-9 rounded bg-surface-2 flex items-center justify-center flex-shrink-0">
+            <Package className="h-4 w-4 text-text-secondary" />
           </div>
         )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-text-primary truncate">
+              {hit.title}
+            </p>
+            <span className="text-xs text-text-secondary flex-shrink-0">
+              {formatDownloads(hit.downloads)} ↓
+            </span>
+          </div>
+          <p className="text-xs text-text-secondary line-clamp-1 mt-0.5">
+            {hit.description}
+          </p>
+        </div>
+        <div className="flex-shrink-0 flex items-center gap-1">
+          {isInstalled ? (
+            <span className="text-xs text-green-400 px-2 py-1">Installed</span>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setPicking((v) => !v)}
+                title="Choose version"
+              >
+                {picking ? "Hide" : "Versions"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleQuickInstall}
+                loading={installMutation.isPending}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Install
+              </Button>
+            </>
+          )}
+        </div>
       </div>
-      <div className="flex-shrink-0">
-        {isInstalled ? (
-          <span className="text-xs text-green-400 px-2 py-1">Installed</span>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleInstall}
-            loading={installMutation.isPending || versionsQuery.isFetching}
-          >
-            <Download className="h-3.5 w-3.5" />
-            Install
-          </Button>
-        )}
-      </div>
+
+      {picking && !isInstalled && (
+        <div className="mt-2 pl-12 flex items-center gap-2">
+          {versionsQuery.isFetching ? (
+            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          ) : versionsQuery.data && versionsQuery.data.length > 0 ? (
+            <>
+              <select
+                className="flex-1 text-xs rounded bg-surface-2 border border-border px-2 py-1 text-text-primary"
+                value={selectedVersionId || versionsQuery.data[0].id}
+                onChange={(e) => setSelectedVersionId(e.target.value)}
+              >
+                {versionsQuery.data.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.version_number} · {v.game_versions.join(", ")}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                onClick={() =>
+                  installMutation.mutate(
+                    selectedVersionId || versionsQuery.data![0].id,
+                  )
+                }
+                loading={installMutation.isPending}
+              >
+                Install
+              </Button>
+            </>
+          ) : (
+            <p className="text-xs text-text-secondary">
+              No compatible versions for {loader} {mcVersion}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -208,6 +312,8 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
   const { success, error } = useNotifications();
   const [query, setQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [projectType, setProjectType] = useState<ModProjectType>("mod");
+  const [sortIndex, setSortIndex] = useState<ModSortIndex>("relevance");
   const [uninstallTarget, setUninstallTarget] = useState<InstalledMod | null>(
     null,
   );
@@ -215,15 +321,54 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
     "installed",
   );
 
+  // Plugins/datapacks don't filter by modloader; mods do.
+  const searchLoader = projectType === "mod" ? loader : "";
+
   const { data: installed = [], isLoading: loadingInstalled } = useQuery({
     queryKey: ["mods", serverId],
     queryFn: () => api.mods.list(serverId),
   });
 
+  const { data: updates = [] } = useQuery({
+    queryKey: ["mod-updates", serverId],
+    queryFn: () => api.mods.updates(serverId),
+    staleTime: 5 * 60_000,
+  });
+  const updatesByMod = new Map(updates.map((u) => [u.mod_id, u]));
+
   const { data: searchResult, isFetching: searching } = useQuery({
-    queryKey: ["mod-search", serverId, query, loader, mcVersion],
-    queryFn: () => api.mods.search(serverId, query, loader, mcVersion),
+    queryKey: [
+      "mod-search",
+      serverId,
+      query,
+      searchLoader,
+      mcVersion,
+      projectType,
+      sortIndex,
+    ],
+    queryFn: () =>
+      api.mods.search(serverId, {
+        query,
+        loader: searchLoader,
+        mcVersion,
+        projectType,
+        index: sortIndex,
+      }),
     enabled: query.length >= 2,
+  });
+
+  const updateAllMutation = useMutation({
+    mutationFn: async () => {
+      for (const u of updates) {
+        await api.mods.update(serverId, u.mod_id);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      success("All mods updated");
+    },
+    onError: (e: Error) => error("Update failed", e.message),
   });
 
   const uninstallMutation = useMutation({
@@ -246,8 +391,8 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Search bar */}
-      <div className="px-4 py-3 border-b border-border bg-surface">
+      {/* Search bar + filters */}
+      <div className="px-4 py-3 border-b border-border bg-surface space-y-2">
         <form onSubmit={handleSearch} className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-secondary pointer-events-none" />
@@ -262,10 +407,36 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
             Search
           </Button>
         </form>
+        <div className="flex gap-2">
+          <select
+            className="text-xs rounded bg-surface-2 border border-border px-2 py-1 text-text-primary"
+            value={projectType}
+            onChange={(e) =>
+              setProjectType(e.target.value as ModProjectType)
+            }
+          >
+            {PROJECT_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="text-xs rounded bg-surface-2 border border-border px-2 py-1 text-text-primary"
+            value={sortIndex}
+            onChange={(e) => setSortIndex(e.target.value as ModSortIndex)}
+          >
+            {SORTS.map((s) => (
+              <option key={s.value} value={s.value}>
+                Sort: {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Tab bar */}
-      <div className="flex border-b border-border bg-surface">
+      <div className="flex border-b border-border bg-surface items-center">
         <button
           onClick={() => setActiveTab("installed")}
           className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
@@ -287,6 +458,18 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
           Search Results
           {searchResult && ` (${searchResult.total_hits})`}
         </button>
+        {updates.length > 0 && activeTab === "installed" && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto mr-2 my-1"
+            onClick={() => updateAllMutation.mutate()}
+            loading={updateAllMutation.isPending}
+          >
+            <ArrowUpCircle className="h-3.5 w-3.5" />
+            Update all ({updates.length})
+          </Button>
+        )}
       </div>
 
       {/* Content */}
@@ -306,6 +489,8 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
               <InstalledModRow
                 key={mod.id}
                 mod={mod}
+                serverId={serverId}
+                update={updatesByMod.get(mod.id)}
                 onUninstall={() => setUninstallTarget(mod)}
               />
             ))
@@ -329,7 +514,7 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
               key={hit.project_id}
               hit={hit}
               serverId={serverId}
-              loader={loader}
+              loader={searchLoader}
               mcVersion={mcVersion}
               installedIds={installedProjectIds}
             />

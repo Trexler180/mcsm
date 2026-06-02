@@ -76,7 +76,43 @@ export interface InstalledMod {
   file_name: string;
   sha256: string | null;
   pinned: boolean;
+  install_path: string;
+  installed_as_dep: boolean;
   installed_at: string;
+}
+
+export type ModProjectType =
+  | "mod"
+  | "plugin"
+  | "datapack"
+  | "modpack"
+  | "shader"
+  | "resourcepack";
+
+export type ModSortIndex =
+  | "relevance"
+  | "downloads"
+  | "follows"
+  | "newest"
+  | "updated";
+
+export interface ModSearchParams {
+  query: string;
+  loader?: string;
+  mcVersion?: string;
+  projectType?: ModProjectType;
+  categories?: string[];
+  index?: ModSortIndex;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ModUpdate {
+  mod_id: string;
+  name: string;
+  current_version: string;
+  latest_version: string;
+  latest_version_id: string;
 }
 
 export interface ModSearchHit {
