@@ -70,17 +70,19 @@ type Server struct {
 }
 
 type InstalledMod struct {
-	ID          string    `json:"id"`
-	ServerID    string    `json:"server_id"`
-	Source      string    `json:"source"`
-	SourceID    *string   `json:"source_id"`
-	VersionID   *string   `json:"version_id"`
-	Name        string    `json:"name"`
-	Version     string    `json:"version"`
-	FileName    string    `json:"file_name"`
-	SHA256      *string   `json:"sha256"`
-	Pinned      bool      `json:"pinned"`
-	InstalledAt time.Time `json:"installed_at"`
+	ID             string    `json:"id"`
+	ServerID       string    `json:"server_id"`
+	Source         string    `json:"source"`
+	SourceID       *string   `json:"source_id"`
+	VersionID      *string   `json:"version_id"`
+	Name           string    `json:"name"`
+	Version        string    `json:"version"`
+	FileName       string    `json:"file_name"`
+	SHA256         *string   `json:"sha256"`
+	Pinned         bool      `json:"pinned"`
+	InstallPath    string    `json:"install_path"`
+	InstalledAsDep bool      `json:"installed_as_dep"`
+	InstalledAt    time.Time `json:"installed_at"`
 }
 
 type BackupTarget struct {
@@ -517,10 +519,18 @@ func (s *Store) DeleteServer(ctx context.Context, id string) error {
 
 // ── Installed Mods ───────────────────────────────────────────────
 
+const modCols = `id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, install_path, installed_as_dep, installed_at`
+
+func scanMod(sc interface {
+	Scan(...any) error
+}, m *InstalledMod) error {
+	return sc.Scan(&m.ID, &m.ServerID, &m.Source, &m.SourceID, &m.VersionID, &m.Name, &m.Version,
+		&m.FileName, &m.SHA256, &m.Pinned, &m.InstallPath, &m.InstalledAsDep, &m.InstalledAt)
+}
+
 func (s *Store) ListMods(ctx context.Context, serverID string) ([]*InstalledMod, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, installed_at
-		 FROM installed_mods WHERE server_id = ? ORDER BY name`, serverID)
+		`SELECT `+modCols+` FROM installed_mods WHERE server_id = ? ORDER BY name`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +538,7 @@ func (s *Store) ListMods(ctx context.Context, serverID string) ([]*InstalledMod,
 	var mods []*InstalledMod
 	for rows.Next() {
 		var m InstalledMod
-		if err := rows.Scan(&m.ID, &m.ServerID, &m.Source, &m.SourceID, &m.VersionID, &m.Name, &m.Version, &m.FileName, &m.SHA256, &m.Pinned, &m.InstalledAt); err != nil {
+		if err := scanMod(rows, &m); err != nil {
 			return nil, err
 		}
 		mods = append(mods, &m)
@@ -538,32 +548,50 @@ func (s *Store) ListMods(ctx context.Context, serverID string) ([]*InstalledMod,
 
 func (s *Store) CreateMod(ctx context.Context, m *InstalledMod) (*InstalledMod, error) {
 	id := uuid.NewString()
+	if m.InstallPath == "" {
+		m.InstallPath = "/mods"
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO installed_mods (id, server_id, source, source_id, version_id, name, version, file_name, sha256)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		id, m.ServerID, m.Source, m.SourceID, m.VersionID, m.Name, m.Version, m.FileName, m.SHA256,
+		`INSERT INTO installed_mods (id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, install_path, installed_as_dep)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, m.ServerID, m.Source, m.SourceID, m.VersionID, m.Name, m.Version, m.FileName, m.SHA256, m.Pinned, m.InstallPath, m.InstalledAsDep,
 	)
 	if err != nil {
 		return nil, err
 	}
 	var out InstalledMod
-	err = s.db.QueryRowContext(ctx,
-		`SELECT id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, installed_at
-		 FROM installed_mods WHERE id = ?`, id,
-	).Scan(&out.ID, &out.ServerID, &out.Source, &out.SourceID, &out.VersionID, &out.Name, &out.Version, &out.FileName, &out.SHA256, &out.Pinned, &out.InstalledAt)
+	err = scanMod(s.db.QueryRowContext(ctx, `SELECT `+modCols+` FROM installed_mods WHERE id = ?`, id), &out)
 	return &out, err
 }
 
 func (s *Store) GetMod(ctx context.Context, id string) (*InstalledMod, error) {
 	var m InstalledMod
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, installed_at
-		 FROM installed_mods WHERE id = ?`, id,
-	).Scan(&m.ID, &m.ServerID, &m.Source, &m.SourceID, &m.VersionID, &m.Name, &m.Version, &m.FileName, &m.SHA256, &m.Pinned, &m.InstalledAt)
+	err := scanMod(s.db.QueryRowContext(ctx, `SELECT `+modCols+` FROM installed_mods WHERE id = ?`, id), &m)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("mod not found")
 	}
 	return &m, err
+}
+
+// UpdateMod swaps the version/file metadata of an existing mod row (used by the
+// update flow after a new jar is pushed to the agent).
+func (s *Store) UpdateMod(ctx context.Context, m *InstalledMod) (*InstalledMod, error) {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE installed_mods SET version_id=?, name=?, version=?, file_name=?, sha256=? WHERE id=?`,
+		m.VersionID, m.Name, m.Version, m.FileName, m.SHA256, m.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var out InstalledMod
+	err = scanMod(s.db.QueryRowContext(ctx, `SELECT `+modCols+` FROM installed_mods WHERE id = ?`, m.ID), &out)
+	return &out, err
+}
+
+// SetModPinned toggles whether a mod is excluded from bulk updates.
+func (s *Store) SetModPinned(ctx context.Context, id string, pinned bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE installed_mods SET pinned=? WHERE id=?`, pinned, id)
+	return err
 }
 
 func (s *Store) DeleteMod(ctx context.Context, id string) (*InstalledMod, error) {
