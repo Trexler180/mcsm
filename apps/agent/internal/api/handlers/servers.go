@@ -65,6 +65,35 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
 }
 
+// Reinstall wipes the runtime jar/installer artifacts and re-fetches them for
+// the requested platform + version. Requires the server to be stopped; the
+// panel handles stopping first. Used when changing Minecraft/loader versions.
+func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
+	var cfg process.StartConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if cfg.Directory == "" || cfg.Platform == "" {
+		writeError(w, http.StatusBadRequest, "directory and platform required")
+		return
+	}
+	dir, err := validateServerDirectory(h.serverRoot, cfg.Directory)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	if err := install.Reinstall(ctx, dir, cfg.Platform, cfg.MCVersion, cfg.JavaBinary); err != nil {
+		log.Printf("reinstall (%s %s): %v", cfg.Platform, cfg.MCVersion, err)
+		writeError(w, http.StatusBadGateway, "reinstall: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "platform": cfg.Platform, "mc_version": cfg.MCVersion})
+}
+
 func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 

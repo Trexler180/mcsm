@@ -29,6 +29,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	consoleH := handlers.NewConsoleHandlers(s)
 	playersH := handlers.NewPlayersHandlers(s)
 	auditH := handlers.NewAuditHandlers(s)
+	mcH := handlers.NewMinecraftHandlers()
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth routes
@@ -41,6 +42,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/auth/me", authH.Me)
+
+			// Minecraft version metadata (global, cached upstream lookups)
+			r.Get("/minecraft/versions", mcH.Versions)
+			r.Get("/minecraft/loaders", mcH.LoaderVersions)
 
 			// Nodes (admin only)
 			r.Route("/nodes", func(r chi.Router) {
@@ -64,6 +69,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					r.Delete("/", serverH.Delete)
 
 					r.Post("/start", serverH.Start)
+					r.Post("/reinstall", serverH.Reinstall)
 					r.Post("/stop", serverH.Stop)
 					r.Post("/restart", serverH.Restart)
 					r.Post("/kill", serverH.Kill)
