@@ -172,6 +172,7 @@ function SearchHitRow({
   hit,
   serverId,
   source,
+  isModpack,
   loader,
   mcVersion,
   installedIds,
@@ -179,6 +180,7 @@ function SearchHitRow({
   hit: ModSearchHit;
   serverId: string;
   source: ModSource;
+  isModpack: boolean;
   loader: string;
   mcVersion: string;
   installedIds: Set<string>;
@@ -197,7 +199,9 @@ function SearchHitRow({
 
   const installMutation = useMutation({
     mutationFn: (versionId: string) =>
-      api.mods.install(serverId, source, hit.project_id, versionId, true),
+      isModpack
+        ? api.mods.installModpack(serverId, hit.project_id, versionId)
+        : api.mods.install(serverId, source, hit.project_id, versionId, true),
     onSuccess: (created: unknown) => {
       qc.invalidateQueries({ queryKey: ["mods", serverId] });
       const n = Array.isArray(created) ? created.length : 1;
@@ -540,6 +544,7 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
               hit={hit}
               serverId={serverId}
               source={source}
+              isModpack={projectType === "modpack" && source === "modrinth"}
               loader={searchLoader}
               mcVersion={mcVersion}
               installedIds={installedProjectIds}

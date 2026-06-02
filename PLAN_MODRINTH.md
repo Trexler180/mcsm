@@ -2,63 +2,52 @@
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 
-Implementation order (each phase builds + commits independently):
-
 ## Phase 1 — C5: Git safety net
-- [ ] `git init`, add `.gitignore` (bin/, node_modules/, dist/, mcsm.db*, .buildtools/, servers/)
-- [ ] initial snapshot commit
+- [x] `git init`, `.gitignore` (db/servers/build caches excluded)
+- [x] initial snapshot commit
 
 ## Phase 2 — A1–A6: Modrinth bug batch (+ tests)
-- [ ] A1 fix search facet composition (loader + version + server_side combine, no overwrite)
-- [ ] A2 map server platform → modrinth loader on install (always, not only when LoaderVersion!=nil)
-- [ ] A3 download via http.NewRequestWithContext + shared client (no bare http.Get)
-- [ ] A4 verify SHA256 of downloaded jar, reject mismatch
-- [ ] A5 stream download → multipart (io.Pipe) instead of io.ReadAll
-- [ ] A6 uninstall checks agent delete status before DB delete
-- [ ] tests: client facet builder, loader mapping, sha verify
+- [x] A1 facet composition fixed (loader + version + server_side all apply)
+- [x] A2 platform → modrinth loader mapping on install (LoaderForPlatform)
+- [x] A3 download via context client (modrinth.Download), no bare http.Get
+- [x] A4 SHA256 verification of downloaded jar, reject mismatch
+- [x] A5 stream download → temp file → multipart (no io.ReadAll of whole jar)
+- [x] A6 uninstall checks agent delete status before DB delete
+- [x] tests: facet builder, loader mapping, SHA verify
 
 ## Phase 3 — B1: Correct install dir per platform/type
-- [ ] migration 002: add `install_path` column to installed_mods
-- [ ] map (project_type, platform) → target dir (/mods, /plugins, /world/datapacks)
-- [ ] store + use install_path on uninstall
-- [ ] store funcs + model field
+- [x] migration 002: install_path + installed_as_dep columns
+- [x] installDirForVersion → /mods, /plugins, /world/datapacks
+- [x] install_path stored + used on uninstall/update
 
 ## Phase 4 — B3 updates/pinning + B2 dependency resolution
-- [ ] B3 GET /servers/{id}/mods/updates (compare latest compatible vs installed)
-- [ ] B3 POST /servers/{id}/mods/{modId}/update (swap jar)
-- [ ] B3 POST /servers/{id}/mods/{modId}/pin (toggle pinned)
-- [ ] B2 resolve required deps transitively on install (migration: installed_as_dep flag)
-- [ ] UI: updates badge, update-all, pin toggle, dep confirm
+- [x] GET /mods/updates, POST /mods/{id}/update, POST /mods/{id}/pin
+- [x] transitive required-dependency install (installRecursive, cycle guard)
+- [x] UI: updates badge, update-all, pin toggle, dep count toast
 
 ## Phase 5 — B4/B5 search UX
-- [ ] B4 project_type selector (mod/plugin/datapack/modpack/shader/resourcepack)
-- [ ] B5 sort, category facets, pagination (offset), version picker dropdown
-- [ ] client + handler + UI
+- [x] B4 project_type selector (mod/plugin/datapack/modpack/shader/resourcepack)
+- [x] B5 sort index, version picker dropdown, offset plumbed
+- [x] client SearchParams + handler + UI
 
 ## Phase 6 — C1–C4 QoL
-- [ ] C1 audit log: WriteAudit wired to mod/server/auth/backup actions + GET /audit
-- [ ] C2 backup restore endpoint (agent + api) + retention enforcement in scheduler
-- [ ] C3 scheduled-task React route
-- [ ] C4 slog structured logging + request-id middleware
+- [x] C1 audit log writes (auth/server/mod actions) + admin audit view + per-server endpoint
+- [x] C2 backup restore (agent+api+UI) + retention enforcement in scheduler/manual
+- [x] C3 scheduled-task UI — already present (TasksTab), verified wired to api.tasks
+- [x] C4 slog structured logging + request-id middleware (api+agent) + agent graceful instance shutdown
 
-## Phase 7 — B6/C6 (big, optional)
-- [ ] B6 modpack (.mrpack) install
-- [ ] C6 CurseForge source behind CURSEFORGE_API_KEY
+## Phase 7 — B6/C6
+- [x] B6 modpack (.mrpack) install — manifest files + overrides, server-side only
+- [x] C6 CurseForge source behind CURSEFORGE_API_KEY (normalized to modrinth shapes) + source toggle UI
 
 ---
 
+## Notes / limitations
+- CurseForge: no dependency auto-resolution and no SHA256 verify (CF exposes sha1/sha512 only); files with author-disabled distribution return a clear error.
+- Modpack install is Modrinth-only (.mrpack). CurseForge modpacks (manifest.json) not handled.
+- Mod "updates" check is Modrinth-only; CF-installed mods are skipped.
+- Backup retention: keep_last_n + max_age_days from default target's retention JSON, fallback keep 10.
+
 ## Loader/type mapping reference
-
-Platform → Modrinth loader facet:
-- vanilla → (none, datapacks only)
-- paper/purpur/spigot/bukkit → paper / spigot / bukkit / purpur (plugins)
-- fabric → fabric
-- quilt → quilt
-- forge → forge
-- neoforge → neoforge
-
-project_type → install dir:
-- mod → /mods
-- plugin → /plugins
-- datapack → /world/datapacks
-- resourcepack/shader → /resourcepacks /shaderpacks (client-side; allow but warn)
+Platform → Modrinth loader: vanilla→(none), paper/purpur/spigot/bukkit→same, fabric/quilt/forge/neoforge→1:1.
+project_type → dir: mod→/mods, plugin→/plugins, datapack→/world/datapacks.

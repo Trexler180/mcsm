@@ -241,6 +241,29 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	return &p, nil
 }
 
+// MrpackIndex is the modrinth.index.json manifest inside a .mrpack archive.
+type MrpackIndex struct {
+	FormatVersion int               `json:"formatVersion"`
+	Name          string            `json:"name"`
+	VersionID     string            `json:"versionId"`
+	Files         []MrpackFile      `json:"files"`
+	Dependencies  map[string]string `json:"dependencies"`
+}
+
+type MrpackFile struct {
+	Path      string   `json:"path"`
+	Downloads []string `json:"downloads"`
+	FileSize  int64    `json:"fileSize"`
+	Hashes    struct {
+		SHA1   string `json:"sha1"`
+		SHA512 string `json:"sha512"`
+	} `json:"hashes"`
+	Env struct {
+		Client string `json:"client"`
+		Server string `json:"server"`
+	} `json:"env"`
+}
+
 // LoaderForPlatform maps a server platform to the Modrinth loader facet used for
 // version compatibility filtering. Bukkit-family servers run plugins under the
 // "paper"/"spigot"/"bukkit"/"purpur" loaders; modloaders map 1:1. Vanilla has no

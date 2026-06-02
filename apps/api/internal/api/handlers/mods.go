@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -304,6 +307,197 @@ func (h *ModHandlers) downloadAndRecord(ctx context.Context, c *agent.Client, se
 		InstallPath:    dest,
 		InstalledAsDep: asDep,
 	})
+}
+
+// InstallModpack downloads a Modrinth .mrpack, installs every server-side file
+// to its declared path, applies the pack's overrides, and records the modpack as
+// a single installed entry. CurseForge modpacks use a different manifest format
+// and are not supported here.
+func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	var body struct {
+		ProjectID string `json:"project_id"`
+		VersionID string `json:"version_id"`
+	}
+	if err := decode(r, &body); err != nil || body.ProjectID == "" {
+		writeError(w, http.StatusBadRequest, "project_id required")
+		return
+	}
+
+	srv, err := h.store.GetServer(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	node, err := h.store.GetNode(r.Context(), srv.NodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Minute)
+	defer cancel()
+
+	ver, err := h.resolveVersion(ctx, srv, "modrinth", body.ProjectID, body.VersionID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	file := primaryFile(ver)
+	if file == nil || !strings.HasSuffix(file.Filename, ".mrpack") {
+		writeError(w, http.StatusBadRequest, "selected version is not a .mrpack")
+		return
+	}
+
+	packPath, err := h.modrinth.Download(ctx, file.URL, file.Hashes.SHA256)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "download failed: "+err.Error())
+		return
+	}
+	defer os.Remove(packPath)
+
+	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+
+	count, err := h.applyMrpack(ctx, c, serverID, packPath)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	// Record the modpack itself as one entry for visibility.
+	sha := file.Hashes.SHA256
+	pid := body.ProjectID
+	vid := ver.ID
+	mod, err := h.store.CreateMod(ctx, &store.InstalledMod{
+		ServerID:    serverID,
+		Source:      "modrinth",
+		SourceID:    &pid,
+		VersionID:   &vid,
+		Name:        ver.Name,
+		Version:     ver.VersionNumber,
+		FileName:    file.Filename,
+		SHA256:      &sha,
+		InstallPath: "/",
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	audit(h.store, r, serverID, "modpack.install", map[string]any{"project_id": body.ProjectID, "files": count})
+	writeJSON(w, http.StatusCreated, map[string]any{"modpack": mod, "files_installed": count})
+}
+
+// applyMrpack reads the archive at packPath, installs server files + overrides
+// onto the agent, and returns the number of files written.
+func (h *ModHandlers) applyMrpack(ctx context.Context, c *agent.Client, serverID, packPath string) (int, error) {
+	zr, err := zip.OpenReader(packPath)
+	if err != nil {
+		return 0, fmt.Errorf("open mrpack: %w", err)
+	}
+	defer zr.Close()
+
+	// Parse the index manifest.
+	var index *modrinth.MrpackIndex
+	for _, f := range zr.File {
+		if f.Name == "modrinth.index.json" {
+			rc, err := f.Open()
+			if err != nil {
+				return 0, fmt.Errorf("open index: %w", err)
+			}
+			var idx modrinth.MrpackIndex
+			err = json.NewDecoder(rc).Decode(&idx)
+			rc.Close()
+			if err != nil {
+				return 0, fmt.Errorf("parse index: %w", err)
+			}
+			index = &idx
+			break
+		}
+	}
+	if index == nil {
+		return 0, fmt.Errorf("modrinth.index.json missing from pack")
+	}
+
+	count := 0
+	// 1. Downloaded files declared in the manifest (skip client-only).
+	for _, mf := range index.Files {
+		if mf.Env.Server == "unsupported" {
+			continue
+		}
+		if len(mf.Downloads) == 0 {
+			continue
+		}
+		dir, name := splitAgentPath(mf.Path)
+		tmp, err := h.modrinth.Download(ctx, mf.Downloads[0], "")
+		if err != nil {
+			return count, fmt.Errorf("download %s: %w", mf.Path, err)
+		}
+		err = uploadFileToAgent(ctx, c, serverID, dir, name, tmp)
+		os.Remove(tmp)
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+
+	// 2. Overrides bundled in the archive. server-overrides win over overrides.
+	for _, prefix := range []string{"overrides/", "server-overrides/"} {
+		for _, f := range zr.File {
+			if f.FileInfo().IsDir() || !strings.HasPrefix(f.Name, prefix) {
+				continue
+			}
+			rel := strings.TrimPrefix(f.Name, prefix)
+			if rel == "" {
+				continue
+			}
+			tmp, err := extractZipEntry(f)
+			if err != nil {
+				return count, err
+			}
+			dir, name := splitAgentPath(rel)
+			err = uploadFileToAgent(ctx, c, serverID, dir, name, tmp)
+			os.Remove(tmp)
+			if err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+// splitAgentPath turns "mods/foo.jar" into ("/mods", "foo.jar"); a bare filename
+// yields ("/", name).
+func splitAgentPath(p string) (dir, name string) {
+	p = strings.TrimPrefix(filepath.ToSlash(p), "/")
+	idx := strings.LastIndex(p, "/")
+	if idx < 0 {
+		return "/", p
+	}
+	return "/" + p[:idx], p[idx+1:]
+}
+
+func extractZipEntry(f *zip.File) (string, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	tmp, err := os.CreateTemp("", "mcsm-ovr-*")
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(tmp, rc)
+	tmp.Close()
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
 }
 
 // Updates lists installed mods that have a newer compatible version available.
