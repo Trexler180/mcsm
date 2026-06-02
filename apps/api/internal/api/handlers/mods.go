@@ -13,17 +13,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/mods/curseforge"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/store"
 )
 
 type ModHandlers struct {
-	store    *store.Store
-	modrinth *modrinth.Client
+	store      *store.Store
+	modrinth   *modrinth.Client
+	curseforge *curseforge.Client
 }
 
 func NewModHandlers(s *store.Store) *ModHandlers {
-	return &ModHandlers{store: s, modrinth: modrinth.New()}
+	return &ModHandlers{store: s, modrinth: modrinth.New(), curseforge: curseforge.New()}
 }
 
 func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,7 @@ func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
 func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Query       string   `json:"query"`
+		Source      string   `json:"source"`
 		Loader      string   `json:"loader"`
 		MCVersion   string   `json:"mc_version"`
 		ProjectType string   `json:"project_type"`
@@ -58,7 +61,7 @@ func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	result, err := h.modrinth.Search(ctx, modrinth.SearchParams{
+	params := modrinth.SearchParams{
 		Query:       body.Query,
 		Loader:      body.Loader,
 		MCVersion:   body.MCVersion,
@@ -67,12 +70,28 @@ func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 		Index:       body.Index,
 		Limit:       body.Limit,
 		Offset:      body.Offset,
-	})
+	}
+
+	var result *modrinth.SearchResult
+	var err error
+	if body.Source == "curseforge" {
+		result, err = h.curseforge.Search(ctx, params)
+	} else {
+		result, err = h.modrinth.Search(ctx, params)
+	}
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "modrinth search failed: "+err.Error())
+		writeError(w, http.StatusBadGateway, body.Source+" search failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// Sources reports which mod sources are available (CurseForge needs an API key).
+func (h *ModHandlers) Sources(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"modrinth":   true,
+		"curseforge": h.curseforge.Enabled(),
+	})
 }
 
 func (h *ModHandlers) GetVersions(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +106,13 @@ func (h *ModHandlers) GetVersions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	versions, err := h.modrinth.GetVersions(ctx, projectID, loader, mcVersion)
+	var versions []modrinth.Version
+	var err error
+	if r.URL.Query().Get("source") == "curseforge" {
+		versions, err = h.curseforge.GetVersions(ctx, projectID, loader, mcVersion)
+	} else {
+		versions, err = h.modrinth.GetVersions(ctx, projectID, loader, mcVersion)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -105,7 +130,13 @@ func (h *ModHandlers) GetProject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	project, err := h.modrinth.GetProject(ctx, projectID)
+	var project *modrinth.Project
+	var err error
+	if r.URL.Query().Get("source") == "curseforge" {
+		project, err = h.curseforge.GetProject(ctx, projectID)
+	} else {
+		project, err = h.modrinth.GetProject(ctx, projectID)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -125,6 +156,9 @@ func (h *ModHandlers) Install(w http.ResponseWriter, r *http.Request) {
 	if err := decode(r, &body); err != nil || body.ProjectID == "" {
 		writeError(w, http.StatusBadRequest, "project_id required")
 		return
+	}
+	if body.Source == "" {
+		body.Source = "modrinth"
 	}
 
 	srv, err := h.store.GetServer(r.Context(), serverID)
@@ -147,19 +181,21 @@ func (h *ModHandlers) Install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	installed, err := h.installRecursive(ctx, c, srv, body.ProjectID, body.VersionID, body.WithDeps, false, map[string]bool{})
+	// Dependency resolution is currently a Modrinth-only capability.
+	withDeps := body.WithDeps && body.Source == "modrinth"
+	installed, err := h.installRecursive(ctx, c, srv, body.Source, body.ProjectID, body.VersionID, withDeps, false, map[string]bool{})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	audit(h.store, r, serverID, "mod.install", map[string]any{"project_id": body.ProjectID, "count": len(installed)})
+	audit(h.store, r, serverID, "mod.install", map[string]any{"source": body.Source, "project_id": body.ProjectID, "count": len(installed)})
 	writeJSON(w, http.StatusCreated, installed)
 }
 
 // installRecursive resolves, downloads (verified), uploads to the agent, and
 // records one mod — then, when withDeps is set, recurses over its required
 // dependencies. visited guards against dependency cycles and re-installs.
-func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv *store.Server, projectID, versionID string, withDeps, asDep bool, visited map[string]bool) ([]*store.InstalledMod, error) {
+func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv *store.Server, source, projectID, versionID string, withDeps, asDep bool, visited map[string]bool) ([]*store.InstalledMod, error) {
 	if visited[projectID] {
 		return nil, nil
 	}
@@ -173,7 +209,7 @@ func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv
 		}
 	}
 
-	ver, err := h.resolveVersion(ctx, srv, projectID, versionID)
+	ver, err := h.resolveVersion(ctx, srv, source, projectID, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +218,12 @@ func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv
 	if file == nil {
 		return nil, fmt.Errorf("no files in version for %s", projectID)
 	}
+	if file.URL == "" {
+		return nil, fmt.Errorf("%s does not permit third-party downloads of this file", source)
+	}
 
 	dest := installDirForVersion(ver, srv.Platform)
-	mod, err := h.downloadAndRecord(ctx, c, srv.ID, projectID, ver, file, dest, asDep)
+	mod, err := h.downloadAndRecord(ctx, c, srv.ID, source, projectID, ver, file, dest, asDep)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +234,7 @@ func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv
 			if dep.DependencyType != "required" || dep.ProjectID == "" {
 				continue
 			}
-			sub, err := h.installRecursive(ctx, c, srv, dep.ProjectID, dep.VersionID, true, true, visited)
+			sub, err := h.installRecursive(ctx, c, srv, source, dep.ProjectID, dep.VersionID, true, true, visited)
 			if err != nil {
 				// Best-effort on deps: surface but don't roll back the main mod.
 				return result, fmt.Errorf("dependency %s failed: %w", dep.ProjectID, err)
@@ -207,12 +246,26 @@ func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv
 }
 
 // resolveVersion returns the explicit version when versionID is set, else the
-// newest version compatible with the server's loader + MC version.
-func (h *ModHandlers) resolveVersion(ctx context.Context, srv *store.Server, projectID, versionID string) (*modrinth.Version, error) {
+// newest version compatible with the server's loader + MC version, for the
+// chosen source.
+func (h *ModHandlers) resolveVersion(ctx context.Context, srv *store.Server, source, projectID, versionID string) (*modrinth.Version, error) {
+	loader := modrinth.LoaderForPlatform(srv.Platform)
+	if source == "curseforge" {
+		if versionID != "" {
+			return h.curseforge.GetVersion(ctx, projectID, versionID)
+		}
+		versions, err := h.curseforge.GetVersions(ctx, projectID, loader, srv.MCVersion)
+		if err != nil {
+			return nil, fmt.Errorf("version lookup failed: %w", err)
+		}
+		if len(versions) == 0 {
+			return nil, fmt.Errorf("no compatible version for %s %s", srv.Platform, srv.MCVersion)
+		}
+		return &versions[0], nil
+	}
 	if versionID != "" {
 		return h.modrinth.GetVersion(ctx, versionID)
 	}
-	loader := modrinth.LoaderForPlatform(srv.Platform)
 	versions, err := h.modrinth.GetVersions(ctx, projectID, loader, srv.MCVersion)
 	if err != nil {
 		return nil, fmt.Errorf("version lookup failed: %w", err)
@@ -225,7 +278,7 @@ func (h *ModHandlers) resolveVersion(ctx context.Context, srv *store.Server, pro
 
 // downloadAndRecord fetches the jar (verifying SHA256), uploads it to the agent
 // install dir, and writes the installed_mods row.
-func (h *ModHandlers) downloadAndRecord(ctx context.Context, c *agent.Client, serverID, projectID string, ver *modrinth.Version, file *modrinth.VersionFile, dest string, asDep bool) (*store.InstalledMod, error) {
+func (h *ModHandlers) downloadAndRecord(ctx context.Context, c *agent.Client, serverID, source, projectID string, ver *modrinth.Version, file *modrinth.VersionFile, dest string, asDep bool) (*store.InstalledMod, error) {
 	tmpPath, err := h.modrinth.Download(ctx, file.URL, file.Hashes.SHA256)
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)
@@ -241,7 +294,7 @@ func (h *ModHandlers) downloadAndRecord(ctx context.Context, c *agent.Client, se
 	vid := ver.ID
 	return h.store.CreateMod(ctx, &store.InstalledMod{
 		ServerID:       serverID,
-		Source:         "modrinth",
+		Source:         source,
 		SourceID:       &pid,
 		VersionID:      &vid,
 		Name:           ver.Name,
@@ -341,7 +394,7 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ver, err := h.resolveVersion(ctx, srv, *mod.SourceID, body.VersionID)
+	ver, err := h.resolveVersion(ctx, srv, mod.Source, *mod.SourceID, body.VersionID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -349,6 +402,10 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	file := primaryFile(ver)
 	if file == nil {
 		writeError(w, http.StatusBadRequest, "no files in version")
+		return
+	}
+	if file.URL == "" {
+		writeError(w, http.StatusBadGateway, "source does not permit downloading this file")
 		return
 	}
 

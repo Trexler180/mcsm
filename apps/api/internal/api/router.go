@@ -89,6 +89,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 
 					// Mods
 					r.Get("/mods", modH.List)
+					r.Get("/mods/sources", modH.Sources)
 					r.Post("/mods/search", modH.Search)
 					r.Get("/mods/project", modH.GetProject)
 					r.Get("/mods/versions", modH.GetVersions)

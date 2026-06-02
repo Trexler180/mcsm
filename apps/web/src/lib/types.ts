@@ -96,8 +96,11 @@ export type ModSortIndex =
   | "newest"
   | "updated";
 
+export type ModSource = "modrinth" | "curseforge";
+
 export interface ModSearchParams {
   query: string;
+  source?: ModSource;
   loader?: string;
   mcVersion?: string;
   projectType?: ModProjectType;
