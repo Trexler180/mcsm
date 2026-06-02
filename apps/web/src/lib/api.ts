@@ -4,7 +4,9 @@ import type {
   FileListing,
   InstalledMod,
   LoginResponse,
+  ModSearchParams,
   ModSearchResult,
+  ModUpdate,
   ModVersion,
   ModrinthProject,
   Node,
@@ -213,17 +215,16 @@ export const api = {
   mods: {
     list: (serverId: string) =>
       get<InstalledMod[]>(`/servers/${serverId}/mods`),
-    search: (
-      serverId: string,
-      query: string,
-      loader?: string,
-      mcVersion?: string,
-    ) =>
+    search: (serverId: string, params: ModSearchParams) =>
       post<ModSearchResult>(`/servers/${serverId}/mods/search`, {
-        query,
-        loader,
-        mc_version: mcVersion,
-        limit: 20,
+        query: params.query,
+        loader: params.loader,
+        mc_version: params.mcVersion,
+        project_type: params.projectType,
+        categories: params.categories,
+        index: params.index,
+        limit: params.limit ?? 20,
+        offset: params.offset ?? 0,
       }),
     getVersions: (
       serverId: string,
@@ -243,12 +244,22 @@ export const api = {
       source: string,
       projectId: string,
       versionId: string,
+      withDeps = true,
     ) =>
       post(`/servers/${serverId}/mods/install`, {
         source,
         project_id: projectId,
         version_id: versionId,
+        with_deps: withDeps,
       }),
+    updates: (serverId: string) =>
+      get<ModUpdate[]>(`/servers/${serverId}/mods/updates`),
+    update: (serverId: string, modId: string, versionId?: string) =>
+      post(`/servers/${serverId}/mods/${modId}/update`, {
+        version_id: versionId,
+      }),
+    pin: (serverId: string, modId: string, pinned: boolean) =>
+      post(`/servers/${serverId}/mods/${modId}/pin`, { pinned }),
     uninstall: (serverId: string, modId: string) =>
       del(`/servers/${serverId}/mods/${modId}`),
   },
