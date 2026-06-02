@@ -56,6 +56,8 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = h.store.UpdateUserLastLogin(r.Context(), user.ID)
+	// Login is a public route (no JWT claims yet), so attribute directly.
+	h.store.LogAction(r.Context(), user.ID, "", "auth.login", clientIP(r), nil)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  accessToken,

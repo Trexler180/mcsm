@@ -152,6 +152,7 @@ func (h *ModHandlers) Install(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	audit(h.store, r, serverID, "mod.install", map[string]any{"project_id": body.ProjectID, "count": len(installed)})
 	writeJSON(w, http.StatusCreated, installed)
 }
 
@@ -380,6 +381,7 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	audit(h.store, r, serverID, "mod.update", map[string]any{"mod_id": modID, "version": ver.VersionNumber})
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -446,6 +448,7 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	audit(h.store, r, serverID, "mod.uninstall", map[string]any{"mod_id": modID, "name": mod.Name})
 	w.WriteHeader(http.StatusNoContent)
 }
 

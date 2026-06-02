@@ -1,5 +1,12 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Server, Layers, Users, LayoutDashboard, LogOut } from 'lucide-react'
+import {
+  Server,
+  Layers,
+  Users,
+  LayoutDashboard,
+  LogOut,
+  ScrollText,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuthStore } from '@/store/auth'
 
@@ -8,6 +15,7 @@ const nav = [
   { to: '/servers', label: 'Servers', icon: Server },
   { to: '/nodes', label: 'Nodes', icon: Layers },
   { to: '/users', label: 'Users', icon: Users, adminOnly: true },
+  { to: '/audit', label: 'Audit Log', icon: ScrollText, adminOnly: true },
 ]
 
 export function Sidebar() {
