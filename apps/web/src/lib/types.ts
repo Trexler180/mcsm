@@ -156,16 +156,31 @@ export interface ModVersion {
   date_published: string;
 }
 
+export interface ModGalleryImage {
+  url: string;
+  title: string;
+  description: string;
+  featured: boolean;
+}
+
 export interface ModrinthProject {
   id: string;
   slug: string;
   title: string;
   description: string;
+  body?: string;
   categories: string[];
   client_side: string;
   server_side: string;
   downloads: number;
+  followers?: number;
   icon_url: string;
+  project_type?: string;
+  source_url?: string | null;
+  issues_url?: string | null;
+  wiki_url?: string | null;
+  updated?: string;
+  gallery?: ModGalleryImage[];
 }
 
 export interface Backup {

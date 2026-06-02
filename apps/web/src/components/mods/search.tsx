@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { ModDetailDialog } from "@/components/mods/detail";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type {
@@ -58,11 +59,13 @@ function InstalledModRow({
   serverId,
   update,
   onUninstall,
+  onShowDetails,
 }: {
   mod: InstalledMod;
   serverId: string;
   update?: ModUpdate;
   onUninstall: () => void;
+  onShowDetails?: () => void;
 }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
@@ -111,9 +114,19 @@ function InstalledModRow({
         )}
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm font-medium text-text-primary truncate">
-              {project?.title ?? mod.name}
-            </p>
+            {onShowDetails && mod.source_id ? (
+              <button
+                onClick={onShowDetails}
+                className="text-sm font-medium text-text-primary truncate hover:text-accent transition-colors text-left"
+                title="View details"
+              >
+                {project?.title ?? mod.name}
+              </button>
+            ) : (
+              <p className="text-sm font-medium text-text-primary truncate">
+                {project?.title ?? mod.name}
+              </p>
+            )}
             {mod.installed_as_dep && (
               <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-2 text-text-secondary border border-border/50">
                 dependency
@@ -176,6 +189,7 @@ function SearchHitRow({
   loader,
   mcVersion,
   installedIds,
+  onShowDetails,
 }: {
   hit: ModSearchHit;
   serverId: string;
@@ -184,6 +198,7 @@ function SearchHitRow({
   loader: string;
   mcVersion: string;
   installedIds: Set<string>;
+  onShowDetails: () => void;
 }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
@@ -224,20 +239,30 @@ function SearchHitRow({
   return (
     <div className="px-4 py-3 hover:bg-surface-2/50 border-b border-border/50">
       <div className="flex items-start gap-3">
-        {hit.icon_url ? (
-          <img
-            src={hit.icon_url}
-            alt=""
-            className="h-9 w-9 rounded flex-shrink-0 object-cover"
-          />
-        ) : (
-          <div className="h-9 w-9 rounded bg-surface-2 flex items-center justify-center flex-shrink-0">
-            <Package className="h-4 w-4 text-text-secondary" />
-          </div>
-        )}
-        <div className="flex-1 min-w-0">
+        <button
+          onClick={onShowDetails}
+          className="flex-shrink-0"
+          title="View details"
+        >
+          {hit.icon_url ? (
+            <img
+              src={hit.icon_url}
+              alt=""
+              className="h-9 w-9 rounded object-cover"
+            />
+          ) : (
+            <div className="h-9 w-9 rounded bg-surface-2 flex items-center justify-center">
+              <Package className="h-4 w-4 text-text-secondary" />
+            </div>
+          )}
+        </button>
+        <button
+          onClick={onShowDetails}
+          className="flex-1 min-w-0 text-left group"
+          title="View details"
+        >
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium text-text-primary truncate">
+            <p className="text-sm font-medium text-text-primary truncate group-hover:text-accent transition-colors">
               {hit.title}
             </p>
             <span className="text-xs text-text-secondary flex-shrink-0">
@@ -247,7 +272,7 @@ function SearchHitRow({
           <p className="text-xs text-text-secondary line-clamp-1 mt-0.5">
             {hit.description}
           </p>
-        </div>
+        </button>
         <div className="flex-shrink-0 flex items-center gap-1">
           {isInstalled ? (
             <span className="text-xs text-green-400 px-2 py-1">Installed</span>
@@ -333,6 +358,13 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
   const [uninstallTarget, setUninstallTarget] = useState<InstalledMod | null>(
     null,
   );
+  const [detailTarget, setDetailTarget] = useState<{
+    source: ModSource;
+    projectId: string;
+    slug?: string;
+    isModpack: boolean;
+    installed: boolean;
+  } | null>(null);
   const [activeTab, setActiveTab] = useState<"installed" | "search">(
     "installed",
   );
@@ -397,6 +429,28 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
       setUninstallTarget(null);
     },
     onError: (e: Error) => error("Uninstall failed", e.message),
+  });
+
+  // Install latest version from the detail dialog (no version picker).
+  const detailInstallMutation = useMutation({
+    mutationFn: () => {
+      if (!detailTarget) return Promise.resolve();
+      return detailTarget.isModpack
+        ? api.mods.installModpack(serverId, detailTarget.projectId, "")
+        : api.mods.install(
+            serverId,
+            detailTarget.source,
+            detailTarget.projectId,
+            "",
+            true,
+          );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      success("Mod installed");
+      setDetailTarget(null);
+    },
+    onError: (e: Error) => error("Install failed", e.message),
   });
 
   const installedProjectIds = new Set(installed.map((m) => m.source_id ?? ""));
@@ -521,6 +575,17 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
                 serverId={serverId}
                 update={updatesByMod.get(mod.id)}
                 onUninstall={() => setUninstallTarget(mod)}
+                onShowDetails={
+                  mod.source_id
+                    ? () =>
+                        setDetailTarget({
+                          source: mod.source as ModSource,
+                          projectId: mod.source_id!,
+                          isModpack: false,
+                          installed: true,
+                        })
+                    : undefined
+                }
               />
             ))
           )
@@ -548,6 +613,15 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
               loader={searchLoader}
               mcVersion={mcVersion}
               installedIds={installedProjectIds}
+              onShowDetails={() =>
+                setDetailTarget({
+                  source,
+                  projectId: hit.project_id,
+                  slug: hit.slug,
+                  isModpack: projectType === "modpack" && source === "modrinth",
+                  installed: installedProjectIds.has(hit.project_id),
+                })
+              }
             />
           ))
         )}
@@ -565,6 +639,24 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
         variant="destructive"
         loading={uninstallMutation.isPending}
       />
+
+      {detailTarget && (
+        <ModDetailDialog
+          open={detailTarget !== null}
+          onClose={() => setDetailTarget(null)}
+          serverId={serverId}
+          source={detailTarget.source}
+          projectId={detailTarget.projectId}
+          slug={detailTarget.slug}
+          installed={detailTarget.installed}
+          installing={detailInstallMutation.isPending}
+          onInstall={
+            detailTarget.installed
+              ? undefined
+              : () => detailInstallMutation.mutate()
+          }
+        />
+      )}
     </div>
   );
 }
