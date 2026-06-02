@@ -20,6 +20,7 @@ import type {
   ModProjectType,
   ModSearchHit,
   ModSortIndex,
+  ModSource,
   ModUpdate,
 } from "@/lib/types";
 
@@ -67,9 +68,10 @@ function InstalledModRow({
   const { success, error } = useNotifications();
 
   const projectQuery = useQuery({
-    queryKey: ["modrinth-project", mod.source_id],
-    queryFn: () => api.mods.getProject(mod.server_id, mod.source_id!),
-    enabled: mod.source === "modrinth" && !!mod.source_id,
+    queryKey: ["mod-project", mod.source, mod.source_id],
+    queryFn: () =>
+      api.mods.getProject(mod.server_id, mod.source_id!, mod.source),
+    enabled: !!mod.source_id,
     staleTime: 10 * 60_000,
   });
   const project = projectQuery.data;
@@ -169,12 +171,14 @@ function InstalledModRow({
 function SearchHitRow({
   hit,
   serverId,
+  source,
   loader,
   mcVersion,
   installedIds,
 }: {
   hit: ModSearchHit;
   serverId: string;
+  source: ModSource;
   loader: string;
   mcVersion: string;
   installedIds: Set<string>;
@@ -185,15 +189,15 @@ function SearchHitRow({
   const [selectedVersionId, setSelectedVersionId] = useState<string>("");
 
   const versionsQuery = useQuery({
-    queryKey: ["mod-versions", serverId, hit.project_id, loader, mcVersion],
+    queryKey: ["mod-versions", source, serverId, hit.project_id, loader, mcVersion],
     queryFn: () =>
-      api.mods.getVersions(serverId, hit.project_id, loader, mcVersion),
+      api.mods.getVersions(serverId, hit.project_id, loader, mcVersion, source),
     enabled: picking,
   });
 
   const installMutation = useMutation({
     mutationFn: (versionId: string) =>
-      api.mods.install(serverId, "modrinth", hit.project_id, versionId, true),
+      api.mods.install(serverId, source, hit.project_id, versionId, true),
     onSuccess: (created: unknown) => {
       qc.invalidateQueries({ queryKey: ["mods", serverId] });
       const n = Array.isArray(created) ? created.length : 1;
@@ -312,8 +316,16 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
   const { success, error } = useNotifications();
   const [query, setQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [source, setSource] = useState<ModSource>("modrinth");
   const [projectType, setProjectType] = useState<ModProjectType>("mod");
   const [sortIndex, setSortIndex] = useState<ModSortIndex>("relevance");
+
+  const { data: sources } = useQuery({
+    queryKey: ["mod-sources", serverId],
+    queryFn: () => api.mods.sources(serverId),
+    staleTime: 60 * 60_000,
+  });
+  const curseforgeEnabled = sources?.curseforge ?? false;
   const [uninstallTarget, setUninstallTarget] = useState<InstalledMod | null>(
     null,
   );
@@ -340,6 +352,7 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
     queryKey: [
       "mod-search",
       serverId,
+      source,
       query,
       searchLoader,
       mcVersion,
@@ -349,6 +362,7 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
     queryFn: () =>
       api.mods.search(serverId, {
         query,
+        source,
         loader: searchLoader,
         mcVersion,
         projectType,
@@ -408,6 +422,17 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
           </Button>
         </form>
         <div className="flex gap-2">
+          <select
+            className="text-xs rounded bg-surface-2 border border-border px-2 py-1 text-text-primary"
+            value={source}
+            onChange={(e) => setSource(e.target.value as ModSource)}
+            title="Mod source"
+          >
+            <option value="modrinth">Modrinth</option>
+            <option value="curseforge" disabled={!curseforgeEnabled}>
+              CurseForge{curseforgeEnabled ? "" : " (no API key)"}
+            </option>
+          </select>
           <select
             className="text-xs rounded bg-surface-2 border border-border px-2 py-1 text-text-primary"
             value={projectType}
@@ -514,6 +539,7 @@ export function ModSearch({ serverId, loader, mcVersion }: ModSearchProps) {
               key={hit.project_id}
               hit={hit}
               serverId={serverId}
+              source={source}
               loader={searchLoader}
               mcVersion={mcVersion}
               installedIds={installedProjectIds}

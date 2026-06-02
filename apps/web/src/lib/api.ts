@@ -216,9 +216,12 @@ export const api = {
   mods: {
     list: (serverId: string) =>
       get<InstalledMod[]>(`/servers/${serverId}/mods`),
+    sources: (serverId: string) =>
+      get<Record<string, boolean>>(`/servers/${serverId}/mods/sources`),
     search: (serverId: string, params: ModSearchParams) =>
       post<ModSearchResult>(`/servers/${serverId}/mods/search`, {
         query: params.query,
+        source: params.source,
         loader: params.loader,
         mc_version: params.mcVersion,
         project_type: params.projectType,
@@ -232,13 +235,14 @@ export const api = {
       projectId: string,
       loader?: string,
       mcVersion?: string,
+      source?: string,
     ) =>
       get<ModVersion[]>(
-        `/servers/${serverId}/mods/versions?project_id=${projectId}${loader ? `&loader=${loader}` : ""}${mcVersion ? `&mc_version=${mcVersion}` : ""}`,
+        `/servers/${serverId}/mods/versions?project_id=${projectId}${loader ? `&loader=${loader}` : ""}${mcVersion ? `&mc_version=${mcVersion}` : ""}${source ? `&source=${source}` : ""}`,
       ),
-    getProject: (serverId: string, projectId: string) =>
+    getProject: (serverId: string, projectId: string, source?: string) =>
       get<ModrinthProject>(
-        `/servers/${serverId}/mods/project?project_id=${encodeURIComponent(projectId)}`,
+        `/servers/${serverId}/mods/project?project_id=${encodeURIComponent(projectId)}${source ? `&source=${source}` : ""}`,
       ),
     install: (
       serverId: string,
