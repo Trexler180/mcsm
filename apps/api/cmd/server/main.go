@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +29,46 @@ import (
 	"github.com/mcsm/api/migrations"
 )
 
+// setupLogging configures slog as the process logger and routes the stdlib log
+// package through it so existing log.Printf calls share one structured stream.
+// LOG_FORMAT=json|text (default text), LOG_LEVEL=debug|info|warn|error.
+func setupLogging() {
+	var level slog.Level
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	var h slog.Handler
+	if strings.EqualFold(os.Getenv("LOG_FORMAT"), "json") {
+		h = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stdout, opts)
+	}
+	logger := slog.New(h)
+	slog.SetDefault(logger)
+
+	// Bridge stdlib log → slog so log.Printf / log.Fatalf are structured too.
+	log.SetFlags(0)
+	log.SetOutput(slogWriter{})
+}
+
+type slogWriter struct{}
+
+func (slogWriter) Write(p []byte) (int, error) {
+	slog.Info(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
 func main() {
+	setupLogging()
+
 	dbPath := envOr("DATABASE_PATH", "mcsm.db")
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {

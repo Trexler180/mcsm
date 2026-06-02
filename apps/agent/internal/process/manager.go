@@ -123,6 +123,27 @@ func (m *Manager) Players(id string) []Player {
 	return inst.Players()
 }
 
+// StopAll gracefully stops every running instance, in parallel, bounded by
+// timeout per instance. Called on agent shutdown so MC children aren't orphaned.
+func (m *Manager) StopAll(timeout time.Duration) {
+	m.mu.RLock()
+	insts := make([]*Instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		insts = append(insts, inst)
+	}
+	m.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, inst := range insts {
+		wg.Add(1)
+		go func(i *Instance) {
+			defer wg.Done()
+			_ = i.stop(true, timeout)
+		}(inst)
+	}
+	wg.Wait()
+}
+
 func (m *Manager) GetDir(id string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

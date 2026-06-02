@@ -2,19 +2,55 @@ package middleware
 
 import (
 	"bufio"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
 )
+
+type ctxKey int
+
+const requestIDKey ctxKey = 0
+
+// RequestID assigns each request a short id (honoring an inbound X-Request-ID),
+// stores it in the context, and echoes it in the response header so logs on both
+// sides can be correlated.
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			b := make([]byte, 8)
+			_, _ = rand.Read(b)
+			id = hex.EncodeToString(b)
+		}
+		w.Header().Set("X-Request-ID", id)
+		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// RequestIDFrom returns the request id stored by RequestID, or "".
+func RequestIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey).(string)
+	return id
+}
 
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ww := &responseWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(ww, r)
-		log.Printf("%s %s %d %s", r.Method, r.RequestURI, ww.status, time.Since(start))
+		slog.Info("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.status,
+			"dur_ms", time.Since(start).Milliseconds(),
+			"request_id", RequestIDFrom(r.Context()),
+		)
 	})
 }
 

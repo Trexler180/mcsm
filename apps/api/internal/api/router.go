@@ -15,6 +15,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
+	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 
 	authH := handlers.NewAuthHandlers(s, jwtSecret)
