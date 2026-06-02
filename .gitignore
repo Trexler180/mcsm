@@ -1,0 +1,50 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+vendor/
+
+# Node
+node_modules/
+.pnpm-store/
+apps/web/dist/
+apps/web/.vite/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+apps/api/internal/store/gen/
+*.pb.go
+
+# Data
+data/
+postgres-data/
+redis-data/
+
+# SQLite (dev DB is regenerated on boot)
+*.db
+*.db-wal
+*.db-shm
+
+# Per-server working dirs (created by agent at runtime)
+servers/
+
+# Build caches
+apps/web/tsconfig.tsbuildinfo
