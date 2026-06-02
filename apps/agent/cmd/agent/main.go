@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,7 +18,41 @@ import (
 	"github.com/mcsm/agent/internal/process"
 )
 
+// setupLogging mirrors the API: slog as default, stdlib log bridged through it.
+func setupLogging() {
+	var level slog.Level
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	var h slog.Handler
+	if strings.EqualFold(os.Getenv("LOG_FORMAT"), "json") {
+		h = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stdout, opts)
+	}
+	slog.SetDefault(slog.New(h))
+	log.SetFlags(0)
+	log.SetOutput(slogWriter{})
+}
+
+type slogWriter struct{}
+
+func (slogWriter) Write(p []byte) (int, error) {
+	slog.Info(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
 func main() {
+	setupLogging()
+
 	token := os.Getenv("AGENT_TOKEN")
 	if token == "" {
 		log.Fatal("AGENT_TOKEN environment variable is required")
@@ -69,6 +105,9 @@ func main() {
 
 	<-stop
 	log.Println("shutting down agent...")
+
+	// Gracefully stop running MC children so they aren't orphaned (P2 #18).
+	mgr.StopAll(30 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
