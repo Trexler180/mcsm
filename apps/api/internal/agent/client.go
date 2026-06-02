@@ -192,6 +192,29 @@ func (c *Client) Backup(ctx context.Context, serverID, backupID string) (*Backup
 	return &out, nil
 }
 
+// Restore asks the agent to stop the server, wipe its directory, and extract a
+// previously-created backup zip back into place.
+func (c *Client) Restore(ctx context.Context, serverID, backupID string) error {
+	path := fmt.Sprintf("/agent/v1/servers/%s/backups/%s/restore", serverID, url.PathEscape(backupID))
+	resp, err := c.do(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkError(resp)
+}
+
+// DeleteBackup removes a backup zip on the agent host.
+func (c *Client) DeleteBackup(ctx context.Context, serverID, backupID string) error {
+	path := fmt.Sprintf("/agent/v1/servers/%s/backups/%s", serverID, url.PathEscape(backupID))
+	resp, err := c.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkError(resp)
+}
+
 // ProxyHTTP forwards an HTTP request to the agent and writes the response back.
 func (c *Client) ProxyHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, agentPath string) {
 	targetURL := c.BaseURL + agentPath

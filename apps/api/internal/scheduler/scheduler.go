@@ -13,6 +13,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/backups"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -189,6 +190,7 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 			return
 		}
 		_ = s.store.UpdateBackupResult(ctx, created.ID, "success", &result.SizeBytes, "")
+		backups.Enforce(ctx, s.store, srv.ID)
 
 	default:
 		log.Printf("scheduler: task %s unknown action %q", task.Name, task.Action)
