@@ -40,7 +40,7 @@ function AuditPage() {
         title="Audit Log"
         description={`${entries.length} recent action${entries.length !== 1 ? 's' : ''}`}
       />
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         {isLoading ? (
           <div className="flex justify-center py-16">
             <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />

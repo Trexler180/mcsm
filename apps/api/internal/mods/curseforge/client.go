@@ -114,6 +114,9 @@ type cfMod struct {
 	Categories []struct {
 		Name string `json:"name"`
 	} `json:"categories"`
+	Authors []struct {
+		Name string `json:"name"`
+	} `json:"authors"`
 	LatestFiles []cfFile `json:"latestFiles"`
 }
 
@@ -166,6 +169,7 @@ func (c *Client) Search(ctx context.Context, p modrinth.SearchParams) (*modrinth
 			ProjectID:   fmt.Sprint(m.ID),
 			Slug:        m.Slug,
 			Title:       m.Name,
+			Author:      cfAuthor(m),
 			Description: m.Summary,
 			Categories:  categoryNames(m),
 			Downloads:   m.DownloadCount,
@@ -252,6 +256,14 @@ func fileToVersion(projectID, loader string, f cfFile) modrinth.Version {
 		Loaders:       loaders,
 		Files:         []modrinth.VersionFile{vf},
 	}
+}
+
+// cfAuthor returns the primary author name, or "" when none is listed.
+func cfAuthor(m cfMod) string {
+	if len(m.Authors) > 0 {
+		return m.Authors[0].Name
+	}
+	return ""
 }
 
 func categoryNames(m cfMod) []string {

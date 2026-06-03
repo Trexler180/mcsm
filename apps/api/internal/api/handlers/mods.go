@@ -41,7 +41,53 @@ func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
 	if mods == nil {
 		mods = []*store.InstalledMod{}
 	}
+	if err := h.annotateDependencies(r.Context(), id, mods); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, mods)
+}
+
+// annotateDependencies fills RequiredBy/Orphaned on each mod from the reverse
+// dependency graph. A mod is orphaned when it was auto-installed as a dependency
+// but no currently-installed mod still requires it.
+func (h *ModHandlers) annotateDependencies(ctx context.Context, serverID string, mods []*store.InstalledMod) error {
+	edges, err := h.store.ListModDependencies(ctx, serverID)
+	if err != nil {
+		return err
+	}
+
+	// project id -> display name, for resolving dependent names. Only count
+	// dependents that are actually still installed.
+	nameByPID := map[string]string{}
+	for _, m := range mods {
+		if m.SourceID != nil {
+			nameByPID[*m.SourceID] = m.Name
+		}
+	}
+	// dependency project id -> set of dependent project ids that still exist.
+	dependents := map[string]map[string]bool{}
+	for _, e := range edges {
+		if _, ok := nameByPID[e.DependentProjectID]; !ok {
+			continue // dependent no longer installed
+		}
+		if dependents[e.DependencyProjectID] == nil {
+			dependents[e.DependencyProjectID] = map[string]bool{}
+		}
+		dependents[e.DependencyProjectID][e.DependentProjectID] = true
+	}
+
+	for _, m := range mods {
+		m.RequiredBy = []string{}
+		if m.SourceID == nil {
+			continue
+		}
+		for pid := range dependents[*m.SourceID] {
+			m.RequiredBy = append(m.RequiredBy, nameByPID[pid])
+		}
+		m.Orphaned = m.InstalledAsDep && len(m.RequiredBy) == 0
+	}
+	return nil
 }
 
 func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +99,7 @@ func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 		ProjectType string   `json:"project_type"`
 		Categories  []string `json:"categories"`
 		Index       string   `json:"index"`
+		Environment string   `json:"environment"`
 		Limit       int      `json:"limit"`
 		Offset      int      `json:"offset"`
 	}
@@ -71,6 +118,7 @@ func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 		ProjectType: body.ProjectType,
 		Categories:  body.Categories,
 		Index:       body.Index,
+		Environment: body.Environment,
 		Limit:       body.Limit,
 		Offset:      body.Offset,
 	}
@@ -87,6 +135,34 @@ func (h *ModHandlers) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// Categories returns the Modrinth category tags, optionally filtered to a single
+// project_type. CurseForge has no equivalent tag list here, so a CF request gets
+// an empty array (200) and the frontend simply shows no chips.
+func (h *ModHandlers) Categories(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("source") == "curseforge" {
+		writeJSON(w, http.StatusOK, []modrinth.Category{})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	cats, err := h.modrinth.GetCategories(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	projectType := r.URL.Query().Get("project_type")
+	out := []modrinth.Category{}
+	for _, c := range cats {
+		if projectType == "" || c.ProjectType == projectType {
+			out = append(out, c)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Sources reports which mod sources are available (CurseForge needs an API key).
@@ -121,6 +197,36 @@ func (h *ModHandlers) GetVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, versions)
+}
+
+func (h *ModHandlers) GetVersion(w http.ResponseWriter, r *http.Request) {
+	versionID := r.URL.Query().Get("version_id")
+	projectID := r.URL.Query().Get("project_id")
+	source := r.URL.Query().Get("source")
+	if versionID == "" {
+		writeError(w, http.StatusBadRequest, "version_id required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	var version *modrinth.Version
+	var err error
+	if source == "curseforge" {
+		if projectID == "" {
+			writeError(w, http.StatusBadRequest, "project_id required")
+			return
+		}
+		version, err = h.curseforge.GetVersion(ctx, projectID, versionID)
+	} else {
+		version, err = h.modrinth.GetVersion(ctx, versionID)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, version)
 }
 
 func (h *ModHandlers) GetProject(w http.ResponseWriter, r *http.Request) {
@@ -236,6 +342,12 @@ func (h *ModHandlers) installRecursive(ctx context.Context, c *agent.Client, srv
 		for _, dep := range ver.Dependencies {
 			if dep.DependencyType != "required" || dep.ProjectID == "" {
 				continue
+			}
+			// Record the edge before (maybe) installing: even if the dep is
+			// already present, this mod now counts as one of its dependents, so
+			// it won't be flagged orphaned while we still need it.
+			if err := h.store.AddModDependency(ctx, srv.ID, projectID, dep.ProjectID); err != nil {
+				return result, fmt.Errorf("record dependency edge: %w", err)
 			}
 			sub, err := h.installRecursive(ctx, c, srv, source, dep.ProjectID, dep.VersionID, true, true, visited)
 			if err != nil {
@@ -659,6 +771,138 @@ func (h *ModHandlers) Pin(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// disabledSuffix marks a jar as not-to-be-loaded; Minecraft mod loaders skip
+// files ending in it, so disabling is a rename rather than a delete.
+const disabledSuffix = ".disabled"
+
+// SetEnabled toggles whether a mod jar is loaded by the server. Disabling renames
+// the file to "<name>.disabled" on the agent; enabling strips the suffix. The DB
+// row's file_name is updated to match so uninstall/update keep working.
+func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	modID := chi.URLParam(r, "modId")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	mod, err := h.store.GetMod(r.Context(), modID)
+	if err != nil || mod.ServerID != serverID {
+		writeError(w, http.StatusNotFound, "mod not found")
+		return
+	}
+	// Already in the desired state: nothing to rename.
+	if mod.Enabled == body.Enabled {
+		writeJSON(w, http.StatusOK, mod)
+		return
+	}
+
+	srv, err := h.store.GetServer(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	node, err := h.store.GetNode(r.Context(), srv.NodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	newName := mod.FileName
+	if body.Enabled {
+		newName = strings.TrimSuffix(mod.FileName, disabledSuffix)
+	} else if !strings.HasSuffix(mod.FileName, disabledSuffix) {
+		newName = mod.FileName + disabledSuffix
+	}
+
+	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+	if err := renameAgentFile(ctx, c, serverID, mod.InstallPath+"/"+mod.FileName, mod.InstallPath+"/"+newName); err != nil {
+		writeError(w, http.StatusBadGateway, "agent rename failed: "+err.Error())
+		return
+	}
+
+	if err := h.store.SetModEnabled(r.Context(), modID, body.Enabled, newName); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	action := "mod.disable"
+	if body.Enabled {
+		action = "mod.enable"
+	}
+	audit(h.store, r, serverID, action, map[string]any{"mod_id": modID, "name": mod.Name})
+	mod.Enabled = body.Enabled
+	mod.FileName = newName
+	writeJSON(w, http.StatusOK, mod)
+}
+
+// DisableConflict applies a detected Fabric mod-conflict fix: it asks the agent
+// to disable the jars matching the supplied loader mod ids, and syncs the
+// enabled flag on any matching DB-tracked mods so the panel stays consistent.
+func (h *ModHandlers) DisableConflict(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+
+	var body struct {
+		ModIDs []string `json:"mod_ids"`
+	}
+	if err := decode(r, &body); err != nil || len(body.ModIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "mod_ids required")
+		return
+	}
+
+	srv, err := h.store.GetServer(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	node, err := h.store.GetNode(r.Context(), srv.NodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+	// Make sure the agent knows the directory even if the instance was lost.
+	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+
+	disabled, err := c.DisableConflictMods(ctx, serverID, body.ModIDs)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	// Best-effort: reflect the disable in the panel's mod list by matching the
+	// renamed jar filenames to installed_mods rows.
+	if mods, err := h.store.ListMods(r.Context(), serverID); err == nil {
+		gone := map[string]bool{}
+		for _, name := range disabled {
+			gone[name] = true
+		}
+		for _, m := range mods {
+			if m.Enabled && gone[m.FileName] {
+				_ = h.store.SetModEnabled(r.Context(), m.ID, false, m.FileName+disabledSuffix)
+			}
+		}
+	}
+
+	audit(h.store, r, serverID, "mod.disable_conflict", map[string]any{"mod_ids": body.ModIDs, "disabled": disabled})
+	writeJSON(w, http.StatusOK, map[string]any{"disabled": disabled})
+}
+
 func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	modID := chi.URLParam(r, "modId")
@@ -698,6 +942,14 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.store.DeleteMod(r.Context(), modID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Drop this mod from the dependency graph so its required deps can become
+	// orphaned (and any stale edges pointing at it are cleared).
+	if mod.SourceID != nil {
+		if err := h.store.DeleteModDependencyEdges(r.Context(), serverID, *mod.SourceID); err != nil {
+			// Non-fatal: the mod is already gone; orphan flags will just be stale.
+			audit(h.store, r, serverID, "mod.dep_cleanup_failed", map[string]any{"mod_id": modID, "error": err.Error()})
+		}
 	}
 	audit(h.store, r, serverID, "mod.uninstall", map[string]any{"mod_id": modID, "name": mod.Name})
 	w.WriteHeader(http.StatusNoContent)
@@ -778,6 +1030,32 @@ func uploadFileToAgent(ctx context.Context, c *agent.Client, serverID, destDir, 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("agent upload returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// renameAgentFile moves a file within the server directory on the agent (used to
+// toggle the .disabled suffix). from/to are server-relative paths like
+// "/mods/foo.jar".
+func renameAgentFile(ctx context.Context, c *agent.Client, serverID, from, to string) error {
+	renameURL := fmt.Sprintf("%s/agent/v1/servers/%s/files/rename", c.BaseURL, serverID)
+	payload, err := json.Marshal(map[string]string{"from": from, "to": to})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, renameURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("agent returned %d", resp.StatusCode)
 	}
 	return nil
 }

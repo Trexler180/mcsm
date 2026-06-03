@@ -13,6 +13,7 @@ node_modules/
 .pnpm-store/
 apps/web/dist/
 apps/web/.vite/
+*.log
 
 # Environment
 .env

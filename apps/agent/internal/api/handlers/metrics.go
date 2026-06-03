@@ -41,9 +41,21 @@ func (h *MetricsHandlers) ServerMetrics(w http.ResponseWriter, r *http.Request) 
 			if err != nil {
 				continue
 			}
+			// Frontend graphs RAM as a fraction of host total, so include it
+			// alongside the per-process CPU/RAM figures.
+			var ramTotalMb uint64
+			if host, err := h.collector.Host("/"); err == nil {
+				ramTotalMb = host.RAMTotalMb
+			}
 			if err := wsjson.Write(ctx, conn, map[string]any{
-				"type": "stats",
-				"data": stats,
+				"type": "metrics",
+				"data": map[string]any{
+					"cpu_percent":  stats.CPUPct,
+					"ram_used_mb":  stats.RAMMb,
+					"ram_total_mb": ramTotalMb,
+					"net_rx_bps":   stats.NetRxBps,
+					"net_tx_bps":   stats.NetTxBps,
+				},
 			}); err != nil {
 				return
 			}

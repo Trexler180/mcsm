@@ -28,14 +28,21 @@ function ToastItem({ toast }: { toast: Toast }) {
   return (
     <div
       className={clsx(
-        'flex items-start gap-3 rounded-lg border p-4 shadow-lg',
-        'min-w-[300px] max-w-[420px]',
+        'flex items-start gap-3 rounded-lg border p-3 shadow-lg',
+        'min-w-[260px] max-w-[340px]',
         config.classes,
       )}
     >
       {config.icon}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-text-primary">{toast.title}</p>
+        <p className="text-sm font-medium text-text-primary">
+          {toast.title}
+          {toast.count > 1 && (
+            <span className="ml-1.5 rounded-full bg-border px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary align-middle">
+              ×{toast.count}
+            </span>
+          )}
+        </p>
         {toast.description && (
           <p className="text-xs text-text-secondary mt-0.5">{toast.description}</p>
         )}
@@ -50,13 +57,25 @@ function ToastItem({ toast }: { toast: Toast }) {
   )
 }
 
+const MAX_VISIBLE = 3
+
 export function Toaster() {
   const { toasts } = useNotifications()
   if (toasts.length === 0) return null
 
+  // Newest at the bottom (closest to corner); only render the last few so the
+  // stack can't grow tall enough to cover the UI behind it.
+  const visible = toasts.slice(-MAX_VISIBLE)
+  const hidden = toasts.length - visible.length
+
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
-      {toasts.map((t) => (
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 items-end">
+      {hidden > 0 && (
+        <span className="rounded-full bg-surface border border-border px-2 py-0.5 text-[10px] text-text-secondary shadow">
+          +{hidden} more
+        </span>
+      )}
+      {visible.map((t) => (
         <ToastItem key={t.id} toast={t} />
       ))}
     </div>

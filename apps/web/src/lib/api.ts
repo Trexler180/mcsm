@@ -3,9 +3,11 @@ import type {
   Backup,
   BackupTarget,
   FileListing,
+  AgentStatus,
   GameVersion,
   InstalledMod,
   LoginResponse,
+  ModCategory,
   ModSearchParams,
   ModSearchResult,
   ModUpdate,
@@ -13,6 +15,7 @@ import type {
   ModrinthProject,
   Node,
   Player,
+  PlayerDetail,
   ScheduledTask,
   Server,
   TokenResponse,
@@ -160,8 +163,7 @@ export const api = {
     restart: (id: string) => post(`/servers/${id}/restart`),
     reinstall: (id: string) => post(`/servers/${id}/reinstall`),
     kill: (id: string) => post(`/servers/${id}/kill`),
-    status: (id: string) =>
-      get<{ status: string; pid?: number }>(`/servers/${id}/status`),
+    status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),
   },
@@ -194,6 +196,39 @@ export const api = {
       if (token) params.set("token", token);
       return `${BASE}/servers/${serverId}/files/download?${params.toString()}`;
     },
+    // Fetch the raw, untouched bytes of a file (binary-safe). The download
+    // endpoint streams the file verbatim, unlike readContent which forces text.
+    readBytes: (serverId: string, path: string) => {
+      const token = getToken();
+      const params = new URLSearchParams({ path });
+      if (token) params.set("token", token);
+      return fetch(
+        `${BASE}/servers/${serverId}/files/download?${params.toString()}`,
+      ).then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return new Uint8Array(await r.arrayBuffer());
+      });
+    },
+    // Overwrite a file with raw bytes by uploading into its parent directory
+    // under the same name. WriteUpload uses os.Create, so it replaces in place.
+    writeBytes: (serverId: string, path: string, bytes: Uint8Array) => {
+      const token = getToken();
+      const slash = path.lastIndexOf("/");
+      const dir = slash <= 0 ? "/" : path.slice(0, slash);
+      const name = path.slice(slash + 1);
+      const fd = new FormData();
+      fd.append("files", new Blob([bytes as BlobPart]), name);
+      return fetch(
+        `${BASE}/servers/${serverId}/files/upload?path=${encodeURIComponent(dir)}`,
+        {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        },
+      ).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      });
+    },
     upload: (serverId: string, dirPath: string, file: File) => {
       const token = getToken();
       const fd = new FormData();
@@ -213,6 +248,8 @@ export const api = {
 
   players: {
     list: (serverId: string) => get<Player[]>(`/servers/${serverId}/players`),
+    get: (serverId: string, uuid: string) =>
+      get<PlayerDetail>(`/servers/${serverId}/players/${uuid}`),
   },
 
   mods: {
@@ -220,6 +257,13 @@ export const api = {
       get<InstalledMod[]>(`/servers/${serverId}/mods`),
     sources: (serverId: string) =>
       get<Record<string, boolean>>(`/servers/${serverId}/mods/sources`),
+    categories: (serverId: string, projectType?: string, source?: string) =>
+      get<ModCategory[]>(
+        `/servers/${serverId}/mods/categories?${new URLSearchParams({
+          ...(projectType ? { project_type: projectType } : {}),
+          ...(source ? { source } : {}),
+        }).toString()}`,
+      ),
     search: (serverId: string, params: ModSearchParams) =>
       post<ModSearchResult>(`/servers/${serverId}/mods/search`, {
         query: params.query,
@@ -229,6 +273,7 @@ export const api = {
         project_type: params.projectType,
         categories: params.categories,
         index: params.index,
+        environment: params.environment,
         limit: params.limit ?? 20,
         offset: params.offset ?? 0,
       }),
@@ -241,6 +286,15 @@ export const api = {
     ) =>
       get<ModVersion[]>(
         `/servers/${serverId}/mods/versions?project_id=${projectId}${loader ? `&loader=${loader}` : ""}${mcVersion ? `&mc_version=${mcVersion}` : ""}${source ? `&source=${source}` : ""}`,
+      ),
+    getVersion: (
+      serverId: string,
+      projectId: string,
+      versionId: string,
+      source?: string,
+    ) =>
+      get<ModVersion>(
+        `/servers/${serverId}/mods/version?version_id=${encodeURIComponent(versionId)}&project_id=${encodeURIComponent(projectId)}${source ? `&source=${source}` : ""}`,
       ),
     getProject: (serverId: string, projectId: string, source?: string) =>
       get<ModrinthProject>(
@@ -272,8 +326,17 @@ export const api = {
       }),
     pin: (serverId: string, modId: string, pinned: boolean) =>
       post(`/servers/${serverId}/mods/${modId}/pin`, { pinned }),
+    setEnabled: (serverId: string, modId: string, enabled: boolean) =>
+      post<InstalledMod>(`/servers/${serverId}/mods/${modId}/enabled`, {
+        enabled,
+      }),
     uninstall: (serverId: string, modId: string) =>
       del(`/servers/${serverId}/mods/${modId}`),
+    disableConflict: (serverId: string, modIds: string[]) =>
+      post<{ disabled: string[] }>(
+        `/servers/${serverId}/mods/disable-conflict`,
+        { mod_ids: modIds },
+      ),
   },
 
   minecraft: {
@@ -307,6 +370,8 @@ export const api = {
     create: (serverId: string) => post<Backup>(`/servers/${serverId}/backups`),
     restore: (serverId: string, backupId: string) =>
       post(`/servers/${serverId}/backups/${backupId}/restore`),
+    delete: (serverId: string, backupId: string) =>
+      del(`/servers/${serverId}/backups/${backupId}`),
     targets: {
       list: (serverId: string) =>
         get<BackupTarget[]>(`/servers/${serverId}/backup-targets`),

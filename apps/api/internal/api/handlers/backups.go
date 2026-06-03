@@ -143,6 +143,58 @@ func (h *BackupHandlers) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
 }
 
+func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	backupID := chi.URLParam(r, "backupId")
+
+	backup, err := h.store.GetBackup(r.Context(), backupID)
+	if err != nil || backup.ServerID != serverID {
+		writeError(w, http.StatusNotFound, "backup not found")
+		return
+	}
+	if backup.Status == "running" {
+		writeError(w, http.StatusConflict, "cannot delete a running backup")
+		return
+	}
+
+	if backup.Status == "success" {
+		srv, err := h.store.GetServer(r.Context(), serverID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "server not found")
+			return
+		}
+		node, err := h.store.GetNode(r.Context(), srv.NodeID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "node not found")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+
+		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+		if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
+			writeError(w, http.StatusBadGateway, "failed to register server directory")
+			return
+		}
+		if err := c.DeleteBackup(ctx, serverID, backupID); err != nil {
+			writeError(w, http.StatusBadGateway, "delete failed: "+err.Error())
+			return
+		}
+	}
+
+	if err := h.store.DeleteBackup(r.Context(), backupID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	audit(h.store, r, serverID, "backup.delete", map[string]any{
+		"backup_id": backupID,
+		"status":    backup.Status,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *BackupHandlers) ListTargets(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	targets, err := h.store.ListBackupTargets(r.Context(), id)

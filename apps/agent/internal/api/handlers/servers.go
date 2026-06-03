@@ -135,6 +135,30 @@ func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "killed"})
 }
 
+// DisableMods disables the given Fabric mod ids by renaming their jars to
+// "<name>.disabled". Used to apply a detected mod-conflict fix.
+func (h *ServerHandlers) DisableMods(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var body struct {
+		ModIDs []string `json:"mod_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.ModIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "mod_ids is required")
+		return
+	}
+
+	disabled, err := h.mgr.DisableConflictMods(id, body.ModIDs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if disabled == nil {
+		disabled = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"disabled": disabled})
+}
+
 func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	info := h.mgr.Status(id)
