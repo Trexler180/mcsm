@@ -10,9 +10,24 @@ interface DialogProps {
   description?: string
   children: React.ReactNode
   className?: string
+  titleIcon?: React.ReactNode
+  headerClassName?: string
+  titleClassName?: string
+  closeClassName?: string
 }
 
-export function Dialog({ open, onClose, title, description, children, className }: DialogProps) {
+export function Dialog({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  className,
+  titleIcon,
+  headerClassName,
+  titleClassName,
+  closeClassName,
+}: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -26,7 +41,7 @@ export function Dialog({ open, onClose, title, description, children, className 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
         ref={overlayRef}
         className="absolute inset-0 bg-black/60"
@@ -34,18 +49,33 @@ export function Dialog({ open, onClose, title, description, children, className 
       />
       <div
         className={clsx(
-          'relative z-10 w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-xl',
+          'relative z-10 max-h-[90vh] w-[calc(100vw-2rem)] max-w-md overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-xl',
           className,
         )}
       >
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
-            {description && (
-              <p className="text-sm text-text-secondary mt-0.5">{description}</p>
-            )}
+        <div className={clsx("flex items-center justify-between mb-4", headerClassName)}>
+          <div className="flex min-w-0 items-center gap-3">
+            {titleIcon}
+            <div className="min-w-0">
+              <h2
+                className={clsx(
+                  "truncate text-lg font-semibold text-text-primary",
+                  titleClassName,
+                )}
+              >
+                {title}
+              </h2>
+              {description && (
+                <p className="text-sm text-text-secondary mt-0.5">{description}</p>
+              )}
+            </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className={closeClassName}
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>

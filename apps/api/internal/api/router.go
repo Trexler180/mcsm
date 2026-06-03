@@ -80,8 +80,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					r.Get("/console", consoleH.Console)
 					r.Get("/metrics", consoleH.Metrics)
 
-					// Online players (polled)
+					// Players (online roster + offline from world files)
 					r.Get("/players", playersH.List)
+					r.Get("/players/{uuid}", playersH.Detail)
 
 					// Files
 					r.Get("/files", fileH.List)
@@ -96,20 +97,25 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					// Mods
 					r.Get("/mods", modH.List)
 					r.Get("/mods/sources", modH.Sources)
+					r.Get("/mods/categories", modH.Categories)
 					r.Post("/mods/search", modH.Search)
 					r.Get("/mods/project", modH.GetProject)
+					r.Get("/mods/version", modH.GetVersion)
 					r.Get("/mods/versions", modH.GetVersions)
 					r.Post("/mods/install", modH.Install)
+					r.Post("/mods/disable-conflict", modH.DisableConflict)
 					r.Post("/mods/install-modpack", modH.InstallModpack)
 					r.Get("/mods/updates", modH.Updates)
 					r.Post("/mods/{modId}/update", modH.Update)
 					r.Post("/mods/{modId}/pin", modH.Pin)
+					r.Post("/mods/{modId}/enabled", modH.SetEnabled)
 					r.Delete("/mods/{modId}", modH.Uninstall)
 
 					// Backups
 					r.Get("/backups", backupH.ListBackups)
 					r.Post("/backups", backupH.CreateBackup)
 					r.Post("/backups/{backupId}/restore", backupH.RestoreBackup)
+					r.Delete("/backups/{backupId}", backupH.DeleteBackup)
 					r.Get("/backup-targets", backupH.ListTargets)
 					r.Post("/backup-targets", backupH.CreateTarget)
 

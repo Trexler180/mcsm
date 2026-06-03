@@ -13,11 +13,20 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
   }
   const h = 40
   const w = 200
-  const max = 100
+  // Auto-scale to the data's own range so small movements (a few MB of RAM,
+  // a few % CPU) are visible instead of pinned flat against a 0-100 axis.
+  // Pad by 10% and enforce a minimum span so a steady signal sits mid-height.
+  const lo = Math.min(...data)
+  const hi = Math.max(...data)
+  const span = Math.max(hi - lo, 1)
+  const pad = span * 0.1
+  const min = lo - pad
+  const max = hi + pad
   const pts = data
     .map((v, i) => {
       const x = (i / (data.length - 1)) * w
-      const y = h - Math.max(0, Math.min(v, max) / max) * h
+      const norm = (v - min) / (max - min)
+      const y = h - Math.max(0, Math.min(norm, 1)) * h
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
     .join(' ')
@@ -96,10 +105,17 @@ export function ResourceChart({ serverId }: { serverId: string }) {
       <div className="bg-surface rounded-lg border border-border p-3">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">RAM</span>
-          <span className="text-sm font-mono font-medium text-text-primary">
-            {latest
-              ? `${latest.ram_used_mb} / ${latest.ram_total_mb} MB`
-              : '—'}
+          <span className="text-right font-mono font-medium text-text-primary leading-tight">
+            {latest ? (
+              <>
+                <span className="text-sm">{latest.ram_used_mb} MB</span>
+                <span className="block text-[10px] text-text-secondary">
+                  / {latest.ram_total_mb} MB
+                </span>
+              </>
+            ) : (
+              '—'
+            )}
           </span>
         </div>
         <Sparkline data={ramData} color="#3b82f6" />

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"runtime"
 	"sync"
 	"time"
 
@@ -26,15 +27,57 @@ type ProcessStats struct {
 	NetTxBps uint64  `json:"net_tx_bps"`
 }
 
+type cpuSample struct {
+	total float64 // cumulative CPU seconds (user+system)
+	at    time.Time
+}
+
 type Collector struct {
 	mu       sync.Mutex
 	prevRx   uint64
 	prevTx   uint64
 	prevTime time.Time
+
+	cpuMu   sync.Mutex
+	prevCPU map[int32]cpuSample // per-pid, for instantaneous CPU%
 }
 
 func NewCollector() *Collector {
-	return &Collector{prevTime: time.Now()}
+	return &Collector{prevTime: time.Now(), prevCPU: map[int32]cpuSample{}}
+}
+
+// procCPUPercent returns instantaneous CPU% for a process, normalized so that
+// 100% means all logical cores saturated (matches host CPU semantics). Uses the
+// delta in cumulative CPU time since the previous call for this pid.
+func (c *Collector) procCPUPercent(proc *process.Process) float64 {
+	times, err := proc.Times()
+	if err != nil {
+		return 0
+	}
+	total := times.User + times.System
+	now := time.Now()
+
+	c.cpuMu.Lock()
+	defer c.cpuMu.Unlock()
+
+	prev, ok := c.prevCPU[proc.Pid]
+	c.prevCPU[proc.Pid] = cpuSample{total: total, at: now}
+	if !ok {
+		return 0 // first sample establishes a baseline
+	}
+
+	elapsed := now.Sub(prev.at).Seconds()
+	if elapsed <= 0 {
+		return 0
+	}
+	pct := (total - prev.total) / elapsed * 100
+	if n := runtime.NumCPU(); n > 0 {
+		pct /= float64(n)
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
 }
 
 func (c *Collector) Host(dataDir string) (*HostStats, error) {
@@ -75,10 +118,7 @@ func (c *Collector) Process(pid int32) (*ProcessStats, error) {
 		return &ProcessStats{}, nil
 	}
 
-	cpuPct, err := proc.CPUPercent()
-	if err != nil {
-		cpuPct = 0
-	}
+	cpuPct := c.procCPUPercent(proc)
 
 	mi, err := proc.MemoryInfo()
 	var ramMb uint64

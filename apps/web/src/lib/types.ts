@@ -28,7 +28,30 @@ export type ServerStatus =
   | "online"
   | "stopping"
   | "crashed"
+  | "mod_conflict"
   | "error";
+
+export interface ConflictSuggestion {
+  action: string; // "replace" | "remove" | "install"
+  mod_id: string;
+  mod_name: string;
+  version?: string;
+  requirements?: string[];
+}
+
+export interface ModConflict {
+  detected: boolean;
+  summary: string;
+  suggestions: ConflictSuggestion[];
+  raw: string[];
+  detected_at: number;
+}
+
+export interface AgentStatus {
+  status: string;
+  pid?: number;
+  mod_conflict?: ModConflict;
+}
 
 export interface Server {
   id: string;
@@ -76,9 +99,14 @@ export interface InstalledMod {
   file_name: string;
   sha256: string | null;
   pinned: boolean;
+  enabled: boolean;
   install_path: string;
   installed_as_dep: boolean;
   installed_at: string;
+  /** Names of installed mods that require this one (reverse deps). */
+  required_by: string[];
+  /** Auto-installed as a dependency that nothing needs anymore. */
+  orphaned: boolean;
 }
 
 export type ModProjectType =
@@ -106,6 +134,12 @@ export interface ModSearchParams {
   projectType?: ModProjectType;
   categories?: string[];
   index?: ModSortIndex;
+  /**
+   * Environment facet: "server" (runs on server), "server_only" (server + client
+   * unsupported), "client_server" (required on both), "client", "any", or ""
+   * (server-relevant default).
+   */
+  environment?: string;
   limit?: number;
   offset?: number;
 }
@@ -137,6 +171,7 @@ export interface ModSearchHit {
   project_id: string;
   slug: string;
   title: string;
+  author: string;
   description: string;
   categories: string[];
   client_side: string;
@@ -144,6 +179,15 @@ export interface ModSearchHit {
   downloads: number;
   icon_url: string;
   versions: string[];
+}
+
+export interface ModCategory {
+  /** Raw inline SVG string shipped by Modrinth. */
+  icon: string;
+  name: string;
+  project_type: string;
+  /** Group label, e.g. "categories", "features", "performance". */
+  header: string;
 }
 
 export interface ModSearchResult {
@@ -156,6 +200,8 @@ export interface ModVersion {
   project_id: string;
   name: string;
   version_number: string;
+  version_type?: string;
+  changelog?: string;
   game_versions: string[];
   loaders: string[];
   date_published: string;
@@ -213,7 +259,36 @@ export interface BackupTarget {
 
 export interface Player {
   name: string;
-  joined_at: string;
+  uuid?: string;
+  online: boolean;
+  /** Set for online players: when they joined this session. */
+  joined_at?: string;
+  /** Set for offline players: mtime of their playerdata .dat file. */
+  last_seen?: string;
+}
+
+export interface ItemStack {
+  slot: number;
+  id: string; // e.g. "minecraft:diamond_sword"
+  count: number;
+}
+
+export interface PlayerDetail {
+  name: string;
+  uuid: string;
+  online: boolean;
+  health: number;
+  max_health: number;
+  food: number;
+  xp_level: number;
+  xp_total: number;
+  game_mode: number;
+  dimension: string;
+  pos: number[]; // [x, y, z]
+  score: number;
+  selected_slot: number;
+  inventory: ItemStack[];
+  ender_chest: ItemStack[];
 }
 
 export interface ScheduledTask {

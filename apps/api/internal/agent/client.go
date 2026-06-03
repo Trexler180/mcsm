@@ -147,6 +147,30 @@ func (c *Client) GetStatus(ctx context.Context, serverID string) (map[string]any
 	return result, nil
 }
 
+// DisableConflictMods asks the agent to disable (rename to .disabled) the jars
+// matching the given Fabric mod ids. Returns the disabled filenames.
+func (c *Client) DisableConflictMods(ctx context.Context, serverID string, modIDs []string) ([]string, error) {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/mods/disable", map[string]any{
+		"mod_ids": modIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var e map[string]string
+		json.NewDecoder(resp.Body).Decode(&e)
+		return nil, fmt.Errorf("agent: %s", e["error"])
+	}
+	var out struct {
+		Disabled []string `json:"disabled"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Disabled, nil
+}
+
 func (c *Client) SendCommand(ctx context.Context, serverID, command string) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/command", map[string]string{
 		"command": command,

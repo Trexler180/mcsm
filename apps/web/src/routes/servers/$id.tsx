@@ -22,6 +22,7 @@ import {
   Globe2,
   ShieldCheck,
   SlidersHorizontal,
+  FileCog,
 } from "lucide-react";
 import { Route as rootRoute } from "../__root";
 import { Button } from "@/components/ui/button";
@@ -33,8 +34,11 @@ import { Badge } from "@/components/ui/badge";
 import { ServerTerminal } from "@/components/console/terminal";
 import { FileBrowser } from "@/components/files/browser";
 import { FileEditor } from "@/components/files/editor";
+import { DatViewer } from "@/components/files/dat-viewer";
 import { ModSearch } from "@/components/mods/search";
+import { ModConflictDialog } from "@/components/mods/conflict-dialog";
 import { PlayersPanel } from "@/components/players/panel";
+import { ConfigsTab } from "@/components/configs/configs-tab";
 import { ResourceChart } from "@/components/charts/resource-chart";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -48,6 +52,7 @@ type ServerSection =
   | "software"
   | "mods"
   | "options"
+  | "configs"
   | "files"
   | "worlds"
   | "backups"
@@ -66,6 +71,7 @@ const serverSections: Array<{
   { value: "software", label: "Software", icon: PackageOpen },
   { value: "mods", label: "Mods", icon: PackageOpen },
   { value: "options", label: "Options", icon: SlidersHorizontal },
+  { value: "configs", label: "Configs", icon: FileCog },
   { value: "files", label: "Files", icon: FolderTree },
   { value: "worlds", label: "Worlds", icon: Globe2 },
   { value: "backups", label: "Backups", icon: HardDrive },
@@ -86,7 +92,7 @@ function Panel({
 }) {
   return (
     <section className="rounded-md border border-border bg-surface">
-      <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-4">
+      <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 sm:px-5 sm:py-4">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
           {description && (
@@ -95,7 +101,7 @@ function Panel({
         </div>
         {actions}
       </div>
-      <div className="p-5">{children}</div>
+      <div className="p-4 sm:p-5">{children}</div>
     </section>
   );
 }
@@ -126,6 +132,7 @@ function BackupsTab({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [restoreTarget, setRestoreTarget] = useState<Backup | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Backup | null>(null);
 
   const { data: backups = [], isLoading } = useQuery({
     queryKey: ["backups", serverId],
@@ -150,6 +157,16 @@ function BackupsTab({ serverId }: { serverId: string }) {
       setRestoreTarget(null);
     },
     onError: (e: Error) => error("Restore failed", e.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (backupId: string) => api.backups.delete(serverId, backupId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["backups", serverId] });
+      success("Backup deleted");
+      setDeleteTarget(null);
+    },
+    onError: (e: Error) => error("Delete failed", e.message),
   });
 
   const statusColor: Record<Backup["status"], string> = {
@@ -232,6 +249,16 @@ function BackupsTab({ serverId }: { serverId: string }) {
                     <RotateCcw className="h-3.5 w-3.5" /> Restore
                   </Button>
                 )}
+                {b.status !== "running" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeleteTarget(b)}
+                    title="Delete this backup"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                  </Button>
+                )}
               </div>
             </div>
           ))}
@@ -249,6 +276,17 @@ function BackupsTab({ serverId }: { serverId: string }) {
         confirmLabel="Restore"
         variant="destructive"
         loading={restoreMutation.isPending}
+      />
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+        title="Delete backup"
+        description="Delete this backup permanently? This removes the saved zip and cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        loading={deleteMutation.isPending}
       />
     </div>
   );
@@ -271,7 +309,7 @@ function DashboardTab({
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatTile
           label="Status"
           value={server.status}
@@ -296,7 +334,7 @@ function DashboardTab({
         />
       </div>
 
-      <div className="grid grid-cols-[1.3fr_1fr] gap-5">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.3fr_1fr]">
         <Panel
           title="Resources"
           description="Live agent metrics for this server."
@@ -321,7 +359,7 @@ function DashboardTab({
         </Panel>
       </div>
 
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Panel title="Server Details">
           <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">
             <dt className="text-text-secondary">Name</dt>
@@ -777,7 +815,7 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {propertyFields.map((field) => (
             <div key={field.key} className="space-y-1.5">
               <Label>{field.label}</Label>
@@ -1011,7 +1049,7 @@ function SoftwareTab({ server }: { server: Server }) {
           </div>
         }
       >
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Type</Label>
             <select
@@ -1180,7 +1218,7 @@ function OptionsTab({ server }: { server: Server }) {
 
         <div className="space-y-4">
           <h3 className="text-sm font-semibold text-text-primary">Resources</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Port</Label>
               <Input type="number" value={form.port} onChange={f("port")} />
@@ -1265,18 +1303,16 @@ function LogsTab({ serverId }: { serverId: string }) {
   });
 
   return (
-    <div className="flex h-full min-h-0 flex-col p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            className="w-80 font-mono"
-          />
-          <Button variant="outline" onClick={() => refetch()}>
-            Refresh
-          </Button>
-        </div>
+    <div className="flex h-full min-h-0 flex-col p-4 sm:p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <Input
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          className="min-w-0 flex-1 font-mono sm:max-w-[20rem]"
+        />
+        <Button variant="outline" onClick={() => refetch()}>
+          Refresh
+        </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-[#0f0f0f] p-4 font-mono text-xs leading-5 text-text-primary">
         {isLoading ? (
@@ -1310,7 +1346,7 @@ function WorldsTab({ serverId }: { serverId: string }) {
     ) ?? [];
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <Panel
         title="Worlds"
         description="Detected world folders in the server root."
@@ -1353,12 +1389,12 @@ function WorldsTab({ serverId }: { serverId: string }) {
 
 function AccessTab() {
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <Panel
         title="Access"
         description="Per-server collaborators and permissions will live here."
       >
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {["Console", "Files", "Backups", "Mods", "Startup", "Settings"].map(
             (permission) => (
               <label
@@ -1405,6 +1441,23 @@ function ServerDetailPage() {
     queryFn: () => api.backups.list(id),
     refetchInterval: 10_000,
   });
+
+  // Live agent status carries the parsed Fabric mod-conflict (if any), which the
+  // DB-backed server row doesn't include. Track the last conflict the user
+  // dismissed so it doesn't immediately reappear.
+  const { data: agentStatus } = useQuery({
+    queryKey: ["agent-status", id],
+    queryFn: () => api.servers.status(id),
+    refetchInterval: 6_000,
+  });
+  const [dismissedConflict, setDismissedConflict] = useState<number | null>(
+    null,
+  );
+  const conflict = agentStatus?.mod_conflict?.detected
+    ? agentStatus.mod_conflict
+    : null;
+  const showConflict =
+    conflict != null && conflict.detected_at !== dismissedConflict;
 
   const start = useMutation({
     mutationFn: () => api.servers.start(id),
@@ -1453,7 +1506,7 @@ function ServerDetailPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-4 px-6 py-3 border-b border-border bg-surface/50 flex-shrink-0">
+      <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-6 py-3 border-b border-border bg-surface/50 flex-shrink-0">
         <Button
           variant="ghost"
           size="icon"
@@ -1469,7 +1522,7 @@ function ServerDetailPage() {
             </h1>
             <StatusBadge status={server.status as ServerStatus} />
           </div>
-          <p className="text-xs text-text-secondary">
+          <p className="truncate text-xs text-text-secondary">
             {server.platform} {server.mc_version} · :{server.port} ·{" "}
             {server.ram_mb_max} MB
           </p>
@@ -1526,9 +1579,9 @@ function ServerDetailPage() {
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0">
-        <aside className="w-56 flex-shrink-0 border-r border-border bg-surface/40 p-3">
-          <nav className="space-y-1">
+      <div className="flex flex-1 min-h-0 flex-col md:flex-row">
+        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-56 md:border-b-0 md:border-r md:p-3">
+          <nav className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
             {serverSections.map((section) => {
               const Icon = section.icon;
               const active = tab === section.value;
@@ -1536,13 +1589,13 @@ function ServerDetailPage() {
                 <button
                   key={section.value}
                   onClick={() => setTab(section.value)}
-                  className={`flex h-9 w-full items-center gap-2 rounded-md px-3 text-left text-sm transition-colors ${
+                  className={`flex h-9 flex-shrink-0 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors md:w-full ${
                     active
                       ? "bg-accent/15 text-text-primary"
                       : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
                   }`}
                 >
-                  <Icon className="h-4 w-4" />
+                  <Icon className="h-4 w-4 flex-shrink-0" />
                   {section.label}
                 </button>
               );
@@ -1552,7 +1605,7 @@ function ServerDetailPage() {
 
         <main className="flex-1 min-w-0 min-h-0 overflow-hidden">
           {tab === "dashboard" && (
-            <div className="h-full overflow-y-auto p-6">
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
               <DashboardTab
                 server={server}
                 backups={backups}
@@ -1573,28 +1626,48 @@ function ServerDetailPage() {
             />
           )}
           {tab === "software" && (
-            <div className="h-full overflow-y-auto p-6">
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
               <SoftwareTab server={server} />
             </div>
           )}
           {tab === "options" && (
-            <div className="h-full overflow-y-auto p-6">
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
               <OptionsTab server={server} />
             </div>
           )}
+          {tab === "configs" && <ConfigsTab serverId={id} />}
           {tab === "files" && (
             <div className="flex h-full min-w-0">
-              <div className="w-80 border-r border-border flex-shrink-0 overflow-hidden flex flex-col">
+              {/* On mobile, show the browser OR the editor (not both); on md+ show both side by side. */}
+              <div
+                className={`${selectedFile ? "hidden md:flex" : "flex"} w-full flex-shrink-0 flex-col overflow-hidden border-border md:w-80 md:border-r`}
+              >
                 <FileBrowser
                   serverId={id}
                   onFileSelect={(path) => setSelectedFile(path)}
                 />
               </div>
-              <div className="flex-1 min-w-0 overflow-hidden">
+              <div
+                className={`${selectedFile ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col overflow-hidden`}
+              >
                 {selectedFile ? (
-                  <FileEditor serverId={id} path={selectedFile} />
+                  <>
+                    <button
+                      onClick={() => setSelectedFile(null)}
+                      className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary md:hidden"
+                    >
+                      <ArrowLeft className="h-4 w-4" /> Back to files
+                    </button>
+                    <div className="min-h-0 flex-1 overflow-hidden">
+                      {/\.(dat|dat_old|nbt)$/i.test(selectedFile) ? (
+                        <DatViewer serverId={id} path={selectedFile} />
+                      ) : (
+                        <FileEditor serverId={id} path={selectedFile} />
+                      )}
+                    </div>
+                  </>
                 ) : (
-                  <div className="flex items-center justify-center h-full text-text-secondary">
+                  <div className="flex h-full items-center justify-center text-text-secondary">
                     <p className="text-sm">Select a file to edit</p>
                   </div>
                 )}
@@ -1607,21 +1680,30 @@ function ServerDetailPage() {
               serverId={id}
               loader={server.platform}
               mcVersion={server.mc_version}
+              platform={server.platform}
             />
           )}
           {tab === "backups" && (
-            <div className="h-full overflow-y-auto p-6">
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
               <BackupsTab serverId={id} />
             </div>
           )}
           {tab === "tasks" && (
-            <div className="h-full overflow-y-auto p-6">
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
               <TasksTab serverId={id} />
             </div>
           )}
           {tab === "access" && <AccessTab />}
         </main>
       </div>
+
+      {showConflict && conflict && (
+        <ModConflictDialog
+          serverId={id}
+          conflict={conflict}
+          onClose={() => setDismissedConflict(conflict.detected_at)}
+        />
+      )}
     </div>
   );
 }

@@ -21,10 +21,15 @@ var (
 	playerLeaveRe = regexp.MustCompile(`:\s+([A-Za-z0-9_]{2,16})\s+left the game\s*$`)
 )
 
-// Player is a snapshot of one online player.
+// Player is a snapshot of one player. Online players carry JoinedAt (tracked
+// live from the console); offline players carry UUID + LastSeen (read from the
+// world's playerdata files).
 type Player struct {
 	Name     string    `json:"name"`
-	JoinedAt time.Time `json:"joined_at"`
+	UUID     string    `json:"uuid,omitempty"`
+	Online   bool      `json:"online"`
+	JoinedAt time.Time `json:"joined_at,omitempty"`
+	LastSeen time.Time `json:"last_seen,omitempty"`
 }
 
 const ringCapacity = 500
@@ -32,11 +37,12 @@ const ringCapacity = 500
 type Status string
 
 const (
-	StatusOffline  Status = "offline"
-	StatusStarting Status = "starting"
-	StatusOnline   Status = "online"
-	StatusStopping Status = "stopping"
-	StatusCrashed  Status = "crashed"
+	StatusOffline     Status = "offline"
+	StatusStarting    Status = "starting"
+	StatusOnline      Status = "online"
+	StatusStopping    Status = "stopping"
+	StatusCrashed     Status = "crashed"
+	StatusModConflict Status = "mod_conflict"
 )
 
 type StartConfig struct {
@@ -58,10 +64,11 @@ type ConsoleEvent struct {
 }
 
 type StatusInfo struct {
-	ID        string    `json:"id"`
-	Status    Status    `json:"status"`
-	PID       int       `json:"pid,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
+	ID          string       `json:"id"`
+	Status      Status       `json:"status"`
+	PID         int          `json:"pid,omitempty"`
+	StartedAt   time.Time    `json:"started_at,omitempty"`
+	ModConflict *ModConflict `json:"mod_conflict,omitempty"`
 }
 
 type Instance struct {
@@ -86,6 +93,13 @@ type Instance struct {
 
 	playersMu sync.Mutex
 	players   map[string]time.Time
+
+	// Fabric incompatible-mods detection. detector is fed every console line
+	// (under conflictMu since stdout/stderr pipes run concurrently); once a
+	// conflict is found it's stored in conflict and the process is killed.
+	conflictMu sync.Mutex
+	detector   conflictDetector
+	conflict   *ModConflict
 
 	done chan struct{}
 }
@@ -186,6 +200,23 @@ func (inst *Instance) pipeStream(r io.Reader, stream string) {
 		default:
 		}
 
+		// Watch every line (both streams) for a Fabric incompatible-mods block.
+		// On detection, stash the parsed conflict, flip status, and kill the
+		// process — it would die on its own, but this captures the diagnostic
+		// before waitExit relabels it "crashed".
+		inst.conflictMu.Lock()
+		mc := inst.detector.feed(line)
+		if mc != nil {
+			inst.conflict = mc
+		}
+		inst.conflictMu.Unlock()
+		if mc != nil {
+			inst.mu.Lock()
+			inst.status = StatusModConflict
+			inst.mu.Unlock()
+			_ = inst.kill()
+		}
+
 		if stream == "stdout" {
 			if strings.Contains(line, "Done (") {
 				inst.mu.Lock()
@@ -213,7 +244,7 @@ func (inst *Instance) Players() []Player {
 	defer inst.playersMu.Unlock()
 	out := make([]Player, 0, len(inst.players))
 	for name, joined := range inst.players {
-		out = append(out, Player{Name: name, JoinedAt: joined})
+		out = append(out, Player{Name: name, JoinedAt: joined, Online: true})
 	}
 	return out
 }
@@ -244,7 +275,10 @@ func (inst *Instance) waitExit() {
 
 	inst.mu.Lock()
 	prevStatus := inst.status
-	if err != nil && prevStatus != StatusStopping {
+	if prevStatus == StatusModConflict {
+		// Keep the mod-conflict status so the panel can surface suggestions
+		// instead of a generic crash.
+	} else if err != nil && prevStatus != StatusStopping {
 		inst.status = StatusCrashed
 	} else {
 		inst.status = StatusOffline
@@ -268,7 +302,24 @@ func (inst *Instance) waitExit() {
 	close(inst.done)
 }
 
+// exited reports whether the underlying process has already finished (done is
+// closed by waitExit). Used to make stop/kill idempotent once it's dead.
+func (inst *Instance) exited() bool {
+	select {
+	case <-inst.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (inst *Instance) stop(graceful bool, timeout time.Duration) error {
+	// Already dead (e.g. a mod-conflict exit) — nothing to stop, and forcing a
+	// kill on a finished process errors with "invalid argument" on Windows.
+	if inst.exited() {
+		return nil
+	}
+
 	inst.mu.Lock()
 	inst.status = StatusStopping
 	inst.mu.Unlock()
@@ -286,6 +337,11 @@ func (inst *Instance) stop(graceful bool, timeout time.Duration) error {
 }
 
 func (inst *Instance) kill() error {
+	// Killing an already-finished process returns "invalid argument" on Windows
+	// / ErrProcessDone elsewhere — treat a dead process as a successful no-op.
+	if inst.exited() {
+		return nil
+	}
 	if inst.cmd != nil && inst.cmd.Process != nil {
 		return inst.cmd.Process.Kill()
 	}
@@ -333,11 +389,32 @@ func (inst *Instance) subscribe() (<-chan ConsoleEvent, func()) {
 
 func (inst *Instance) statusInfo() StatusInfo {
 	inst.mu.RLock()
-	defer inst.mu.RUnlock()
-	return StatusInfo{
+	info := StatusInfo{
 		ID:        inst.ID,
 		Status:    inst.status,
 		PID:       inst.pid,
 		StartedAt: inst.startedAt,
 	}
+	inst.mu.RUnlock()
+
+	inst.conflictMu.Lock()
+	info.ModConflict = inst.conflict
+	inst.conflictMu.Unlock()
+	return info
+}
+
+// Conflict returns the detected mod conflict, or nil.
+func (inst *Instance) Conflict() *ModConflict {
+	inst.conflictMu.Lock()
+	defer inst.conflictMu.Unlock()
+	return inst.conflict
+}
+
+// ClearConflict drops a stored conflict (after the user applies a fix) and
+// resets the detector so a fresh start can detect a new one.
+func (inst *Instance) ClearConflict() {
+	inst.conflictMu.Lock()
+	inst.conflict = nil
+	inst.detector = conflictDetector{}
+	inst.conflictMu.Unlock()
 }

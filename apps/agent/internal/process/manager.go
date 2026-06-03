@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,8 +25,10 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 	defer m.mu.Unlock()
 
 	if inst, ok := m.instances[id]; ok {
+		// offline/crashed/mod_conflict all mean the process is dead and the
+		// instance is just a stale record we can replace with a fresh start.
 		s := inst.statusInfo().Status
-		if s != StatusOffline && s != StatusCrashed {
+		if s != StatusOffline && s != StatusCrashed && s != StatusModConflict {
 			return fmt.Errorf("server already running")
 		}
 	}
@@ -123,6 +126,57 @@ func (m *Manager) Players(id string) []Player {
 	return inst.Players()
 }
 
+// AllPlayers returns the merged roster: players currently online (tracked live
+// from the console) plus offline players read from the world's playerdata
+// files. Online entries win — an offline .dat for someone currently online is
+// dropped so each player appears once.
+func (m *Manager) AllPlayers(id string) []Player {
+	online := m.Players(id)
+	onlineNames := make(map[string]struct{}, len(online))
+	for _, p := range online {
+		onlineNames[strings.ToLower(p.Name)] = struct{}{}
+	}
+
+	out := make([]Player, 0, len(online))
+	out = append(out, online...)
+
+	if dir, ok := m.GetDir(id); ok {
+		offline, _ := OfflinePlayers(dir)
+		for _, p := range offline {
+			if _, on := onlineNames[strings.ToLower(p.Name)]; on {
+				continue
+			}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// PlayerDetail parses one player's .dat file and resolves their name (from
+// usercache.json) and online status (from the live roster).
+func (m *Manager) PlayerDetail(id, uuid string) (*PlayerDetail, error) {
+	dir, ok := m.GetDir(id)
+	if !ok {
+		return nil, fmt.Errorf("server directory not registered")
+	}
+	d, err := ReadPlayerDetail(dir, uuid)
+	if err != nil {
+		return nil, err
+	}
+	if name := usercache(dir)[strings.ToLower(uuid)]; name != "" {
+		d.Name = name
+	} else {
+		d.Name = uuid
+	}
+	for _, p := range m.Players(id) {
+		if strings.EqualFold(p.Name, d.Name) {
+			d.Online = true
+			break
+		}
+	}
+	return d, nil
+}
+
 // StopAll gracefully stops every running instance, in parallel, bounded by
 // timeout per instance. Called on agent shutdown so MC children aren't orphaned.
 func (m *Manager) StopAll(timeout time.Duration) {
@@ -142,6 +196,38 @@ func (m *Manager) StopAll(timeout time.Duration) {
 		}(inst)
 	}
 	wg.Wait()
+}
+
+// Conflict returns the detected Fabric mod conflict for a server, or nil.
+func (m *Manager) Conflict(id string) *ModConflict {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return inst.Conflict()
+}
+
+// DisableConflictMods renames the jars whose loader mod id is in ids to
+// "<name>.disabled" in the server's mods dir, then clears the stored conflict.
+// Returns the disabled filenames.
+func (m *Manager) DisableConflictMods(id string, ids []string) ([]string, error) {
+	dir, ok := m.GetDir(id)
+	if !ok {
+		return nil, fmt.Errorf("server directory unknown; register or start it first")
+	}
+	disabled, err := disableModsByID(dir, ids)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	inst := m.instances[id]
+	m.mu.RUnlock()
+	if inst != nil {
+		inst.ClearConflict()
+	}
+	return disabled, nil
 }
 
 func (m *Manager) GetDir(id string) (string, bool) {

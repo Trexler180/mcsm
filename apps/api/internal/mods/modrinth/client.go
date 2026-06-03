@@ -39,6 +39,7 @@ type ProjectHit struct {
 	ProjectID    string   `json:"project_id"`
 	Slug         string   `json:"slug"`
 	Title        string   `json:"title"`
+	Author       string   `json:"author"`
 	Description  string   `json:"description"`
 	Categories   []string `json:"categories"`
 	ClientSide   string   `json:"client_side"`
@@ -82,6 +83,8 @@ type Version struct {
 	ProjectID     string        `json:"project_id"`
 	Name          string        `json:"name"`
 	VersionNumber string        `json:"version_number"`
+	VersionType   string        `json:"version_type"`
+	Changelog     string        `json:"changelog"`
 	GameVersions  []string      `json:"game_versions"`
 	Loaders       []string      `json:"loaders"`
 	Files         []VersionFile `json:"files"`
@@ -113,6 +116,7 @@ type SearchParams struct {
 	MCVersion   string   // e.g. 1.21.4
 	Categories  []string // extra category facets (and-ed)
 	Index       string   // relevance|downloads|follows|newest|updated
+	Environment string   // "server", "client", "any", or "" (server-relevant default)
 	Limit       int
 	Offset      int
 }
@@ -138,10 +142,29 @@ func (p SearchParams) buildFacets() string {
 	if p.MCVersion != "" {
 		groups = append(groups, []string{"versions:" + p.MCVersion})
 	}
-	// Server-relevant content only: keep client-only resources out of mod/plugin
-	// searches but allow resource/shader packs (which are client_side:required).
-	if pt == "mod" || pt == "plugin" || pt == "datapack" || pt == "modpack" {
+	// Environment facet. Explicit values force a side; "any" disables filtering;
+	// "" falls back to the server-relevant default — keep client-only resources
+	// out of mod/plugin searches but allow resource/shader packs.
+	switch p.Environment {
+	case "server":
 		groups = append(groups, []string{"server_side:optional", "server_side:required"})
+	case "server_only":
+		// Runs on the server and is NOT needed on the client (client_side
+		// unsupported) — the clear "server only" case.
+		groups = append(groups, []string{"server_side:optional", "server_side:required"})
+		groups = append(groups, []string{"client_side:unsupported"})
+	case "client_server":
+		// Must be present on both sides — required on the client AND the server.
+		groups = append(groups, []string{"server_side:required"})
+		groups = append(groups, []string{"client_side:required"})
+	case "client":
+		groups = append(groups, []string{"client_side:optional", "client_side:required"})
+	case "any":
+		// no environment facet
+	default:
+		if pt == "mod" || pt == "plugin" || pt == "datapack" || pt == "modpack" {
+			groups = append(groups, []string{"server_side:optional", "server_side:required"})
+		}
 	}
 
 	parts := make([]string, len(groups))
@@ -254,6 +277,39 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 		return nil, err
 	}
 	return &p, nil
+}
+
+// Category is a Modrinth tag from /v2/tag/category. The endpoint also returns
+// loader entries; callers filter by ProjectType to keep only the relevant ones.
+type Category struct {
+	Icon        string `json:"icon"`
+	Name        string `json:"name"`
+	ProjectType string `json:"project_type"`
+	Header      string `json:"header"`
+}
+
+func (c *Client) GetCategories(ctx context.Context) ([]Category, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/tag/category", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("modrinth returned %d", resp.StatusCode)
+	}
+
+	var cats []Category
+	if err := json.NewDecoder(resp.Body).Decode(&cats); err != nil {
+		return nil, err
+	}
+	return cats, nil
 }
 
 // MrpackIndex is the modrinth.index.json manifest inside a .mrpack archive.

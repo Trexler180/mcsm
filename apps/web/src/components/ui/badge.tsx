@@ -36,6 +36,7 @@ const statusVariant: Record<ServerStatus, Variant> = {
   stopping: 'warning',
   offline: 'muted',
   crashed: 'error',
+  mod_conflict: 'warning',
   error: 'error',
 }
 
@@ -45,6 +46,7 @@ const statusDot: Record<ServerStatus, string> = {
   stopping: 'bg-yellow-400 animate-pulse',
   offline: 'bg-gray-500',
   crashed: 'bg-red-400',
+  mod_conflict: 'bg-orange-400',
   error: 'bg-red-400',
 }
 

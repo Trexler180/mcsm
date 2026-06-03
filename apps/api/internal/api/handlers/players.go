@@ -18,9 +18,10 @@ func NewPlayersHandlers(s *store.Store) *PlayersHandlers {
 	return &PlayersHandlers{store: s}
 }
 
-// List proxies the agent's online-players list. The agent tracks players by
-// watching the server console for "X joined the game" / "X left the game".
-func (h *PlayersHandlers) List(w http.ResponseWriter, r *http.Request) {
+// proxy registers the server directory with its agent (so playerdata files can
+// be read even while the server is offline) and forwards the request to the
+// given agent path.
+func (h *PlayersHandlers) proxy(w http.ResponseWriter, r *http.Request, agentSuffix string) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
@@ -36,5 +37,19 @@ func (h *PlayersHandlers) List(w http.ResponseWriter, r *http.Request) {
 	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	c.ProxyHTTP(ctx, w, r, "/agent/v1/servers/"+id+"/players")
+	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+	c.ProxyHTTP(ctx, w, r, "/agent/v1/servers/"+srv.ID+agentSuffix)
+}
+
+// List proxies the merged player roster (online + offline-from-world-files).
+func (h *PlayersHandlers) List(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players")
+}
+
+// Detail proxies a single player's parsed .dat data (inventory, stats, etc.).
+func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players/"+chi.URLParam(r, "uuid"))
 }

@@ -29,8 +29,8 @@ function DashboardPage() {
   return (
     <div>
       <Header title="Dashboard" />
-      <div className="p-6 space-y-6">
-        <div className="grid grid-cols-3 gap-4">
+      <div className="p-4 sm:p-6 space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {stats.map((s) => (
             <Card key={s.label}>
               <CardContent className="flex items-center gap-4 py-4">
@@ -59,13 +59,13 @@ function DashboardPage() {
               </p>
             )}
             {servers.map((srv) => (
-              <div key={srv.id} className="flex items-center justify-between px-5 py-3">
-                <div className="flex items-center gap-3">
+              <div key={srv.id} className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <StatusBadge status={srv.status as ServerStatus} />
-                  <span className="text-sm font-medium text-text-primary">{srv.name}</span>
-                  <span className="text-xs text-text-secondary">{srv.platform} {srv.mc_version}</span>
+                  <span className="truncate text-sm font-medium text-text-primary">{srv.name}</span>
+                  <span className="hidden truncate text-xs text-text-secondary sm:inline">{srv.platform} {srv.mc_version}</span>
                 </div>
-                <span className="text-xs text-text-secondary">:{srv.port}</span>
+                <span className="flex-shrink-0 text-xs text-text-secondary">:{srv.port}</span>
               </div>
             ))}
           </div>
