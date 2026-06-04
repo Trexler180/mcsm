@@ -24,7 +24,7 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 - DB files `apps/api/mcsm.db*` are gitignored.
 - `apps/web/node_modules` present — `pnpm install` already run. `pnpm build` is green; **`pnpm lint` is just `tsc -b` (typecheck), not real eslint** (see §4).
 - CI: `.github/workflows/ci.yml` runs build + test + web build on PR.
-- Docker: Dockerfiles for api/agent/web + `docker-compose.yml` + `apps/web/nginx.conf`.
+- **Deployment is native only.** No Docker / containers / VMs — by decision. Three processes (api, agent, static web bundle behind a reverse proxy). Don't reintroduce Dockerfiles/compose. See `docs/deployment.md`.
 
 ## 3. Architecture map (where things live)
 
@@ -81,7 +81,7 @@ Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below
 10. **Server permissions UI.** `server_permissions.permissions` JSON shape still undefined and `requireServerAccess` is boolean. Docs defer this deliberately — only build if granular collab moves in scope. Define enum (`view`, `console`, `files`, `start_stop`, `mods`, `backups`, `tasks`, `admin`) when you do.
 
 ### P2 — quality / DX
-11. **SecurityHeaders middleware is minimal** (`internal/api/middleware/security.go`): nosniff + frame-deny + referrer-policy only. Add CSP (web is static-served via nginx → put CSP in `apps/web/nginx.conf`), and HSTS when TLS-terminated.
+11. **SecurityHeaders middleware is minimal** (`internal/api/middleware/security.go`): nosniff + frame-deny + referrer-policy only. Add CSP at whatever reverse proxy serves the web bundle, and HSTS when TLS-terminated.
 12. **No metrics export.** Add `/metrics` Prometheus endpoint (request counts, scheduler runs, backup outcomes).
 13. **No integration test for API↔agent.** Spin agent on random port in `TestMain`, drive a couple round-trips.
 14. **TLS for agent is half-done** — flags exist but thin docs. Document cert generation + add an `INSECURE_HTTP=1` guard so prod accidents are loud.
@@ -117,7 +117,7 @@ Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below
 
 ## 7. Open questions for the human
 
-- Target deployment? Single-host docker-compose, or remote agents over WAN? Affects TLS urgency (P2 #22).
+- Target deployment is native single-host (decided — no containers). Remote agents over WAN still open; affects TLS urgency (P2 #14).
 - Multi-user is in the schema (`role`, `server_permissions`) but UI is admin-centric. Is that intentional MVP scope, or backlog?
 - Modrinth-only mods OK for v1, or is CurseForge a hard requirement?
 - SQLite forever, or Postgres before multi-host? Decides whether to refactor `store/db.go` toward sqlc + a Dialect abstraction.
@@ -128,7 +128,8 @@ Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below
 
 Newest first. Move items here from `## 4` as they land.
 
-- **Single-host hardening pass** (`feat: single-host hardening`): git history + README + `docs/`; restricted `?token=` auth to console/metrics/download (was every route — JWT leak); prod guards requiring `JWT_SECRET` and rejecting default `dev-agent-token`; SecurityHeaders middleware; public resource-pack download (constant-time ID + path allowlist); writable-dir preflight; Dockerfiles + docker-compose + nginx; node heartbeat polling; health endpoints; GH Actions CI; tests across auth/middleware/db/migrations/health/server-access.
+- **Dropped Docker** (`chore: remove docker, native deployment only`): deleted Dockerfiles/compose/nginx; README + `docs/deployment.md` rewritten for native three-process deployment. Decision: no containers/VMs.
+- **Single-host hardening pass** (`feat: single-host hardening`): git history + README + `docs/`; restricted `?token=` auth to console/metrics/download (was every route — JWT leak); prod guards requiring `JWT_SECRET` and rejecting default `dev-agent-token`; SecurityHeaders middleware; public resource-pack download (constant-time ID + path allowlist); writable-dir preflight; node heartbeat polling; health endpoints; GH Actions CI; tests across auth/middleware/db/migrations/health/server-access. (Docker bits from this pass were removed immediately after — see above.)
 - **Mod conflict detection, config editors, player detail, offline NBT viewing** (`3e5dfa8`).
 - **MC/loader version dropdowns + apply-and-reinstall to switch versions** (`d5721c9`).
 - **Clickable mod detail view** — rendered description, gallery, links (`7747875`).

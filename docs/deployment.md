@@ -1,35 +1,52 @@
 # Deployment
 
-The supported production deployment is Docker Compose on a single host.
+The supported production deployment is three native processes on a single host.
+No containers or virtualization are used or required.
 
-## Services
+## Processes
 
-- `api`: Go API on port 8080 inside the compose network.
-- `agent`: Go agent on port 8090 inside the compose network.
-- `web`: nginx serving the built React app and proxying `/api` to the API.
+- `mcsm-api`: Go API on `:8080`. Runs goose migrations on boot, seeds the admin
+  user, auto-registers the local agent, starts the scheduler and poller.
+- `mcsm-agent`: Go agent on `:8090`. Manages Java server processes and files.
+- web: the static React bundle (`apps/web/dist`) served by any web server /
+  reverse proxy already on the host, proxying `/api` to the API.
 
-The API auto-registers the compose agent as `Local Agent` using the `agent`
-service DNS name.
+The API auto-registers the agent as `Local Agent` when
+`AUTO_REGISTER_LOCAL_AGENT=1`, pointing at `LOCAL_AGENT_FQDN:LOCAL_AGENT_PORT`.
 
-## Volumes
+## Build
 
-- `mcsm-api-data`: SQLite database files.
-- `mcsm-servers`: Minecraft server directories and local backup archives.
+```bash
+cd apps/api   && go build -o mcsm-api   ./cmd/server
+cd apps/agent && go build -o mcsm-agent ./cmd/agent
+cd apps/web   && pnpm install --frozen-lockfile && pnpm build
+```
 
-Back up both volumes together when possible so metadata and files remain in
-sync.
+## Run
+
+Run `mcsm-api` and `mcsm-agent` under whatever service manager the host uses
+(systemd on Linux, a service wrapper or scheduled task on Windows). Set at least
+`JWT_SECRET`, `AGENT_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_PATH`, and
+`SERVER_ROOT`. Point a reverse proxy at `apps/web/dist` for static files and
+forward `/api` (including WebSocket upgrades for console/metrics) to `:8080`.
+
+## State
+
+- SQLite database at `DATABASE_PATH`.
+- Minecraft server directories and local backup archives under `SERVER_ROOT`.
+
+Back up both together so metadata and files stay in sync (see README).
 
 ## Upgrades
 
-1. Read release notes and migration notes.
-2. Back up both volumes.
-3. Pull/build the new images.
-4. Start the stack and let goose migrations run on API boot.
+1. Read release and migration notes.
+2. Back up the database and `SERVER_ROOT`.
+3. Build the new binaries and web bundle.
+4. Restart the services; goose migrations run on API boot.
 5. Confirm `/api/v1/health` returns `{"status":"ok"}` and the node is online.
 
 ## TLS
 
-For single-host local deployments, put TLS at a reverse proxy in front of the
-web container. If exposing an agent outside the compose network, configure
-`AGENT_TLS_CERT` and `AGENT_TLS_KEY`; direct public HTTP agents are not
-recommended.
+Terminate TLS at the reverse proxy in front of the web bundle / API. If the
+agent is reachable outside the host, set `AGENT_TLS_CERT` and `AGENT_TLS_KEY`;
+plain public HTTP agents are not recommended.
