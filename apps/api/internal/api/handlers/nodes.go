@@ -1,12 +1,11 @@
 package handlers
 
 import (
-	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -32,11 +31,7 @@ func (h *NodeHandlers) List(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]nodeWithStatus, 0, len(nodes))
 	for _, n := range nodes {
-		c := agent.New(n.Scheme, n.FQDN, n.Port, n.Token)
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		online := c.Health(ctx) == nil
-		cancel()
-		result = append(result, nodeWithStatus{Node: n, Online: online})
+		result = append(result, nodeWithStatus{Node: n, Online: nodeOnline(n.LastSeen)})
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -131,8 +126,16 @@ func (h *NodeHandlers) Update(w http.ResponseWriter, r *http.Request) {
 func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.store.DeleteNode(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNodeHasServers) {
+			writeError(w, http.StatusConflict, "node still has servers; delete or move those servers before removing the node")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func nodeOnline(lastSeen *time.Time) bool {
+	return lastSeen != nil && time.Since(*lastSeen) <= 45*time.Second
 }

@@ -50,3 +50,4 @@ redis-data/
 
 # Build caches
 apps/web/tsconfig.tsbuildinfo
+.codex-go-cache*/

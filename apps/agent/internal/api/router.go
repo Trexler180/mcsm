@@ -15,6 +15,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
+	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.Auth(token))
 
 	h := handlers.NewServerHandlers(mgr, serverRoot)

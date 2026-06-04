@@ -72,6 +72,9 @@ func main() {
 	dbPath := envOr("DATABASE_PATH", "mcsm.db")
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
+		if !isDevMode() {
+			log.Fatal("JWT_SECRET is required outside development mode")
+		}
 		var err error
 		jwtSecret, err = randomHex(32)
 		if err != nil {
@@ -84,6 +87,12 @@ func main() {
 	serverRoot := defaultServerRoot()
 	if err := os.MkdirAll(serverRoot, 0755); err != nil {
 		log.Fatalf("create server root: %v", err)
+	}
+	if err := ensureWritableDir(serverRoot); err != nil {
+		log.Fatalf("server root is not writable: %v", err)
+	}
+	if err := ensureWritableDir(filepath.Join(serverRoot, "mcsm-backups")); err != nil {
+		log.Fatalf("backup root is not writable: %v", err)
 	}
 
 	adminEmail := envOr("ADMIN_EMAIL", "admin@example.com")
@@ -178,6 +187,9 @@ func main() {
 		if token == "" {
 			log.Fatal("LOCAL_AGENT_TOKEN is required when AUTO_REGISTER_LOCAL_AGENT=1")
 		}
+		if token == "dev-agent-token" && !isDevMode() {
+			log.Fatal("LOCAL_AGENT_TOKEN must not use the default dev token outside development mode")
+		}
 		n, err := s.EnsureNode(ctx, name, fqdn, port, scheme, token)
 		if err != nil {
 			log.Fatalf("register local agent node: %v", err)
@@ -247,4 +259,25 @@ func defaultServerRoot() string {
 		return "servers"
 	}
 	return filepath.Join("..", "..", "servers")
+}
+
+func isDevMode() bool {
+	v := strings.ToLower(os.Getenv("APP_ENV"))
+	return os.Getenv("MCSM_DEV_MODE") == "1" || v == "dev" || v == "development" || v == "local"
+}
+
+func ensureWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".mcsm-write-test-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
 }

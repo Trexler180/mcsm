@@ -57,6 +57,9 @@ func main() {
 	if token == "" {
 		log.Fatal("AGENT_TOKEN environment variable is required")
 	}
+	if token == "dev-agent-token" && !isDevMode() {
+		log.Fatal("AGENT_TOKEN must not use the default dev token outside development mode")
+	}
 
 	port := os.Getenv("AGENT_PORT")
 	if port == "" {
@@ -72,6 +75,12 @@ func main() {
 	serverRoot := defaultServerRoot()
 	if err := os.MkdirAll(serverRoot, 0755); err != nil {
 		log.Fatalf("create server root: %v", err)
+	}
+	if err := ensureWritableDir(serverRoot); err != nil {
+		log.Fatalf("server root is not writable: %v", err)
+	}
+	if err := ensureWritableDir(filepath.Join(serverRoot, "mcsm-backups")); err != nil {
+		log.Fatalf("backup root is not writable: %v", err)
 	}
 
 	router := agentapi.NewRouter(token, mgr, collector, serverRoot)
@@ -122,4 +131,25 @@ func defaultServerRoot() string {
 		return "servers"
 	}
 	return filepath.Join("..", "..", "servers")
+}
+
+func isDevMode() bool {
+	v := strings.ToLower(os.Getenv("APP_ENV"))
+	return os.Getenv("MCSM_DEV_MODE") == "1" || v == "dev" || v == "development" || v == "local"
+}
+
+func ensureWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".mcsm-write-test-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
 }

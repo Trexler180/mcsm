@@ -15,6 +15,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
+	r.Use(apimw.SecurityHeaders)
 	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 
@@ -22,6 +23,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	nodeH := handlers.NewNodeHandlers(s)
 	serverH := handlers.NewServerHandlers(s, serverRoot)
 	fileH := handlers.NewFileHandlers(s)
+	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s)
 	backupH := handlers.NewBackupHandlers(s)
 	taskH := handlers.NewTaskHandlers(s)
@@ -32,9 +34,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	mcH := handlers.NewMinecraftHandlers()
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/health", handlers.Health)
+
 		// Public auth routes
 		r.Post("/auth/login", authH.Login)
 		r.Post("/auth/refresh", authH.Refresh)
+		r.Get("/public/servers/{id}/resource-pack/{publicID}", resourcePackH.Download)
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {

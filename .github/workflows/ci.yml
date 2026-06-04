@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            apps/api/go.sum
+            apps/agent/go.sum
+      - name: Test API
+        working-directory: apps/api
+        run: go test ./...
+      - name: Test agent
+        working-directory: apps/agent
+        run: go test ./...
+      - name: Build API
+        working-directory: apps/api
+        run: go build ./cmd/server
+      - name: Build agent
+        working-directory: apps/agent
+        run: go build ./cmd/agent
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        working-directory: apps/web
+        run: pnpm lint
+      - name: Build
+        working-directory: apps/web
+        run: pnpm build
