@@ -17,12 +17,14 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 
 ## 2. Repo state (verify before editing)
 
-- **Not a git repo.** First step: `git init && git add -A && git commit -m "snapshot"` so Codex has rollback safety.
-- No README. This file is current ground truth.
-- One Go test only: `apps/agent/internal/install/install_test.go`. Coverage is near zero — add tests as you touch code.
-- `apps/api/internal/store/{gen,queries}` are empty placeholder dirs — store is hand-written in `db.go` (783 lines). Don't bother with sqlc unless you migrate the whole store.
-- DB file `apps/api/mcsm.db*` is checked in (delete or gitignore on first commit).
-- `apps/web/node_modules` present — `pnpm install` already run.
+- **Git repo with history.** Default working branch is `codex/future-proof-single-host`; `master` tracks the same tip. Commit per change.
+- README + docs (`docs/{architecture,deployment,security,operations}.md`) exist. This file is the task ledger; docs are user-facing truth.
+- Tests exist across both Go services (auth, middleware, db, migrations, health, server-access, install). Still patchy — add tests as you touch code. `go test ./...` in `apps/api` and `apps/agent` is green.
+- `apps/api/internal/store/{gen,queries}` are empty placeholder dirs — store is hand-written in `db.go`. Don't bother with sqlc unless you migrate the whole store.
+- DB files `apps/api/mcsm.db*` are gitignored.
+- `apps/web/node_modules` present — `pnpm install` already run. `pnpm build` is green; **`pnpm lint` is just `tsc -b` (typecheck), not real eslint** (see §4).
+- CI: `.github/workflows/ci.yml` runs build + test + web build on PR.
+- Docker: Dockerfiles for api/agent/web + `docker-compose.yml` + `apps/web/nginx.conf`.
 
 ## 3. Architecture map (where things live)
 
@@ -62,35 +64,30 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 
 ## 4. Gaps & next work (priority order)
 
-### P0 — correctness / safety
-1. **No git history.** `git init`, add `.gitignore` (bin/, node_modules/, mcsm.db*, apps/web/dist/, apps/api/mcsm.db*, .buildtools/), initial commit.
-2. **No README / CONTRIBUTING.** Even one paragraph + `run.ps1` link unblocks anyone else.
-3. **`audit_log` table unused.** Schema exists, zero writes. Wire `s.WriteAudit(ctx, userID, serverID, action, detail, ip)` into auth login/logout, server CRUD, start/stop/kill, backup, mod install/uninstall, scheduled-task CRUD, user CRUD. Add `GET /api/v1/audit` (admin) + per-server `GET /servers/{id}/audit`.
-4. **`api_keys` table unused.** No handler, no middleware path. Either drop the table or add: `POST/GET/DELETE /api/v1/api-keys`, hash with bcrypt, extend `auth.Middleware` to accept `Authorization: ApiKey <token>`.
-5. **CreateBackup double-registers dir** (`apps/api/internal/api/handlers/backups.go:75-86`). The pre-go RegisterDir succeeds, but the goroutine re-RegisterDirs even on success. Remove duplicate, then any failure short-circuits cleanly.
-6. **Mods install hard-codes `loader` from `srv.Platform` only when `LoaderVersion != nil`** (`mods.go:131`). Reverse the logic — loader should be set whenever platform is fabric/quilt/forge/neoforge/spigot/paper, regardless of `loader_version`. Verify against Modrinth taxonomy.
-7. **`http.Get(primaryFile.URL)`** in mod install (`mods.go:164`) bypasses context — no timeout, no cancellation. Use `http.NewRequestWithContext` + the existing client.
-8. **Scheduled-task UI does not exist.** Routes wired in API but no React route — add `/servers/$id/tasks` panel (the in-place placeholders in `routes/servers/$id.tsx:399-433` are mock UI only; verify).
+Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below.
 
-### P1 — features the schema implies but code doesn't deliver
-9. **Backup restore.** Agent has download endpoint but no restore. Add `POST /agent/v1/servers/{id}/restore?backup_id=...` that stops the instance, wipes selected paths, unzips, restarts. Mirror with `POST /api/v1/servers/{id}/backups/{backupId}/restore`.
-10. **Backup retention.** `backup_targets.retention` JSON stored, never applied. Background job: enforce `keep_last_n` + `max_age_days` per target. Hook into the scheduler.
-11. **Backup targets ≠ local.** Schema lists `type` + `config` (S3, B2, Restic implied). Currently only local ZIP on the agent. Either narrow the schema OR add at least S3 (use AWS SDK v2; upload from agent, stream).
-12. **CurseForge mods.** Only Modrinth. Add `internal/mods/curseforge/client.go` behind a `CURSEFORGE_API_KEY` env, plug into existing `/mods/search` with `source` param.
-13. **Refresh tokens table written but never rotated.** Verify `apps/api/internal/api/handlers/auth.go` rotates on use; if not, fix replay window.
-14. **`display_name` field exists, no PATCH endpoint.** Add `PUT /api/v1/auth/me` for self-profile, `PUT /api/v1/users/{id}` for admin.
-15. **Server permissions UI.** `server_permissions.permissions` JSON array shape is undefined. Define enum (`view`, `console`, `files`, `start_stop`, `mods`, `backups`, `tasks`, `admin`) in code, enforce per-route in `requireServerAccess` (currently boolean), add panel under `/servers/$id/permissions`.
+### P0 — correctness / safety
+1. **`apps/web/src/routes/servers/$id.tsx` is 2819 lines** (was flagged at 1000+, now nearly tripled). Top maintainability hotspot. Split into per-tab components under `components/servers/` (console, files, mods, backups, tasks, players, settings, versions). Route file should be thin.
+2. **Web ships one 1.4 MB JS chunk** (412 KB gzip), no code-splitting. Lazy-load heavy deps per route — xterm, codemirror, recharts — via dynamic `import()` / `manualChunks`. Cuts initial load a lot.
+3. **`pnpm lint` is a lie.** Script is `tsc -b --pretty false` (typecheck only); `eslint` is a devDependency with **no `eslint.config.js` and no script invoking it**. Either add a flat eslint config + a real `lint` script, or drop the dead dep. README/CI both imply real linting.
+
+### P1 — verify or finish
+4. **`api_keys` table.** Docs (`docs/security.md`) declare it reserved/future, not a bug. If staying deferred, leave it; only build the handler + `Authorization: ApiKey` path when there's a concrete automation need.
+5. **CreateBackup double-registers dir** (`apps/api/internal/api/handlers/backups.go`). Verify the pre-go RegisterDir + in-goroutine re-RegisterDirs duplication was removed; if not, dedupe so failures short-circuit cleanly.
+6. **Mods install loader logic** (`mods.go`). Verify loader is set whenever platform is fabric/quilt/forge/neoforge/spigot/paper, not only when `loader_version != nil`. Check against Modrinth taxonomy.
+7. **Refresh-token rotation.** `docs/security.md` claims refresh tokens rotate on use. Confirm `handlers/auth.go` actually rotates + invalidates the old token (no replay window). Add a regression test if missing.
+8. **Backup targets ≠ local.** Schema lists `type` + `config` (S3/B2/Restic implied); only local ZIP exists. Either narrow the schema OR add S3 (AWS SDK v2, stream upload from agent).
+9. **`display_name` field, no PATCH endpoint.** Add `PUT /api/v1/auth/me` (self) + `PUT /api/v1/users/{id}` (admin).
+10. **Server permissions UI.** `server_permissions.permissions` JSON shape still undefined and `requireServerAccess` is boolean. Docs defer this deliberately — only build if granular collab moves in scope. Define enum (`view`, `console`, `files`, `start_stop`, `mods`, `backups`, `tasks`, `admin`) when you do.
 
 ### P2 — quality / DX
-16. **No structured logging.** `log.Printf` everywhere. Move to `log/slog`, add request ID middleware, drop the unused `chimw.Recoverer` panic body into the log instead of stdout.
-17. **No metrics export.** Add `/metrics` Prometheus endpoint (request counts, scheduler runs, backup outcomes).
-18. **Agent has no graceful shutdown of running MC instances on SIGTERM.** It stops the HTTP server but leaves Java children orphaned. On shutdown, iterate `Manager.instances` and `inst.stop(true, 30s)`.
-19. **No CI.** Add a single GH Actions workflow: `go build ./...`, `go test ./...`, `pnpm build`, `pnpm lint`. Trigger on PR.
-20. **No integration test for API↔agent.** Spin agent on random port in `TestMain`, drive a couple of round-trips.
-21. **`apps/web/src/routes/servers/$id.tsx` is 1000+ lines.** Split into tab components.
-22. **TLS for agent is half-done** — flags exist but no docs. Document cert generation + add `INSECURE_HTTP=1` guard so prod accidents are loud.
-23. **Console WS does not push history backlog on connect** — verify (subscribe() copies history server-side, but agent→browser proxy may swallow it). Add a regression test.
-24. **Player kick/ban/whitelist panel** — UI exists (`components/players/panel.tsx`) but verify backend endpoints (`apps/agent/internal/api/handlers/players.go`) cover all commands.
+11. **SecurityHeaders middleware is minimal** (`internal/api/middleware/security.go`): nosniff + frame-deny + referrer-policy only. Add CSP (web is static-served via nginx → put CSP in `apps/web/nginx.conf`), and HSTS when TLS-terminated.
+12. **No metrics export.** Add `/metrics` Prometheus endpoint (request counts, scheduler runs, backup outcomes).
+13. **No integration test for API↔agent.** Spin agent on random port in `TestMain`, drive a couple round-trips.
+14. **TLS for agent is half-done** — flags exist but thin docs. Document cert generation + add an `INSECURE_HTTP=1` guard so prod accidents are loud.
+15. **Console WS history backlog on connect** — verify subscribe() history reaches the browser through the agent→browser proxy. Add a regression test.
+16. **Player kick/ban/whitelist panel** — verify `apps/agent/internal/api/handlers/players.go` covers every command the UI exposes.
+17. **Encrypt stored agent tokens at rest** (already listed in `docs/security.md` future work).
 
 ### P3 — nice to have
 25. Auto-update server.jar (cron-driven re-install + diff via SHA256 stored on `installed_mods`).
@@ -127,4 +124,19 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 
 ---
 
-End. Update `## 4` as items land. Move resolved items to a `## 8 Changelog` section so the next agent sees history.
+## 8. Changelog (resolved items)
+
+Newest first. Move items here from `## 4` as they land.
+
+- **Single-host hardening pass** (`feat: single-host hardening`): git history + README + `docs/`; restricted `?token=` auth to console/metrics/download (was every route — JWT leak); prod guards requiring `JWT_SECRET` and rejecting default `dev-agent-token`; SecurityHeaders middleware; public resource-pack download (constant-time ID + path allowlist); writable-dir preflight; Dockerfiles + docker-compose + nginx; node heartbeat polling; health endpoints; GH Actions CI; tests across auth/middleware/db/migrations/health/server-access.
+- **Mod conflict detection, config editors, player detail, offline NBT viewing** (`3e5dfa8`).
+- **MC/loader version dropdowns + apply-and-reinstall to switch versions** (`d5721c9`).
+- **Clickable mod detail view** — rendered description, gallery, links (`7747875`).
+- **`.mrpack` modpack install** (`73f09d2`).
+- **CurseForge source** behind `CURSEFORGE_API_KEY` + source toggle UI (`c7bc737`) — was §4 #12.
+- **slog structured logging + request IDs + agent graceful instance shutdown** (`f5b68dd`) — was §4 #16, #18.
+- **Backup restore endpoint + retention enforcement + restore UI** (`49d409d`) — was §4 #9, #10.
+- **`audit_log` wired + admin audit view** (`61e0fad`) — was §4 #3.
+- **Mod search filters, version picker, updates + pinning UI** (`5ee5051`).
+
+End. Update `## 4` as items land; move resolved items here so the next agent sees history.
