@@ -25,6 +25,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Docked Save toolbar. Parked one bar-height (plus a little) above the fold
+   and clipped by the scroll container, so when pinned it slides straight DOWN
+   out from behind the page banner. Its top edge is flush with the banner for
+   the whole slide — no in-between frame can show a gap, because everything
+   above the scroll top is clipped. */
+.save-toolbar {
+  transform: translateY(calc(-100% - 24px));
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.save-toolbar--pinned {
+  transform: translateY(0);
+}
+
 /* xterm.js overrides */
 .xterm {
   height: 100%;

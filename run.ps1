@@ -243,6 +243,10 @@ function Stop-ProcessTree {
 }
 
 $cancelEventId = "ServerManager.$PID.cancel"
+# A prior run that crashed before its finally block can leave this subscriber
+# behind. Clear any same-id orphan so a re-run in the same session does not fail
+# with SUBSCRIBER_EXISTS.
+Get-EventSubscriber -SourceIdentifier $cancelEventId -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
 $cancelSubscriber = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKeyPress -SourceIdentifier $cancelEventId -Action {
     if ($global:ServerManagerStopRequested) {
         $global:ServerManagerForceStopRequested = $true
@@ -272,6 +276,7 @@ if (-not $SkipInstall) {
 }
 
 $ApiEnv = @{
+    MCSM_DEV_MODE = "1"
     API_HOST = $BindHost
     API_PORT = "$ApiPort"
     DATABASE_PATH = $DatabasePath
@@ -289,6 +294,7 @@ $ApiEnv = @{
 }
 
 $AgentEnv = @{
+    MCSM_DEV_MODE = "1"
     AGENT_HOST = $BindHost
     AGENT_PORT = "$AgentPort"
     AGENT_TOKEN = $AgentToken

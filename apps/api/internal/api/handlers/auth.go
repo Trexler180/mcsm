@@ -87,13 +87,32 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.store.DeleteRefreshTokenByID(r.Context(), rt.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "token storage error")
+		return
+	}
+
 	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "token error")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"access_token": accessToken})
+	refreshToken, tokenHash, err := generateRefreshToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token error")
+		return
+	}
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, expiresAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "token storage error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
 }
 
 func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {

@@ -46,6 +46,8 @@ type Node struct {
 	LastSeen  *time.Time `json:"last_seen"`
 }
 
+var ErrNodeHasServers = errors.New("node has servers")
+
 type Server struct {
 	ID            string          `json:"id"`
 	NodeID        string          `json:"node_id"`
@@ -278,6 +280,7 @@ func (s *Store) EnsureAdminUser(ctx context.Context, email, passwordHash string)
 		if err := s.UpdateUserPassword(ctx, user.ID, passwordHash); err != nil {
 			return nil, err
 		}
+		_ = s.DeleteRefreshTokensForUser(ctx, user.ID)
 		_, err = s.db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = ?`, user.ID)
 		if err != nil {
 			return nil, err
@@ -311,17 +314,33 @@ func (s *Store) CreateRefreshToken(ctx context.Context, userID, tokenHash string
 func (s *Store) GetRefreshToken(ctx context.Context, tokenHash string) (*RefreshToken, error) {
 	var rt RefreshToken
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, token_hash, expires_at FROM refresh_tokens WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP`,
+		`SELECT id, user_id, token_hash, expires_at FROM refresh_tokens WHERE token_hash = ?`,
 		tokenHash,
 	).Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("refresh token not found or expired")
 	}
-	return &rt, err
+	if err != nil {
+		return nil, err
+	}
+	if !rt.ExpiresAt.After(time.Now()) {
+		return nil, fmt.Errorf("refresh token not found or expired")
+	}
+	return &rt, nil
 }
 
 func (s *Store) DeleteRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE token_hash = ?`, tokenHash)
+	return err
+}
+
+func (s *Store) DeleteRefreshTokenByID(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) DeleteRefreshTokensForUser(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE user_id = ?`, userID)
 	return err
 }
 
@@ -378,7 +397,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, fqdn, port, scheme, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen FROM nodes ORDER BY name`)
+		`SELECT id, name, fqdn, port, scheme, token, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen FROM nodes ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +405,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	var nodes []*Node
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, &n)
@@ -403,12 +422,27 @@ func (s *Store) UpdateNode(ctx context.Context, id string, n *Node) error {
 }
 
 func (s *Store) DeleteNode(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM nodes WHERE id = ?`, id)
+	n, err := s.CountServersForNode(ctx, id)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrNodeHasServers
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM nodes WHERE id = ?`, id)
 	return err
 }
 
 func (s *Store) UpdateNodeSeen(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET last_seen = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, memoryMb, diskGb, cpuCores *int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE nodes SET memory_mb=?, disk_gb=?, cpu_cores=?, last_seen=CURRENT_TIMESTAMP WHERE id=?`,
+		memoryMb, diskGb, cpuCores, id,
+	)
 	return err
 }
 
@@ -468,6 +502,12 @@ func (s *Store) ListServers(ctx context.Context) ([]*Server, error) {
 		servers = append(servers, &srv)
 	}
 	return servers, rows.Err()
+}
+
+func (s *Store) CountServersForNode(ctx context.Context, nodeID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE node_id = ?`, nodeID).Scan(&n)
+	return n, err
 }
 
 func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Server, error) {

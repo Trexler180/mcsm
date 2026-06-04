@@ -56,8 +56,10 @@ async function request<T>(
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (refreshRes.ok) {
-        const { access_token } = (await refreshRes.json()) as TokenResponse;
+        const { access_token, refresh_token } =
+          (await refreshRes.json()) as TokenResponse;
         localStorage.setItem("access_token", access_token);
+        localStorage.setItem("refresh_token", refresh_token);
         // Retry original request
         return request<T>(method, path, body, signal);
       }
@@ -106,8 +108,10 @@ async function requestText(
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (refreshRes.ok) {
-        const { access_token } = (await refreshRes.json()) as TokenResponse;
+        const { access_token, refresh_token } =
+          (await refreshRes.json()) as TokenResponse;
         localStorage.setItem("access_token", access_token);
+        localStorage.setItem("refresh_token", refresh_token);
         return requestText(method, path, body);
       }
     }
@@ -166,6 +170,13 @@ export const api = {
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),
+  },
+
+  resourcePacks: {
+    publicPath: (serverId: string, publicId: string) =>
+      `${BASE}/public/servers/${serverId}/resource-pack/${encodeURIComponent(publicId)}`,
+    publicUrl: (serverId: string, publicId: string) =>
+      `${window.location.origin}${api.resourcePacks.publicPath(serverId, publicId)}`,
   },
 
   files: {
