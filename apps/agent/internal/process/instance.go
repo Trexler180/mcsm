@@ -19,6 +19,7 @@ import (
 var (
 	playerJoinRe  = regexp.MustCompile(`:\s+([A-Za-z0-9_]{2,16})\s+joined the game\s*$`)
 	playerLeaveRe = regexp.MustCompile(`:\s+([A-Za-z0-9_]{2,16})\s+left the game\s*$`)
+	playerListRe  = regexp.MustCompile(`:\s*There are\s+\d+(?:\s*/\s*\d+|\s+of a max of\s+\d+)\s+players?\s+online(?::\s*(.*))?\.?\s*$`)
 )
 
 // Player is a snapshot of one player. Online players carry JoinedAt (tracked
@@ -93,6 +94,10 @@ type Instance struct {
 
 	playersMu sync.Mutex
 	players   map[string]time.Time
+	// playersChanged is closed/replaced whenever a console event gives us a
+	// fresh roster signal. It lets API calls briefly wait for `/list` output.
+	playersChanged  chan struct{}
+	lastListRefresh time.Time
 
 	// Fabric incompatible-mods detection. detector is fed every console line
 	// (under conflictMu since stdout/stderr pipes run concurrently); once a
@@ -106,13 +111,14 @@ type Instance struct {
 
 func newInstance(id string, cfg StartConfig) *Instance {
 	return &Instance{
-		ID:          id,
-		Config:      cfg,
-		status:      StatusStarting,
-		broadcastCh: make(chan ConsoleEvent, 512),
-		subs:        make(map[chan ConsoleEvent]struct{}),
-		players:     make(map[string]time.Time),
-		done:        make(chan struct{}),
+		ID:             id,
+		Config:         cfg,
+		status:         StatusStarting,
+		broadcastCh:    make(chan ConsoleEvent, 512),
+		subs:           make(map[chan ConsoleEvent]struct{}),
+		players:        make(map[string]time.Time),
+		playersChanged: make(chan struct{}),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -225,17 +231,70 @@ func (inst *Instance) pipeStream(r io.Reader, stream string) {
 				}
 				inst.mu.Unlock()
 			}
-			if m := playerJoinRe.FindStringSubmatch(line); m != nil {
-				inst.playersMu.Lock()
+		}
+		if m := playerJoinRe.FindStringSubmatch(line); m != nil {
+			inst.playersMu.Lock()
+			if _, ok := inst.players[m[1]]; !ok {
 				inst.players[m[1]] = time.Now()
-				inst.playersMu.Unlock()
-			} else if m := playerLeaveRe.FindStringSubmatch(line); m != nil {
-				inst.playersMu.Lock()
-				delete(inst.players, m[1])
-				inst.playersMu.Unlock()
+				inst.markPlayersChangedLocked()
 			}
+			inst.playersMu.Unlock()
+		} else if m := playerLeaveRe.FindStringSubmatch(line); m != nil {
+			inst.playersMu.Lock()
+			if _, ok := inst.players[m[1]]; ok {
+				delete(inst.players, m[1])
+				inst.markPlayersChangedLocked()
+			}
+			inst.playersMu.Unlock()
+		} else if names, ok := parsePlayerListLine(line); ok {
+			inst.replacePlayers(names, time.Now())
 		}
 	}
+}
+
+func parsePlayerListLine(line string) ([]string, bool) {
+	m := playerListRe.FindStringSubmatch(line)
+	if m == nil {
+		return nil, false
+	}
+	if len(m) < 2 || strings.TrimSpace(m[1]) == "" {
+		return []string{}, true
+	}
+	rawNames := strings.Split(m[1], ",")
+	names := make([]string, 0, len(rawNames))
+	for _, raw := range rawNames {
+		name := strings.TrimSpace(raw)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, true
+}
+
+func (inst *Instance) markPlayersChangedLocked() {
+	close(inst.playersChanged)
+	inst.playersChanged = make(chan struct{})
+}
+
+func (inst *Instance) replacePlayers(names []string, now time.Time) {
+	inst.playersMu.Lock()
+	defer inst.playersMu.Unlock()
+
+	previous := make(map[string]time.Time, len(inst.players))
+	for name, joined := range inst.players {
+		previous[strings.ToLower(name)] = joined
+	}
+
+	players := make(map[string]time.Time, len(names))
+	for _, name := range names {
+		joined := previous[strings.ToLower(name)]
+		if joined.IsZero() {
+			joined = now
+		}
+		players[name] = joined
+	}
+	inst.players = players
+	inst.markPlayersChangedLocked()
 }
 
 // Players returns a snapshot of currently online players.
@@ -247,6 +306,42 @@ func (inst *Instance) Players() []Player {
 		out = append(out, Player{Name: name, JoinedAt: joined, Online: true})
 	}
 	return out
+}
+
+// RefreshPlayers asks the Minecraft server for its authoritative player list
+// and briefly waits for the console response before returning the latest known
+// roster. The refresh is throttled because the web UI polls this endpoint.
+func (inst *Instance) RefreshPlayers(timeout time.Duration) []Player {
+	status := inst.statusInfo().Status
+	if status != StatusStarting && status != StatusOnline {
+		return inst.Players()
+	}
+
+	now := time.Now()
+	inst.playersMu.Lock()
+	waitCh := inst.playersChanged
+	shouldRefresh := now.Sub(inst.lastListRefresh) >= 2*time.Second
+	if shouldRefresh {
+		inst.lastListRefresh = now
+	}
+	inst.playersMu.Unlock()
+
+	if shouldRefresh {
+		if err := inst.sendCommand("list"); err == nil && timeout > 0 {
+			timer := time.NewTimer(timeout)
+			select {
+			case <-waitCh:
+			case <-timer.C:
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+	}
+	return inst.Players()
 }
 
 func (inst *Instance) broadcastLoop() {
@@ -297,6 +392,7 @@ func (inst *Instance) waitExit() {
 	// in the UI for an offline server.
 	inst.playersMu.Lock()
 	inst.players = make(map[string]time.Time)
+	inst.markPlayersChangedLocked()
 	inst.playersMu.Unlock()
 
 	close(inst.done)

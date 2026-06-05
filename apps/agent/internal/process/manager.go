@@ -116,6 +116,15 @@ func (m *Manager) RegisterDir(id, dir string) {
 	m.mu.Unlock()
 }
 
+// Unregister drops a server's tracked directory and instance. Called after a
+// purge so a deleted server leaves no stale references behind.
+func (m *Manager) Unregister(id string) {
+	m.mu.Lock()
+	delete(m.dirs, id)
+	delete(m.instances, id)
+	m.mu.Unlock()
+}
+
 func (m *Manager) Players(id string) []Player {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
@@ -126,28 +135,54 @@ func (m *Manager) Players(id string) []Player {
 	return inst.Players()
 }
 
+func (m *Manager) RefreshPlayers(id string, timeout time.Duration) []Player {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return inst.RefreshPlayers(timeout)
+}
+
 // AllPlayers returns the merged roster: players currently online (tracked live
 // from the console) plus offline players read from the world's playerdata
 // files. Online entries win — an offline .dat for someone currently online is
 // dropped so each player appears once.
 func (m *Manager) AllPlayers(id string) []Player {
-	online := m.Players(id)
-	onlineNames := make(map[string]struct{}, len(online))
-	for _, p := range online {
-		onlineNames[strings.ToLower(p.Name)] = struct{}{}
+	online := m.RefreshPlayers(id, 750*time.Millisecond)
+
+	var offline []Player
+	if dir, ok := m.GetDir(id); ok {
+		offline, _ = OfflinePlayers(dir)
 	}
 
-	out := make([]Player, 0, len(online))
-	out = append(out, online...)
+	offlineByName := make(map[string]Player, len(offline))
+	for _, p := range offline {
+		offlineByName[strings.ToLower(p.Name)] = p
+	}
 
-	if dir, ok := m.GetDir(id); ok {
-		offline, _ := OfflinePlayers(dir)
-		for _, p := range offline {
-			if _, on := onlineNames[strings.ToLower(p.Name)]; on {
-				continue
+	onlineNames := make(map[string]struct{}, len(online))
+	out := make([]Player, 0, len(online)+len(offline))
+	for _, p := range online {
+		key := strings.ToLower(p.Name)
+		onlineNames[key] = struct{}{}
+		if saved, ok := offlineByName[key]; ok {
+			if p.UUID == "" {
+				p.UUID = saved.UUID
 			}
-			out = append(out, p)
+			if p.LastSeen.IsZero() {
+				p.LastSeen = saved.LastSeen
+			}
 		}
+		out = append(out, p)
+	}
+
+	for _, p := range offline {
+		if _, on := onlineNames[strings.ToLower(p.Name)]; on {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -168,7 +203,7 @@ func (m *Manager) PlayerDetail(id, uuid string) (*PlayerDetail, error) {
 	} else {
 		d.Name = uuid
 	}
-	for _, p := range m.Players(id) {
+	for _, p := range m.RefreshPlayers(id, 750*time.Millisecond) {
 		if strings.EqualFold(p.Name, d.Name) {
 			d.Online = true
 			break

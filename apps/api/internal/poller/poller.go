@@ -68,6 +68,14 @@ func pollAll(ctx context.Context, s *store.Store) {
 				desired = "offline"
 			}
 		} else if v, ok := status["status"].(string); ok && v != "" {
+			// During first start the API marks the DB row "starting" before the
+			// agent runs installers such as Spigot BuildTools. The agent has no
+			// process instance yet, so /status reports offline until install
+			// finishes and the Java process begins. Keep the persisted starting
+			// state; the start handler rolls it back on failure.
+			if srv.Status == "starting" && v == "offline" {
+				continue
+			}
 			desired = v
 		}
 

@@ -255,6 +255,22 @@ func (c *Client) DeleteBackup(ctx context.Context, serverID, backupID string) er
 	return checkError(resp)
 }
 
+// PurgeServer asks the agent to permanently delete a server's on-disk data.
+// files wipes the live server directory; backups wipes the sibling backups
+// folder. Either can be set independently.
+func (c *Client) PurgeServer(ctx context.Context, serverID, directory string, files, backups bool) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/agent/v1/servers/"+serverID, map[string]any{
+		"directory": directory,
+		"files":     files,
+		"backups":   backups,
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkError(resp)
+}
+
 // ProxyHTTP forwards an HTTP request to the agent and writes the response back.
 func (c *Client) ProxyHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, agentPath string) {
 	targetURL := c.BaseURL + agentPath

@@ -160,7 +160,13 @@ export const api = {
     create: (data: Partial<Server>) => post<Server>("/servers", data),
     update: (id: string, data: Partial<Server>) =>
       put<Server>(`/servers/${id}`, data),
-    delete: (id: string) => del(`/servers/${id}`),
+    delete: (id: string, opts?: { files?: boolean; backups?: boolean }) => {
+      const q = new URLSearchParams();
+      if (opts?.files) q.set("files", "true");
+      if (opts?.backups) q.set("backups", "true");
+      const qs = q.toString();
+      return del(`/servers/${id}${qs ? `?${qs}` : ""}`);
+    },
     start: (id: string) => post(`/servers/${id}/start`),
     stop: (id: string, graceful = true) =>
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),

@@ -82,7 +82,7 @@ func main() {
 		}
 		log.Println("JWT_SECRET is not set; using an ephemeral signing key. Existing sessions will be invalid after restart.")
 	}
-	port := envOr("API_PORT", "8080")
+	port := envOr("API_PORT", "8081")
 	host := envOr("API_HOST", "127.0.0.1")
 	serverRoot := defaultServerRoot()
 	if err := os.MkdirAll(serverRoot, 0755); err != nil {
@@ -111,7 +111,11 @@ func main() {
 	//  - foreign_keys: enforce FK constraints (off by default in SQLite)
 	//  - journal_mode=WAL: concurrent reads during writes
 	//  - busy_timeout: wait up to 5s on a locked DB before erroring
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)",
+	//  - synchronous=NORMAL: the SQLite-recommended pairing with WAL. Only
+	//    fsyncs at checkpoint instead of every commit, which is markedly
+	//    faster for writes and cannot corrupt the DB (a crash may at most
+	//    lose the last committed transaction, not integrity).
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)",
 		url.PathEscape(dbPath))
 
 	db, err := sql.Open("sqlite", dsn)
