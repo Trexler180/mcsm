@@ -221,7 +221,8 @@ function Wait-DevHttp {
         [string]$Name,
         [string]$Url,
         [object[]]$Processes,
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 90,
+        [switch]$AllowExited
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -230,12 +231,14 @@ function Wait-DevHttp {
             Receive-DevOutput -DevProcess $devProcess
         }
 
-        $exited = @($Processes | Where-Object { $_ -and $_.Process.HasExited })
-        if ($exited.Count -gt 0) {
-            foreach ($devProcess in $exited) {
-                Receive-DevOutput -DevProcess $devProcess
+        if (-not $AllowExited) {
+            $exited = @($Processes | Where-Object { $_ -and $_.Process.HasExited })
+            if ($exited.Count -gt 0) {
+                foreach ($devProcess in $exited) {
+                    Receive-DevOutput -DevProcess $devProcess
+                }
+                throw "$($exited[0].Name) exited before $Name became ready."
             }
-            throw "$($exited[0].Name) exited before $Name became ready."
         }
 
         try {
@@ -334,6 +337,26 @@ function Restart-DevProcess {
 
     Stop-DevProcess -DevProcess $DevProcess
     return Start-DevProcess -Name $name -WorkingDirectory $workingDirectory -Environment $environment -Command $command
+}
+
+function Get-StableDevSourceFingerprint {
+    param(
+        [string]$Path,
+        [string[]]$Extensions,
+        [string[]]$FileNames,
+        [int]$QuietMilliseconds = 500
+    )
+
+    $first = Get-DevSourceFingerprint -Path $Path -Extensions $Extensions -FileNames $FileNames
+    Start-Sleep -Milliseconds $QuietMilliseconds
+    $second = Get-DevSourceFingerprint -Path $Path -Extensions $Extensions -FileNames $FileNames
+
+    if ($first -ne $second) {
+        Start-Sleep -Milliseconds $QuietMilliseconds
+        return Get-DevSourceFingerprint -Path $Path -Extensions $Extensions -FileNames $FileNames
+    }
+
+    return $second
 }
 
 function Stop-ProcessTree {
@@ -445,9 +468,14 @@ try {
     # tokens and forces browser sessions to log in again.
     $ApiEnv["RESET_ADMIN_PASSWORD"] = "0"
 
-    $apiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
-    $agentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+    $apiExtensions = @(".go", ".sql")
+    $apiFileNames = @("go.mod", "go.sum")
+    $agentExtensions = @(".go")
+    $agentFileNames = @("go.mod", "go.sum")
+    $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
+    $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
     $lastWatchCheck = Get-Date
+    $watchReadyAt = (Get-Date).AddSeconds(5)
 
     $webProcess = Start-DevProcess -Name "web" -WorkingDirectory $WebDir -Environment $WebEnv -Command @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort")
     $processes = @($apiProcess, $agentProcess, $webProcess)
@@ -471,22 +499,21 @@ try {
             }
         }
 
-        if (-not $NoBackendWatch) {
+        if (-not $NoBackendWatch -and (Get-Date) -ge $watchReadyAt) {
             $now = Get-Date
             if (($now - $lastWatchCheck).TotalMilliseconds -ge 1000) {
                 $lastWatchCheck = $now
 
-                $nextApiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
+                $nextApiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
                 if ($nextApiFingerprint -ne $apiFingerprint) {
-                    Start-Sleep -Milliseconds 300
-                    $apiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
+                    $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
                     $apiProcess = Restart-DevProcess -DevProcess $apiProcess
+                    Wait-DevHttp -Name "api" -Url "http://${ApiConnectHost}:$ApiPort/api/v1/health" -Processes @($apiProcess) -AllowExited
                 }
 
-                $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+                $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                 if ($nextAgentFingerprint -ne $agentFingerprint) {
-                    Start-Sleep -Milliseconds 300
-                    $agentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+                    $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                     $agentProcess = Restart-DevProcess -DevProcess $agentProcess
                 }
             }

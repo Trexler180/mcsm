@@ -1,10 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import type { ServerResponse } from 'node:http'
+import type { Socket } from 'node:net'
 
 const apiPort = process.env.VITE_API_PORT ?? '8081'
 const apiHost = process.env.VITE_API_HOST ?? '127.0.0.1'
 const webPort = Number(process.env.PORT ?? '3000')
+
+function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
+  if (!res || res.destroyed) return
+
+  if ('writeHead' in res && !res.headersSent) {
+    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'api unavailable' }))
+    return
+  }
+
+  res.end()
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -20,6 +34,11 @@ export default defineConfig({
         target: `http://${apiHost}:${apiPort}`,
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (_err, _req, res) => {
+            writeProxyUnavailable(res)
+          })
+        },
       },
     },
   },
