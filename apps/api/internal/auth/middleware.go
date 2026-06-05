@@ -14,9 +14,10 @@ func Middleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearerFromHeader(r)
-			if token == "" {
+			if token == "" && queryTokenAllowed(r) {
 				// Browsers can't set Authorization on a WebSocket handshake,
-				// so accept ?token=… as an alternative for any request.
+				// and downloads are browser navigations, so accept ?token=…
+				// only for those explicit endpoints.
 				token = r.URL.Query().Get("token")
 			}
 			if token == "" {
@@ -32,6 +33,13 @@ func Middleware(secret string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func queryTokenAllowed(r *http.Request) bool {
+	path := r.URL.Path
+	return strings.HasSuffix(path, "/console") ||
+		strings.HasSuffix(path, "/metrics") ||
+		strings.HasSuffix(path, "/files/download")
 }
 
 func bearerFromHeader(r *http.Request) string {

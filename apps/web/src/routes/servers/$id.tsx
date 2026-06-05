@@ -1,5 +1,5 @@
 import { createRoute, useParams, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -20,9 +20,11 @@ import {
   PackageOpen,
   FolderTree,
   Globe2,
-  ShieldCheck,
   SlidersHorizontal,
   FileCog,
+  Copy,
+  Link2,
+  Upload,
 } from "lucide-react";
 import { Route as rootRoute } from "../__root";
 import { Button } from "@/components/ui/button";
@@ -49,15 +51,14 @@ type ServerSection =
   | "console"
   | "logs"
   | "players"
-  | "software"
   | "mods"
   | "options"
+  | "properties"
   | "configs"
   | "files"
   | "worlds"
   | "backups"
-  | "tasks"
-  | "access";
+  | "tasks";
 
 const serverSections: Array<{
   value: ServerSection;
@@ -68,15 +69,14 @@ const serverSections: Array<{
   { value: "console", label: "Console", icon: Terminal },
   { value: "logs", label: "Logs", icon: FileText },
   { value: "players", label: "Players", icon: Users },
-  { value: "software", label: "Software", icon: PackageOpen },
   { value: "mods", label: "Mods", icon: PackageOpen },
   { value: "options", label: "Options", icon: SlidersHorizontal },
+  { value: "properties", label: "Properties", icon: FileCog },
   { value: "configs", label: "Configs", icon: FileCog },
   { value: "files", label: "Files", icon: FolderTree },
   { value: "worlds", label: "Worlds", icon: Globe2 },
   { value: "backups", label: "Backups", icon: HardDrive },
   { value: "tasks", label: "Tasks", icon: ToggleRight },
-  { value: "access", label: "Access", icon: ShieldCheck },
 ];
 
 function Panel({
@@ -349,8 +349,8 @@ function DashboardTab({
             <Button variant="outline" onClick={() => onSection("files")}>
               <FolderTree className="h-4 w-4" /> Files
             </Button>
-            <Button variant="outline" onClick={() => onSection("software")}>
-              <PackageOpen className="h-4 w-4" /> Software
+            <Button variant="outline" onClick={() => onSection("options")}>
+              <SlidersHorizontal className="h-4 w-4" /> Options
             </Button>
             <Button variant="outline" onClick={() => onSection("backups")}>
               <HardDrive className="h-4 w-4" /> Backups
@@ -649,49 +649,537 @@ function TasksTab({ serverId }: { serverId: string }) {
 
 type PropertiesMap = Record<string, string>;
 
-const propertyFields = [
-  { key: "motd", label: "MOTD", type: "text" },
+type PropertyFieldType =
+  | "boolean"
+  | "list"
+  | "number"
+  | "select"
+  | "text"
+  | "textarea";
+
+type PropertyField = {
+  key: string;
+  label: string;
+  type: PropertyFieldType;
+  category: string;
+  description?: string;
+  options?: readonly string[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
+const propertyCategories = [
+  "Basics",
+  "Access",
+  "World",
+  "Gameplay",
+  "Players",
+  "Network",
+  "Resource Pack",
+  "Performance",
+  "Admin",
+  "Advanced",
+  "Other",
+] as const;
+
+const propertyFields: PropertyField[] = [
+  {
+    key: "motd",
+    label: "MOTD",
+    type: "text",
+    category: "Basics",
+    placeholder: "A Minecraft Server",
+  },
+  {
+    key: "level-name",
+    label: "World Folder",
+    type: "text",
+    category: "Basics",
+    placeholder: "world",
+  },
+  {
+    key: "server-port",
+    label: "Server Port",
+    type: "number",
+    category: "Basics",
+    min: 1,
+    max: 65535,
+  },
+  {
+    key: "server-ip",
+    label: "Bind IP",
+    type: "text",
+    category: "Basics",
+    placeholder: "Leave blank for all interfaces",
+  },
+  {
+    key: "online-mode",
+    label: "Online Mode",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "white-list",
+    label: "Whitelist",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "enforce-whitelist",
+    label: "Enforce Whitelist",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "enforce-secure-profile",
+    label: "Secure Profiles",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "prevent-proxy-connections",
+    label: "Prevent Proxy Connections",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "accepts-transfers",
+    label: "Accept Transfers",
+    type: "boolean",
+    category: "Access",
+  },
+  {
+    key: "hide-online-players",
+    label: "Hide Online Players",
+    type: "boolean",
+    category: "Access",
+  },
   {
     key: "gamemode",
     label: "Game Mode",
     type: "select",
+    category: "World",
     options: ["survival", "creative", "adventure", "spectator"],
   },
   {
     key: "difficulty",
     label: "Difficulty",
     type: "select",
+    category: "World",
     options: ["peaceful", "easy", "normal", "hard"],
   },
-  { key: "max-players", label: "Max Players", type: "number" },
-  { key: "server-port", label: "Server Port", type: "number" },
-  { key: "view-distance", label: "View Distance", type: "number" },
-  { key: "simulation-distance", label: "Simulation Distance", type: "number" },
-  { key: "online-mode", label: "Online Mode", type: "boolean" },
-  { key: "pvp", label: "PVP", type: "boolean" },
-  { key: "allow-flight", label: "Allow Flight", type: "boolean" },
-  { key: "enable-command-block", label: "Command Blocks", type: "boolean" },
-] as const;
+  {
+    key: "level-seed",
+    label: "World Seed",
+    type: "text",
+    category: "World",
+  },
+  {
+    key: "level-type",
+    label: "World Type",
+    type: "select",
+    category: "World",
+    options: [
+      "minecraft:normal",
+      "minecraft:flat",
+      "minecraft:large_biomes",
+      "minecraft:amplified",
+      "minecraft:single_biome_surface",
+    ],
+  },
+  {
+    key: "generator-settings",
+    label: "Generator Settings",
+    type: "textarea",
+    category: "World",
+    placeholder: "{}",
+  },
+  {
+    key: "generate-structures",
+    label: "Generate Structures",
+    type: "boolean",
+    category: "World",
+  },
+  {
+    key: "allow-nether",
+    label: "Allow Nether",
+    type: "boolean",
+    category: "World",
+  },
+  {
+    key: "max-world-size",
+    label: "Max World Size",
+    type: "number",
+    category: "World",
+    min: 1,
+    max: 29999984,
+  },
+  {
+    key: "hardcore",
+    label: "Hardcore",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "pvp",
+    label: "PVP",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "spawn-animals",
+    label: "Spawn Animals",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "spawn-monsters",
+    label: "Spawn Monsters",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "spawn-npcs",
+    label: "Spawn NPCs",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "allow-flight",
+    label: "Allow Flight",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "force-gamemode",
+    label: "Force Game Mode",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "enable-command-block",
+    label: "Command Blocks",
+    type: "boolean",
+    category: "Gameplay",
+  },
+  {
+    key: "spawn-protection",
+    label: "Spawn Protection",
+    type: "number",
+    category: "Gameplay",
+    min: 0,
+  },
+  {
+    key: "max-players",
+    label: "Max Players",
+    type: "number",
+    category: "Players",
+    min: 1,
+  },
+  {
+    key: "player-idle-timeout",
+    label: "Idle Timeout",
+    type: "number",
+    category: "Players",
+    min: 0,
+  },
+  {
+    key: "op-permission-level",
+    label: "OP Permission Level",
+    type: "number",
+    category: "Players",
+    min: 1,
+    max: 4,
+  },
+  {
+    key: "function-permission-level",
+    label: "Function Permission Level",
+    type: "number",
+    category: "Players",
+    min: 1,
+    max: 4,
+  },
+  {
+    key: "enable-status",
+    label: "Show Server Status",
+    type: "boolean",
+    category: "Network",
+  },
+  {
+    key: "enable-query",
+    label: "Query",
+    type: "boolean",
+    category: "Network",
+  },
+  {
+    key: "query.port",
+    label: "Query Port",
+    type: "number",
+    category: "Network",
+    min: 1,
+    max: 65535,
+  },
+  {
+    key: "enable-rcon",
+    label: "RCON",
+    type: "boolean",
+    category: "Network",
+  },
+  {
+    key: "rcon.port",
+    label: "RCON Port",
+    type: "number",
+    category: "Network",
+    min: 1,
+    max: 65535,
+  },
+  {
+    key: "rcon.password",
+    label: "RCON Password",
+    type: "text",
+    category: "Network",
+  },
+  {
+    key: "network-compression-threshold",
+    label: "Compression Threshold",
+    type: "number",
+    category: "Network",
+    min: -1,
+  },
+  {
+    key: "rate-limit",
+    label: "Rate Limit",
+    type: "number",
+    category: "Network",
+    min: 0,
+  },
+  {
+    key: "use-native-transport",
+    label: "Native Transport",
+    type: "boolean",
+    category: "Network",
+  },
+  {
+    key: "resource-pack",
+    label: "Resource Pack URL",
+    type: "text",
+    category: "Resource Pack",
+  },
+  {
+    key: "resource-pack-id",
+    label: "Resource Pack ID",
+    type: "text",
+    category: "Resource Pack",
+    placeholder: "UUID",
+  },
+  {
+    key: "resource-pack-sha1",
+    label: "Resource Pack SHA-1",
+    type: "text",
+    category: "Resource Pack",
+  },
+  {
+    key: "require-resource-pack",
+    label: "Require Resource Pack",
+    type: "boolean",
+    category: "Resource Pack",
+  },
+  {
+    key: "resource-pack-prompt",
+    label: "Resource Pack Prompt",
+    type: "textarea",
+    category: "Resource Pack",
+  },
+  {
+    key: "view-distance",
+    label: "View Distance",
+    type: "number",
+    category: "Performance",
+    min: 2,
+    max: 32,
+  },
+  {
+    key: "simulation-distance",
+    label: "Simulation Distance",
+    type: "number",
+    category: "Performance",
+    min: 2,
+    max: 32,
+  },
+  {
+    key: "entity-broadcast-range-percentage",
+    label: "Entity Broadcast Range",
+    type: "number",
+    category: "Performance",
+    min: 10,
+    max: 1000,
+  },
+  {
+    key: "max-tick-time",
+    label: "Max Tick Time",
+    type: "number",
+    category: "Performance",
+    min: -1,
+  },
+  {
+    key: "sync-chunk-writes",
+    label: "Sync Chunk Writes",
+    type: "boolean",
+    category: "Performance",
+  },
+  {
+    key: "pause-when-empty-seconds",
+    label: "Pause When Empty",
+    type: "number",
+    category: "Performance",
+    min: 0,
+  },
+  {
+    key: "max-chained-neighbor-updates",
+    label: "Max Neighbor Updates",
+    type: "number",
+    category: "Performance",
+    min: -1,
+  },
+  {
+    key: "region-file-compression",
+    label: "Region Compression",
+    type: "select",
+    category: "Performance",
+    options: ["deflate", "lz4", "none"],
+  },
+  {
+    key: "broadcast-console-to-ops",
+    label: "Broadcast Console to OPs",
+    type: "boolean",
+    category: "Admin",
+  },
+  {
+    key: "broadcast-rcon-to-ops",
+    label: "Broadcast RCON to OPs",
+    type: "boolean",
+    category: "Admin",
+  },
+  {
+    key: "enable-jmx-monitoring",
+    label: "JMX Monitoring",
+    type: "boolean",
+    category: "Admin",
+  },
+  {
+    key: "log-ips",
+    label: "Log IP Addresses",
+    type: "boolean",
+    category: "Admin",
+  },
+  {
+    key: "bug-report-link",
+    label: "Bug Report Link",
+    type: "text",
+    category: "Admin",
+  },
+  {
+    key: "text-filtering-config",
+    label: "Text Filtering Config",
+    type: "text",
+    category: "Advanced",
+  },
+  {
+    key: "text-filtering-version",
+    label: "Text Filtering Version",
+    type: "number",
+    category: "Advanced",
+    min: 0,
+  },
+  {
+    key: "initial-enabled-packs",
+    label: "Initial Enabled Packs",
+    type: "list",
+    category: "Advanced",
+    placeholder: "vanilla",
+  },
+  {
+    key: "initial-disabled-packs",
+    label: "Initial Disabled Packs",
+    type: "list",
+    category: "Advanced",
+  },
+];
 
 const defaultServerProperties = `# Minecraft server properties
-motd=A Minecraft Server
-gamemode=survival
-difficulty=normal
-max-players=20
-server-port=25565
-view-distance=10
-simulation-distance=10
-online-mode=true
-pvp=true
+accepts-transfers=false
 allow-flight=false
+allow-nether=true
+broadcast-console-to-ops=true
+broadcast-rcon-to-ops=true
+bug-report-link=
+difficulty=easy
 enable-command-block=false
+enable-jmx-monitoring=false
+enable-query=false
+enable-rcon=false
+enable-status=true
+enforce-secure-profile=true
+enforce-whitelist=false
+entity-broadcast-range-percentage=100
+force-gamemode=false
+function-permission-level=2
+gamemode=survival
+generate-structures=true
+generator-settings={}
+hardcore=false
+hide-online-players=false
+initial-disabled-packs=
+initial-enabled-packs=vanilla
+level-name=world
+level-seed=
+level-type=minecraft:normal
+log-ips=true
+max-chained-neighbor-updates=1000000
+max-players=20
+max-tick-time=60000
+max-world-size=29999984
+motd=A Minecraft Server
+network-compression-threshold=256
+online-mode=true
+op-permission-level=4
+pause-when-empty-seconds=60
+player-idle-timeout=0
+prevent-proxy-connections=false
+pvp=true
+query.port=25565
+rate-limit=0
+rcon.password=
+rcon.port=25575
+region-file-compression=deflate
+require-resource-pack=false
+resource-pack=
+resource-pack-id=
+resource-pack-prompt=
+resource-pack-sha1=
+server-ip=
+server-port=25565
+simulation-distance=10
+spawn-animals=true
+spawn-monsters=true
+spawn-npcs=true
+spawn-protection=16
+sync-chunk-writes=true
+text-filtering-config=
+text-filtering-version=0
+use-native-transport=true
+view-distance=10
+white-list=false
 `;
 
 function parseProperties(content: string): PropertiesMap {
   const out: PropertiesMap = {};
   for (const line of content.split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("!"))
+      continue;
     const idx = line.indexOf("=");
     if (idx === -1) continue;
     out[line.slice(0, idx).trim()] = line.slice(idx + 1);
@@ -718,10 +1206,179 @@ function serializeProperties(original: string, values: PropertiesMap): string {
   return [...lines, ...missing].join("\n");
 }
 
+type ResourcePackSettings = {
+  enabled?: boolean;
+  path?: string;
+  public_id?: string;
+  sha1?: string;
+  file_name?: string;
+  source?: "uploaded" | "world";
+  required?: boolean;
+  prompt?: string;
+  updated_at?: string;
+};
+
+type WorldResourcePack = {
+  path: string;
+  worldName: string;
+  size: number;
+  modified: string;
+};
+
+const RESOURCE_PACK_DIR = "/resource-packs";
+
+function getResourcePackSettings(server: Server): ResourcePackSettings {
+  const value = server.settings?.resource_pack;
+  if (!value || typeof value !== "object") return {};
+  return value as ResourcePackSettings;
+}
+
+function makePublicId() {
+  const browserCrypto = globalThis.crypto as Crypto & {
+    randomUUID?: () => string;
+  };
+  if (browserCrypto.randomUUID) return browserCrypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  browserCrypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function resourcePackPathFor(fileName: string) {
+  const cleaned = fileName
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const name =
+    cleaned && cleaned.toLowerCase().endsWith(".zip")
+      ? cleaned
+      : "resource-pack.zip";
+  return `${RESOURCE_PACK_DIR}/${name}`;
+}
+
+function resourcePackSourceFor(path: string): ResourcePackSettings["source"] {
+  return path.toLowerCase().endsWith("/resources.zip") ? "world" : "uploaded";
+}
+
+async function sha1Hex(file: File) {
+  const digest = await crypto.subtle.digest("SHA-1", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+async function sha1Bytes(bytes: Uint8Array) {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const digest = await crypto.subtle.digest("SHA-1", buffer);
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function getPropertyGroups(values: PropertiesMap) {
+  const knownKeys = new Set(propertyFields.map((field) => field.key));
+  const customFields: PropertyField[] = Object.keys(values)
+    .filter((key) => !knownKeys.has(key))
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => ({
+      key,
+      label: key,
+      type: "text",
+      category: "Other",
+    }));
+  const allFields = [...propertyFields, ...customFields];
+
+  return propertyCategories
+    .map((category) => ({
+      category,
+      fields: allFields.filter((field) => field.category === category),
+    }))
+    .filter((group) => group.fields.length > 0);
+}
+
+function PropertyFieldControl({
+  field,
+  value,
+  onChange,
+}: {
+  field: PropertyField;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const inputClass =
+    "flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent";
+
+  if (field.type === "select") {
+    return (
+      <select
+        className={inputClass}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Default</option>
+        {(field.options ?? []).map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  if (field.type === "boolean") {
+    const enabled = value === "true";
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        onClick={() => onChange(enabled ? "false" : "true")}
+        title={enabled ? "Disable" : "Enable"}
+        className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+          enabled ? "bg-accent" : "border border-border-hover bg-background"
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+            enabled ? "translate-x-[18px]" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return (
+      <textarea
+        className="min-h-20 w-full resize-y rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={field.placeholder}
+      />
+    );
+  }
+
+  return (
+    <Input
+      type={field.type === "number" ? "number" : "text"}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      min={field.min}
+      max={field.max}
+      step={field.step}
+      placeholder={field.placeholder}
+      className={field.type === "list" ? "font-mono" : undefined}
+    />
+  );
+}
+
 function ServerPropertiesPanel({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [values, setValues] = useState<PropertiesMap>({});
+  const [saveBarPinned, setSaveBarPinned] = useState(false);
+  const saveBarSentinelRef = useRef<HTMLDivElement>(null);
 
   const propsQuery = useQuery({
     queryKey: ["file-content", serverId, "/server.properties"],
@@ -736,6 +1393,28 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
       setValues(parseProperties(propsQuery.data));
     }
   }, [propsQuery.data]);
+
+  useEffect(() => {
+    const sentinel = saveBarSentinelRef.current;
+    const scrollRoot = sentinel?.closest("[data-server-scroll]");
+    if (!sentinel || !(scrollRoot instanceof HTMLElement)) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const isPinned = entry.rootBounds
+          ? entry.boundingClientRect.top < entry.rootBounds.top
+          : !entry.isIntersecting;
+        setSaveBarPinned(isPinned);
+      },
+      {
+        root: scrollRoot,
+        threshold: 1,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -774,8 +1453,41 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div>
+      {/* Docked toolbar. Once the header below scrolls completely out of view,
+          this full-width bar slides DOWN out from behind the page banner with
+          a compact copy of the title + Save button. A zero-height sticky host
+          keeps it pinned across the whole list without reserving layout; the
+          bar is parked above the fold and clipped by the scroll container, so
+          its top edge is flush with the banner for the entire slide. */}
+      <div className="sticky top-0 z-30 h-0">
+        <div
+          className={`save-toolbar absolute -left-4 -right-4 top-0 flex items-center justify-between gap-4 border-b border-border bg-surface px-4 py-2.5 sm:-left-6 sm:-right-6 sm:px-6 ${
+            saveBarPinned ? "save-toolbar--pinned" : "pointer-events-none"
+          }`}
+        >
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-text-primary">
+              Minecraft Properties
+            </h3>
+            <p className="truncate text-xs text-text-secondary">
+              Edits /server.properties on the server.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            className="flex-shrink-0"
+            onClick={() => saveMutation.mutate()}
+            loading={saveMutation.isPending}
+            disabled={propsQuery.isLoading || propsQuery.isError}
+          >
+            <Save className="h-3.5 w-3.5" /> Save Properties
+          </Button>
+        </div>
+      </div>
+
+      {/* Header — normal flow, scrolls away with the page. */}
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">
             Minecraft Properties
@@ -794,7 +1506,13 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
         </Button>
       </div>
 
-      {propsQuery.isLoading ? (
+      {/* Sentinel at the header's bottom edge: once it leaves the top of the
+          scroll area, the header + its Save button are completely out of view
+          — exactly the moment the docked toolbar drops down. */}
+      <div ref={saveBarSentinelRef} className="h-px" aria-hidden="true" />
+
+      <div className="mt-4">
+        {propsQuery.isLoading ? (
         <div className="flex justify-center py-8">
           <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
         </div>
@@ -815,49 +1533,54 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {propertyFields.map((field) => (
-            <div key={field.key} className="space-y-1.5">
-              <Label>{field.label}</Label>
-              {field.type === "select" ? (
-                <select
-                  className="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
-                  value={values[field.key] ?? ""}
-                  onChange={(e) => setProp(field.key, e.target.value)}
-                >
-                  <option value="">Default</option>
-                  {field.options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              ) : field.type === "boolean" ? (
-                <label className="flex h-9 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={(values[field.key] ?? "false") === "true"}
-                    onChange={(e) =>
-                      setProp(field.key, e.target.checked ? "true" : "false")
-                    }
-                  />
-                  <span className="text-text-secondary">
-                    {(values[field.key] ?? "false") === "true"
-                      ? "Enabled"
-                      : "Disabled"}
-                  </span>
-                </label>
-              ) : (
-                <Input
-                  type={field.type === "number" ? "number" : "text"}
-                  value={values[field.key] ?? ""}
-                  onChange={(e) => setProp(field.key, e.target.value)}
-                />
-              )}
-            </div>
+        <div className="space-y-6">
+          {getPropertyGroups(values).map((group) => (
+            <section key={group.category} className="space-y-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                {group.category}
+              </h4>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {group.fields.map((field) => (
+                  field.type === "boolean" ? (
+                    <div
+                      key={field.key}
+                      className="flex h-9 items-center justify-between gap-3 rounded-md border border-border bg-surface-2 px-3"
+                    >
+                      <Label title={field.key} className="min-w-0 truncate">
+                        {field.label}
+                      </Label>
+                      <PropertyFieldControl
+                        field={field}
+                        value={values[field.key] ?? ""}
+                        onChange={(value) => setProp(field.key, value)}
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      key={field.key}
+                      className={
+                        field.type === "textarea"
+                          ? "space-y-1.5 sm:col-span-2"
+                          : "space-y-1.5"
+                      }
+                    >
+                      <Label title={field.key} className="block">
+                        {field.label}
+                      </Label>
+                      <PropertyFieldControl
+                        field={field}
+                        value={values[field.key] ?? ""}
+                        onChange={(value) => setProp(field.key, value)}
+                      />
+                    </div>
+                  )
+                ))}
+              </div>
+            </section>
           ))}
         </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -928,7 +1651,7 @@ function VersionSelect({
   );
 }
 
-function SoftwareTab({ server }: { server: Server }) {
+function SoftwareOptionsPanel({ server }: { server: Server }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [snapshots, setSnapshots] = useState(false);
@@ -977,7 +1700,7 @@ function SoftwareTab({ server }: { server: Server }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["server", server.id] });
       qc.invalidateQueries({ queryKey: ["servers"] });
-      success("Software settings saved");
+      success("Runtime settings saved");
     },
     onError: (e: Error) => error("Save failed", e.message),
   });
@@ -1017,9 +1740,8 @@ function SoftwareTab({ server }: { server: Server }) {
     form.jvm_args !== server.jvm_args.join(" ");
 
   return (
-    <div className="max-w-3xl space-y-5">
-      <Panel
-        title="Software"
+    <Panel
+        title="Runtime"
         description="Choose the server runtime and version. Changing the Minecraft or loader version reinstalls the server runtime."
         actions={
           <div className="flex gap-2">
@@ -1129,16 +1851,425 @@ function SoftwareTab({ server }: { server: Server }) {
             />
           </div>
         </div>
-      </Panel>
-    </div>
+    </Panel>
   );
 }
 
-function OptionsTab({ server }: { server: Server }) {
+function ResourcePackOptionsPanel({ server }: { server: Server }) {
+  const qc = useQueryClient();
+  const { success, error } = useNotifications();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const autoWorldDefaultRef = useRef<string | null>(null);
+  const initial = getResourcePackSettings(server);
+  const [form, setForm] = useState({
+    enabled: initial.enabled ?? false,
+    path: initial.path ?? "",
+    public_id: initial.public_id ?? makePublicId(),
+    sha1: initial.sha1 ?? "",
+    file_name: initial.file_name ?? "",
+    source: initial.source ?? resourcePackSourceFor(initial.path ?? ""),
+    required: initial.required ?? false,
+    prompt: initial.prompt ?? "",
+  });
+
+  useEffect(() => {
+    const settings = getResourcePackSettings(server);
+    setForm({
+      enabled: settings.enabled ?? false,
+      path: settings.path ?? "",
+      public_id: settings.public_id ?? makePublicId(),
+      sha1: settings.sha1 ?? "",
+      file_name: settings.file_name ?? "",
+      source: settings.source ?? resourcePackSourceFor(settings.path ?? ""),
+      required: settings.required ?? false,
+      prompt: settings.prompt ?? "",
+    });
+  }, [server]);
+
+  const filesQuery = useQuery({
+    queryKey: ["files", server.id, RESOURCE_PACK_DIR],
+    queryFn: () => api.files.list(server.id, RESOURCE_PACK_DIR),
+    retry: false,
+  });
+
+  const worldPacksQuery = useQuery({
+    queryKey: ["world-resource-packs", server.id],
+    queryFn: async () => {
+      const root = await api.files.list(server.id, "/");
+      const dirs = root.entries.filter(
+        (entry) =>
+          entry.type === "dir" &&
+          entry.name.toLowerCase() !== RESOURCE_PACK_DIR.slice(1),
+      );
+      const packs: WorldResourcePack[] = [];
+
+      await Promise.all(
+        dirs.map(async (dir) => {
+          const worldPath = `/${dir.name}`;
+          const listing = await api.files.list(server.id, worldPath).catch(() => null);
+          const pack = listing?.entries.find(
+            (entry) =>
+              entry.type === "file" &&
+              entry.name.toLowerCase() === "resources.zip",
+          );
+          if (pack) {
+            packs.push({
+              path: `${worldPath}/resources.zip`,
+              worldName: dir.name,
+              size: pack.size,
+              modified: pack.modified,
+            });
+          }
+        }),
+      );
+
+      return packs.sort((a, b) => a.worldName.localeCompare(b.worldName));
+    },
+    retry: false,
+  });
+
+  const zipFiles =
+    filesQuery.data?.entries.filter(
+      (entry) => entry.type === "file" && entry.name.toLowerCase().endsWith(".zip"),
+    ) ?? [];
+  const worldPacks = worldPacksQuery.data ?? [];
+
+  useEffect(() => {
+    const settings = getResourcePackSettings(server);
+    const detected = worldPacks[0];
+    if (
+      settings.path ||
+      !detected ||
+      autoWorldDefaultRef.current === server.id
+    ) {
+      return;
+    }
+
+    autoWorldDefaultRef.current = server.id;
+    setForm((prev) => {
+      if (prev.path) return prev;
+      return {
+        ...prev,
+        enabled: true,
+        path: detected.path,
+        sha1: "",
+        file_name: "resources.zip",
+        source: "world",
+        required: true,
+      };
+    });
+  }, [server, worldPacks]);
+
+  const publicUrl = form.public_id
+    ? api.resourcePacks.publicUrl(server.id, form.public_id)
+    : "";
+
+  const saveResourcePack = async (nextForm: typeof form) => {
+    const publicId = nextForm.public_id || makePublicId();
+    if (nextForm.enabled && !nextForm.path) {
+      throw new Error("Choose or upload a resource pack zip first.");
+    }
+    const computedSHA1 = nextForm.enabled
+      ? nextForm.sha1.trim() ||
+        (await api.files
+          .readBytes(server.id, nextForm.path)
+          .then((bytes) => sha1Bytes(bytes)))
+      : "";
+
+    const advertisedUrl = nextForm.enabled
+      ? api.resourcePacks.publicUrl(server.id, publicId)
+      : "";
+    const properties = await api.files
+      .readContent(server.id, "/server.properties")
+      .catch(() => defaultServerProperties);
+    const values = {
+      ...parseProperties(properties),
+      "resource-pack": advertisedUrl,
+      "resource-pack-id": "",
+      "resource-pack-sha1": nextForm.enabled ? computedSHA1 : "",
+      "require-resource-pack": String(nextForm.enabled && nextForm.required),
+      "resource-pack-prompt": nextForm.enabled ? nextForm.prompt : "",
+    };
+
+    await api.files.writeContent(
+      server.id,
+      "/server.properties",
+      serializeProperties(properties, values),
+    );
+    await api.servers.update(server.id, {
+      settings: {
+        ...server.settings,
+        resource_pack: {
+          enabled: nextForm.enabled,
+          path: nextForm.path,
+          public_id: publicId,
+          sha1: computedSHA1,
+          file_name: nextForm.file_name,
+          source: nextForm.source,
+          required: nextForm.required,
+          prompt: nextForm.prompt,
+          updated_at: new Date().toISOString(),
+        },
+      },
+    });
+    return { ...nextForm, public_id: publicId, sha1: computedSHA1 };
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: () => saveResourcePack(form),
+    onSuccess: (saved) => {
+      setForm(saved);
+      qc.invalidateQueries({ queryKey: ["server", server.id] });
+      qc.invalidateQueries({ queryKey: ["servers"] });
+      qc.invalidateQueries({
+        queryKey: ["file-content", server.id, "/server.properties"],
+      });
+      success(
+        "Resource pack settings saved",
+        server.status === "online"
+          ? "Restart the Minecraft server to make players receive the new pack."
+          : undefined,
+      );
+    },
+    onError: (e: Error) => error("Save failed", e.message),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        throw new Error("Resource packs must be .zip files.");
+      }
+      const path = resourcePackPathFor(file.name);
+      const storedName = path.split("/").pop() ?? "resource-pack.zip";
+      const uploadFile = new File([file], storedName, {
+        type: file.type || "application/zip",
+        lastModified: file.lastModified,
+      });
+      const sha1 = await sha1Hex(file);
+      await api.files.upload(server.id, RESOURCE_PACK_DIR, uploadFile);
+      const next = {
+        ...form,
+        enabled: true,
+        path,
+        public_id: form.public_id || makePublicId(),
+        sha1,
+        file_name: storedName,
+        source: "uploaded" as const,
+      };
+      return saveResourcePack(next);
+    },
+    onSuccess: (saved) => {
+      setForm(saved);
+      qc.invalidateQueries({ queryKey: ["files", server.id, RESOURCE_PACK_DIR] });
+      qc.invalidateQueries({ queryKey: ["server", server.id] });
+      qc.invalidateQueries({
+        queryKey: ["file-content", server.id, "/server.properties"],
+      });
+      success(
+        "Resource pack uploaded",
+        server.status === "online"
+          ? "Restart the Minecraft server to make players receive the new pack."
+          : undefined,
+      );
+    },
+    onError: (e: Error) => error("Upload failed", e.message),
+  });
+
+  const copyUrl = async () => {
+    await navigator.clipboard.writeText(publicUrl);
+    success("Resource pack URL copied");
+  };
+
+  return (
+    <Panel
+      title="Resource Pack"
+      description="Host one zip for this server and write its URL into server.properties."
+      actions={
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            loading={uploadMutation.isPending}
+          >
+            {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+            Upload
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => saveMutation.mutate()}
+            loading={saveMutation.isPending}
+          >
+            {!saveMutation.isPending && <Save className="h-3.5 w-3.5" />}
+            Save
+          </Button>
+        </div>
+      }
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) uploadMutation.mutate(file);
+        }}
+      />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="space-y-4">
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, enabled: e.target.checked }))
+              }
+            />
+            Enabled
+          </label>
+
+          <div className="space-y-1.5">
+            <Label>Hosted Zip</Label>
+            <select
+              className="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+              value={form.path}
+              onChange={(e) => {
+                const path = e.target.value;
+                const worldPack = worldPacks.find((pack) => pack.path === path);
+                setForm((p) => ({
+                  ...p,
+                  path,
+                  sha1: path === p.path ? p.sha1 : "",
+                  file_name: path.split("/").pop() ?? p.file_name,
+                  source: resourcePackSourceFor(path),
+                  enabled: worldPack ? true : p.enabled,
+                  required: worldPack ? true : p.required,
+                }));
+              }}
+            >
+              {form.path && <option value={form.path}>{form.path}</option>}
+              <option value="">No hosted pack</option>
+              {worldPacks.length > 0 && (
+                <optgroup label="World resources.zip">
+                  {worldPacks.map((pack) => (
+                    <option key={pack.path} value={pack.path}>
+                      {pack.worldName}/resources.zip
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {zipFiles.map((entry) => {
+                const path = `${RESOURCE_PACK_DIR}/${entry.name}`;
+                return (
+                  <option key={path} value={path}>
+                    {entry.name}
+                  </option>
+                );
+              })}
+            </select>
+            {filesQuery.isError && (
+              <p className="text-xs text-text-secondary">
+                Upload a zip to create the resource-packs folder.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>SHA-1</Label>
+            <Input
+              value={form.sha1}
+              onChange={(e) => setForm((p) => ({ ...p, sha1: e.target.value }))}
+              className="font-mono"
+              placeholder="Computed automatically on upload"
+            />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={form.required}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, required: e.target.checked }))
+              }
+            />
+            Require pack
+          </label>
+
+          <div className="space-y-1.5">
+            <Label>Prompt</Label>
+            <Input
+              value={form.prompt}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, prompt: e.target.value }))
+              }
+              placeholder="Optional message shown to players"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Public URL</Label>
+            <div className="flex gap-2">
+              <Input
+                value={publicUrl}
+                readOnly
+                className="min-w-0 flex-1 font-mono"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={copyUrl}
+                title="Copy URL"
+                disabled={!publicUrl}
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Public ID</Label>
+            <div className="flex gap-2">
+              <Input
+                value={form.public_id}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, public_id: e.target.value }))
+                }
+                className="min-w-0 flex-1 font-mono"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() =>
+                  setForm((p) => ({ ...p, public_id: makePublicId() }))
+                }
+                title="Regenerate public ID"
+              >
+                <Link2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs leading-5 text-text-secondary">
+            Saving writes resource-pack, resource-pack-sha1,
+            require-resource-pack, and resource-pack-prompt in
+            /server.properties.
+          </p>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function PanelOptionsPanel({ server }: { server: Server }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
+  const [purgeFiles, setPurgeFiles] = useState(false);
+  const [purgeBackups, setPurgeBackups] = useState(false);
 
   const [form, setForm] = useState({
     name: server.name,
@@ -1147,7 +2278,6 @@ function OptionsTab({ server }: { server: Server }) {
     port: String(server.port),
     ram_mb_max: String(server.ram_mb_max),
     ram_mb_min: String(server.ram_mb_min),
-    java_binary: server.java_binary,
   });
 
   const updateMutation = useMutation({
@@ -1159,7 +2289,6 @@ function OptionsTab({ server }: { server: Server }) {
         port: Number(form.port),
         ram_mb_max: Number(form.ram_mb_max),
         ram_mb_min: Number(form.ram_mb_min),
-        java_binary: form.java_binary,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["server", server.id] });
@@ -1170,7 +2299,11 @@ function OptionsTab({ server }: { server: Server }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.servers.delete(server.id),
+    mutationFn: () =>
+      api.servers.delete(server.id, {
+        files: purgeFiles,
+        backups: purgeBackups,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["servers"] });
       navigate({ to: "/servers" });
@@ -1178,15 +2311,19 @@ function OptionsTab({ server }: { server: Server }) {
     onError: (e: Error) => error("Delete failed", e.message),
   });
 
+  const openDelete = () => {
+    setPurgeFiles(false);
+    setPurgeBackups(false);
+    setShowDelete(true);
+  };
+
   const f =
     (k: keyof typeof form) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((p) => ({ ...p, [k]: e.target.value }));
 
   return (
-    <div className="max-w-3xl space-y-8">
-      <ServerPropertiesPanel serverId={server.id} />
-
+    <>
       <Panel
         title="Panel Options"
         description="Settings stored in the control panel database."
@@ -1242,19 +2379,6 @@ function OptionsTab({ server }: { server: Server }) {
           </div>
         </div>
 
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold text-text-primary">Java</h3>
-          <div className="space-y-1.5">
-            <Label>Java Binary</Label>
-            <Input
-              value={form.java_binary}
-              onChange={f("java_binary")}
-              className="font-mono"
-              placeholder="java"
-            />
-          </div>
-        </div>
-
         <div className="flex justify-end gap-3">
           <Button
             onClick={() => updateMutation.mutate()}
@@ -1268,14 +2392,10 @@ function OptionsTab({ server }: { server: Server }) {
       <div className="border-t border-border pt-6 space-y-3">
         <h3 className="text-sm font-semibold text-red-400">Danger Zone</h3>
         <p className="text-sm text-text-secondary">
-          Deleting a server removes it from the panel. The files on the node are
-          not deleted.
+          Deleting a server removes it from the panel. By default the files on
+          the node are kept — tick the options below to also wipe them from disk.
         </p>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => setShowDelete(true)}
-        >
+        <Button variant="destructive" size="sm" onClick={openDelete}>
           <Trash2 className="h-3.5 w-3.5" /> Delete Server
         </Button>
       </div>
@@ -1289,7 +2409,50 @@ function OptionsTab({ server }: { server: Server }) {
         confirmLabel="Delete"
         variant="destructive"
         loading={deleteMutation.isPending}
-      />
+      >
+        <div className="mt-4 space-y-2 rounded-md border border-border bg-surface p-3">
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={purgeFiles}
+              onChange={(e) => setPurgeFiles(e.target.checked)}
+            />
+            Also delete the server files on disk
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={purgeBackups}
+              onChange={(e) => setPurgeBackups(e.target.checked)}
+            />
+            Also delete all backups
+          </label>
+          {(purgeFiles || purgeBackups) && (
+            <p className="text-xs text-red-400">
+              Permanently erases the selected data from the node. The node must
+              be online or the delete will be cancelled.
+            </p>
+          )}
+        </div>
+      </ConfirmDialog>
+    </>
+  );
+}
+
+function OptionsTab({ server }: { server: Server }) {
+  return (
+    <div className="max-w-3xl space-y-5">
+      <SoftwareOptionsPanel server={server} />
+      <ResourcePackOptionsPanel server={server} />
+      <PanelOptionsPanel server={server} />
+    </div>
+  );
+}
+
+function PropertiesTab({ serverId }: { serverId: string }) {
+  return (
+    <div className="max-w-5xl pt-4 sm:pt-6">
+      <ServerPropertiesPanel serverId={serverId} />
     </div>
   );
 }
@@ -1387,35 +2550,6 @@ function WorldsTab({ serverId }: { serverId: string }) {
   );
 }
 
-function AccessTab() {
-  return (
-    <div className="p-4 sm:p-6">
-      <Panel
-        title="Access"
-        description="Per-server collaborators and permissions will live here."
-      >
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {["Console", "Files", "Backups", "Mods", "Startup", "Settings"].map(
-            (permission) => (
-              <label
-                key={permission}
-                className="flex h-10 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-sm text-text-secondary"
-              >
-                <input type="checkbox" disabled />
-                {permission}
-              </label>
-            ),
-          )}
-        </div>
-        <p className="mt-4 text-sm text-text-secondary">
-          The database already has a server permissions table, but the
-          user-facing API for assigning collaborators has not been built yet.
-        </p>
-      </Panel>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 function ServerDetailPage() {
@@ -1426,6 +2560,7 @@ function ServerDetailPage() {
   const [tab, setTab] = useState<ServerSection>(() => {
     const stored = sessionStorage.getItem(`server:${id}:tab`);
     if (stored) sessionStorage.removeItem(`server:${id}:tab`);
+    if (stored === "software") return "options";
     return (stored as ServerSection | null) ?? "dashboard";
   });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -1625,14 +2760,17 @@ function ServerDetailPage() {
               status={server.status as ServerStatus}
             />
           )}
-          {tab === "software" && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <SoftwareTab server={server} />
-            </div>
-          )}
           {tab === "options" && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">
               <OptionsTab server={server} />
+            </div>
+          )}
+          {tab === "properties" && (
+            <div
+              className="h-full overflow-y-auto px-4 pb-4 pt-0 sm:px-6 sm:pb-6 sm:pt-0"
+              data-server-scroll
+            >
+              <PropertiesTab serverId={id} />
             </div>
           )}
           {tab === "configs" && <ConfigsTab serverId={id} />}
@@ -1693,7 +2831,6 @@ function ServerDetailPage() {
               <TasksTab serverId={id} />
             </div>
           )}
-          {tab === "access" && <AccessTab />}
         </main>
       </div>
 

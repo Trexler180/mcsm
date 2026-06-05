@@ -8,12 +8,14 @@ all: build
 
 dev-api:
 	cd apps/api && \
+	MCSM_DEV_MODE="1" \
 	DATABASE_PATH="./mcsm.db" \
 	JWT_SECRET="dev-secret" \
 	go run ./cmd/server
 
 dev-agent:
 	cd apps/agent && \
+	MCSM_DEV_MODE="1" \
 	AGENT_TOKEN="dev-agent-token" \
 	go run ./cmd/agent
 

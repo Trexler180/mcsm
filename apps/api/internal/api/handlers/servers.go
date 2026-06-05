@@ -249,11 +249,47 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	deleteFiles := r.URL.Query().Get("files") == "true"
+	deleteBackups := r.URL.Query().Get("backups") == "true"
+
+	// When the operator opts into disk deletion, purge on the agent *before*
+	// dropping the DB row. If the agent is unreachable or the wipe fails we abort
+	// and keep the panel record, so the server is never orphaned on disk with no
+	// way to find it again. (The backups DB rows cascade-delete with the server.)
+	if deleteFiles || deleteBackups {
+		srv, err := h.store.GetServer(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "server not found")
+			return
+		}
+		c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "node not found")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+		defer cancel()
+		if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
+			writeError(w, http.StatusBadGateway, "node unreachable; server not deleted: "+err.Error())
+			return
+		}
+		if err := c.PurgeServer(ctx, srv.ID, srv.DirectoryPath, deleteFiles, deleteBackups); err != nil {
+			writeError(w, http.StatusBadGateway, "file deletion failed; server not deleted: "+err.Error())
+			return
+		}
+	}
+
 	if err := h.store.DeleteServer(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	audit(h.store, r, "", "server.delete", map[string]any{"server_id": id})
+	audit(h.store, r, "", "server.delete", map[string]any{
+		"server_id":       id,
+		"deleted_files":   deleteFiles,
+		"deleted_backups": deleteBackups,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -297,14 +333,28 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	// Long deadline because the agent may auto-install the server runtime on
 	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
 	// take 10+ minutes since it compiles from source.
-	ctx, cancel := context.WithTimeout(r.Context(), 16*time.Minute)
+	//
+	// This is intentionally detached from r.Context(): refreshing or closing the
+	// browser tab should not cancel a server start that is already installing or
+	// booting on the agent.
+	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
 	defer cancel()
+	setStatus := func(status string) {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer statusCancel()
+		_ = h.store.UpdateServerStatus(statusCtx, id, status)
+	}
 
+	// Persist the intent before the long agent call. First-time starts can spend
+	// minutes auto-installing a runtime before the agent process exists, and a
+	// page refresh should still show the server as starting.
+	setStatus("starting")
 	if err := c.StartServer(ctx, id, cfg); err != nil {
+		setStatus("offline")
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	_ = h.store.UpdateServerStatus(r.Context(), id, "starting")
+	setStatus("starting")
 	audit(h.store, r, id, "server.start", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
 }

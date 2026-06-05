@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -157,6 +159,53 @@ func (h *ServerHandlers) DisableMods(w http.ResponseWriter, r *http.Request) {
 		disabled = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": disabled})
+}
+
+// Purge permanently deletes a server's on-disk data. The panel calls this when
+// the operator opts into file/backup deletion while removing a server. Each
+// target is independent: files wipes the live server directory, backups wipes
+// the sibling mcsm-backups/<id> folder. The process is killed first so Windows
+// releases its file locks on the world/jar.
+func (h *ServerHandlers) Purge(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var body struct {
+		Directory string `json:"directory"`
+		Files     bool   `json:"files"`
+		Backups   bool   `json:"backups"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Directory == "" {
+		writeError(w, http.StatusBadRequest, "directory is required")
+		return
+	}
+	// Confine deletion to within the configured server root — never RemoveAll an
+	// arbitrary path supplied over the wire.
+	dir, err := validateServerDirectory(h.serverRoot, body.Directory)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Best-effort kill; a server that isn't running just returns an error we
+	// ignore. Without this, locked files on Windows would block RemoveAll.
+	_ = h.mgr.Kill(id)
+
+	if body.Backups {
+		backupDir := filepath.Join(filepath.Dir(dir), "mcsm-backups", id)
+		if err := os.RemoveAll(backupDir); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete backups: "+err.Error())
+			return
+		}
+	}
+	if body.Files {
+		if err := os.RemoveAll(dir); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete files: "+err.Error())
+			return
+		}
+	}
+
+	h.mgr.Unregister(id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {

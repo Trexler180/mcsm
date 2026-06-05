@@ -72,6 +72,9 @@ func main() {
 	dbPath := envOr("DATABASE_PATH", "mcsm.db")
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
+		if !isDevMode() {
+			log.Fatal("JWT_SECRET is required outside development mode")
+		}
 		var err error
 		jwtSecret, err = randomHex(32)
 		if err != nil {
@@ -79,11 +82,17 @@ func main() {
 		}
 		log.Println("JWT_SECRET is not set; using an ephemeral signing key. Existing sessions will be invalid after restart.")
 	}
-	port := envOr("API_PORT", "8080")
+	port := envOr("API_PORT", "8081")
 	host := envOr("API_HOST", "127.0.0.1")
 	serverRoot := defaultServerRoot()
 	if err := os.MkdirAll(serverRoot, 0755); err != nil {
 		log.Fatalf("create server root: %v", err)
+	}
+	if err := ensureWritableDir(serverRoot); err != nil {
+		log.Fatalf("server root is not writable: %v", err)
+	}
+	if err := ensureWritableDir(filepath.Join(serverRoot, "mcsm-backups")); err != nil {
+		log.Fatalf("backup root is not writable: %v", err)
 	}
 
 	adminEmail := envOr("ADMIN_EMAIL", "admin@example.com")
@@ -102,7 +111,11 @@ func main() {
 	//  - foreign_keys: enforce FK constraints (off by default in SQLite)
 	//  - journal_mode=WAL: concurrent reads during writes
 	//  - busy_timeout: wait up to 5s on a locked DB before erroring
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)",
+	//  - synchronous=NORMAL: the SQLite-recommended pairing with WAL. Only
+	//    fsyncs at checkpoint instead of every commit, which is markedly
+	//    faster for writes and cannot corrupt the DB (a crash may at most
+	//    lose the last committed transaction, not integrity).
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)",
 		url.PathEscape(dbPath))
 
 	db, err := sql.Open("sqlite", dsn)
@@ -178,6 +191,9 @@ func main() {
 		if token == "" {
 			log.Fatal("LOCAL_AGENT_TOKEN is required when AUTO_REGISTER_LOCAL_AGENT=1")
 		}
+		if token == "dev-agent-token" && !isDevMode() {
+			log.Fatal("LOCAL_AGENT_TOKEN must not use the default dev token outside development mode")
+		}
 		n, err := s.EnsureNode(ctx, name, fqdn, port, scheme, token)
 		if err != nil {
 			log.Fatalf("register local agent node: %v", err)
@@ -247,4 +263,25 @@ func defaultServerRoot() string {
 		return "servers"
 	}
 	return filepath.Join("..", "..", "servers")
+}
+
+func isDevMode() bool {
+	v := strings.ToLower(os.Getenv("APP_ENV"))
+	return os.Getenv("MCSM_DEV_MODE") == "1" || v == "dev" || v == "development" || v == "local"
+}
+
+func ensureWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".mcsm-write-test-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
 }

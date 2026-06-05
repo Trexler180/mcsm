@@ -5,6 +5,7 @@ package poller
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	pollInterval = 15 * time.Second
+	pollInterval  = 15 * time.Second
 	perCallBudget = 3 * time.Second
 )
 
@@ -35,6 +36,8 @@ func Run(ctx context.Context, s *store.Store) {
 }
 
 func pollAll(ctx context.Context, s *store.Store) {
+	pollNodes(ctx, s)
+
 	servers, err := s.ListServers(ctx)
 	if err != nil {
 		return
@@ -65,6 +68,14 @@ func pollAll(ctx context.Context, s *store.Store) {
 				desired = "offline"
 			}
 		} else if v, ok := status["status"].(string); ok && v != "" {
+			// During first start the API marks the DB row "starting" before the
+			// agent runs installers such as Spigot BuildTools. The agent has no
+			// process instance yet, so /status reports offline until install
+			// finishes and the Java process begins. Keep the persisted starting
+			// state; the start handler rolls it back on failure.
+			if srv.Status == "starting" && v == "offline" {
+				continue
+			}
 			desired = v
 		}
 
@@ -74,4 +85,51 @@ func pollAll(ctx context.Context, s *store.Store) {
 			}
 		}
 	}
+}
+
+func pollNodes(ctx context.Context, s *store.Store) {
+	nodes, err := s.ListNodes(ctx)
+	if err != nil {
+		return
+	}
+	for _, node := range nodes {
+		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+		callCtx, cancel := context.WithTimeout(ctx, perCallBudget)
+		info, err := c.Info(callCtx)
+		cancel()
+		if err != nil {
+			continue
+		}
+		memoryMb := intFromInfo(info, "memory_mb")
+		diskGb := intFromInfo(info, "disk_gb")
+		cpuCores := intFromInfo(info, "cpu_cores")
+		if err := s.UpdateNodeHeartbeat(ctx, node.ID, memoryMb, diskGb, cpuCores); err != nil {
+			log.Printf("poller: update node heartbeat %s: %v", node.ID, err)
+		}
+	}
+}
+
+func intFromInfo(info map[string]any, key string) *int {
+	v, ok := info[key]
+	if !ok {
+		return nil
+	}
+	var out int
+	switch n := v.(type) {
+	case float64:
+		out = int(n)
+	case int:
+		out = n
+	case int64:
+		out = int(n)
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return nil
+		}
+		out = int(i)
+	default:
+		return nil
+	}
+	return &out
 }
