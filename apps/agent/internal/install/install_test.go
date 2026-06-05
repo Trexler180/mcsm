@@ -1,6 +1,13 @@
 package install
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestExtractJavaArgs(t *testing.T) {
 	cases := []struct {
@@ -36,5 +43,95 @@ func TestExtractJavaArgs(t *testing.T) {
 				t.Errorf("got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSelectPaperDownloadURL(t *testing.T) {
+	builds := []paperFillBuild{
+		{
+			ID:      12,
+			Channel: "stable",
+			Downloads: map[string]paperFillDownload{
+				"server:default": {URL: "https://example.test/stable-12.jar"},
+			},
+		},
+		{
+			ID:      14,
+			Channel: "beta",
+			Downloads: map[string]paperFillDownload{
+				"server:default": {URL: "https://example.test/beta-14.jar"},
+			},
+		},
+		{
+			ID:      9,
+			Channel: "recommended",
+			Downloads: map[string]paperFillDownload{
+				"server:default": {URL: "https://example.test/recommended-9.jar"},
+			},
+		},
+	}
+	got, ok := selectPaperDownloadURL(builds)
+	if !ok {
+		t.Fatal("expected a Paper download URL")
+	}
+	if want := "https://example.test/recommended-9.jar"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestSelectPaperDownloadURLUsesNewestWithinChannel(t *testing.T) {
+	builds := []paperFillBuild{
+		{
+			ID:      12,
+			Channel: "stable",
+			Downloads: map[string]paperFillDownload{
+				"server:default": {URL: "https://example.test/stable-12.jar"},
+			},
+		},
+		{
+			ID:      15,
+			Channel: "stable",
+			Downloads: map[string]paperFillDownload{
+				"server:default": {URL: "https://example.test/stable-15.jar"},
+			},
+		},
+	}
+	got, ok := selectPaperDownloadURL(builds)
+	if !ok {
+		t.Fatal("expected a Paper download URL")
+	}
+	if want := "https://example.test/stable-15.jar"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestDownloadReplacesExistingDestinationAndStalePart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fresh jar"))
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "BuildTools.jar")
+	if err := os.WriteFile(dst, []byte("old jar"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst+".part", []byte("stale partial"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := download(context.Background(), srv.URL, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh jar" {
+		t.Fatalf("downloaded content = %q, want fresh jar", string(got))
+	}
+	if _, err := os.Stat(dst + ".part"); !os.IsNotExist(err) {
+		t.Fatalf("stale part file still exists or stat failed: %v", err)
 	}
 }

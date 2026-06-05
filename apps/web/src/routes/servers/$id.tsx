@@ -2268,6 +2268,8 @@ function PanelOptionsPanel({ server }: { server: Server }) {
   const { success, error } = useNotifications();
   const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
+  const [purgeFiles, setPurgeFiles] = useState(false);
+  const [purgeBackups, setPurgeBackups] = useState(false);
 
   const [form, setForm] = useState({
     name: server.name,
@@ -2297,13 +2299,23 @@ function PanelOptionsPanel({ server }: { server: Server }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.servers.delete(server.id),
+    mutationFn: () =>
+      api.servers.delete(server.id, {
+        files: purgeFiles,
+        backups: purgeBackups,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["servers"] });
       navigate({ to: "/servers" });
     },
     onError: (e: Error) => error("Delete failed", e.message),
   });
+
+  const openDelete = () => {
+    setPurgeFiles(false);
+    setPurgeBackups(false);
+    setShowDelete(true);
+  };
 
   const f =
     (k: keyof typeof form) =>
@@ -2380,14 +2392,10 @@ function PanelOptionsPanel({ server }: { server: Server }) {
       <div className="border-t border-border pt-6 space-y-3">
         <h3 className="text-sm font-semibold text-red-400">Danger Zone</h3>
         <p className="text-sm text-text-secondary">
-          Deleting a server removes it from the panel. The files on the node are
-          not deleted.
+          Deleting a server removes it from the panel. By default the files on
+          the node are kept — tick the options below to also wipe them from disk.
         </p>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => setShowDelete(true)}
-        >
+        <Button variant="destructive" size="sm" onClick={openDelete}>
           <Trash2 className="h-3.5 w-3.5" /> Delete Server
         </Button>
       </div>
@@ -2401,7 +2409,32 @@ function PanelOptionsPanel({ server }: { server: Server }) {
         confirmLabel="Delete"
         variant="destructive"
         loading={deleteMutation.isPending}
-      />
+      >
+        <div className="mt-4 space-y-2 rounded-md border border-border bg-surface p-3">
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={purgeFiles}
+              onChange={(e) => setPurgeFiles(e.target.checked)}
+            />
+            Also delete the server files on disk
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={purgeBackups}
+              onChange={(e) => setPurgeBackups(e.target.checked)}
+            />
+            Also delete all backups
+          </label>
+          {(purgeFiles || purgeBackups) && (
+            <p className="text-xs text-red-400">
+              Permanently erases the selected data from the node. The node must
+              be online or the delete will be cancelled.
+            </p>
+          )}
+        </div>
+      </ConfirmDialog>
     </>
   );
 }

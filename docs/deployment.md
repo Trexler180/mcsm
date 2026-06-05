@@ -5,7 +5,7 @@ No containers or virtualization are used or required.
 
 ## Processes
 
-- `mcsm-api`: Go API on `:8080`. Runs goose migrations on boot, seeds the admin
+- `mcsm-api`: Go API on `:8081`. Runs goose migrations on boot, seeds the admin
   user, auto-registers the local agent, starts the scheduler and poller.
 - `mcsm-agent`: Go agent on `:8090`. Manages Java server processes and files.
 - web: the static React bundle (`apps/web/dist`) served by any web server /
@@ -28,7 +28,7 @@ Run `mcsm-api` and `mcsm-agent` under whatever service manager the host uses
 (systemd on Linux, a service wrapper or scheduled task on Windows). Set at least
 `JWT_SECRET`, `AGENT_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_PATH`, and
 `SERVER_ROOT`. Point a reverse proxy at `apps/web/dist` for static files and
-forward `/api` (including WebSocket upgrades for console/metrics) to `:8080`.
+forward `/api` (including WebSocket upgrades for console/metrics) to `:8081`.
 
 ## State
 

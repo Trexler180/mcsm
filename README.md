@@ -19,12 +19,14 @@ On Windows, run:
 Defaults:
 
 - Web: `http://localhost:3000`
-- API: `http://localhost:8080`
+- API: `http://localhost:8081`
 - Agent: `http://localhost:8090`
 - Admin: `admin@example.com / changeme`
 
 The script starts all three services, sets `MCSM_DEV_MODE=1`, and auto-registers
-the local agent.
+the local agent. Backend reload is enabled by default: edits to API or agent Go
+sources restart that service without restarting the web dev server. Use
+`.\run.ps1 -NoBackendWatch` to disable it.
 
 ## Production (native, single host)
 
@@ -40,7 +42,7 @@ cd apps/web   && pnpm install --frozen-lockfile && pnpm build   # → apps/web/d
 ```
 
 Serve `apps/web/dist` as static files behind any reverse proxy you already run,
-proxying `/api` to the API on `:8080`. Persistent state:
+proxying `/api` to the API on `:8081`. Persistent state:
 
 - SQLite DB at `DATABASE_PATH`
 - server directories and local backup archives under `SERVER_ROOT`

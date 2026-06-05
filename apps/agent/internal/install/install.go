@@ -87,39 +87,73 @@ func EnsureRuntime(ctx context.Context, dir, platform, mcVersion, javaBinary str
 // ── Paper ────────────────────────────────────────────────────────────────────
 
 func paperJar(ctx context.Context, dir, mcVersion string) error {
-	type versionResp struct {
-		Builds []int `json:"builds"`
-	}
-	type buildResp struct {
-		Downloads struct {
-			Application struct {
-				Name string `json:"name"`
-			} `json:"application"`
-		} `json:"downloads"`
-	}
-
-	var v versionResp
+	var builds []paperFillBuild
 	if err := getJSON(ctx, fmt.Sprintf(
-		"https://api.papermc.io/v2/projects/paper/versions/%s", mcVersion), &v); err != nil {
+		"https://fill.papermc.io/v3/projects/paper/versions/%s/builds", mcVersion), &builds); err != nil {
 		return fmt.Errorf("paper version lookup: %w", err)
 	}
-	if len(v.Builds) == 0 {
-		return fmt.Errorf("paper has no builds for mc %s", mcVersion)
+	url, ok := selectPaperDownloadURL(builds)
+	if !ok {
+		return fmt.Errorf("paper has no downloadable build for mc %s", mcVersion)
 	}
-	build := v.Builds[len(v.Builds)-1]
-
-	var b buildResp
-	if err := getJSON(ctx, fmt.Sprintf(
-		"https://api.papermc.io/v2/projects/paper/versions/%s/builds/%d", mcVersion, build), &b); err != nil {
-		return fmt.Errorf("paper build lookup: %w", err)
-	}
-	filename := b.Downloads.Application.Name
-	if filename == "" {
-		return fmt.Errorf("paper build %d has no application download", build)
-	}
-	url := fmt.Sprintf("https://api.papermc.io/v2/projects/paper/versions/%s/builds/%d/downloads/%s",
-		mcVersion, build, filename)
 	return download(ctx, url, filepath.Join(dir, JarName))
+}
+
+type paperFillDownload struct {
+	URL string `json:"url"`
+}
+
+type paperFillBuild struct {
+	ID        int                          `json:"id"`
+	Channel   string                       `json:"channel"`
+	Downloads map[string]paperFillDownload `json:"downloads"`
+}
+
+func (b paperFillBuild) buildChannel() string { return b.Channel }
+func (b paperFillBuild) buildID() int         { return b.ID }
+func (b paperFillBuild) buildDownloadURL() string {
+	if b.Downloads == nil {
+		return ""
+	}
+	return b.Downloads["server:default"].URL
+}
+
+type paperDownloadBuild interface {
+	buildChannel() string
+	buildID() int
+	buildDownloadURL() string
+}
+
+func selectPaperDownloadURL[T paperDownloadBuild](builds []T) (string, bool) {
+	bestPriority := -1
+	bestID := -1
+	var bestURL string
+	for _, build := range builds {
+		url := build.buildDownloadURL()
+		if url == "" {
+			continue
+		}
+		priority := paperChannelPriority(build.buildChannel())
+		if priority > bestPriority || (priority == bestPriority && build.buildID() > bestID) {
+			bestPriority = priority
+			bestID = build.buildID()
+			bestURL = url
+		}
+	}
+	return bestURL, bestURL != ""
+}
+
+func paperChannelPriority(channel string) int {
+	switch strings.ToLower(channel) {
+	case "recommended":
+		return 3
+	case "stable":
+		return 2
+	case "beta":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // ── Purpur ───────────────────────────────────────────────────────────────────
@@ -288,7 +322,7 @@ func spigotJar(ctx context.Context, dir, mcVersion, javaBinary string) error {
 	if len(matches) == 0 {
 		return fmt.Errorf("spigot jar not produced; BuildTools tail: %s", snippet(out, 200))
 	}
-	return os.Rename(matches[0], filepath.Join(dir, JarName))
+	return replaceFile(matches[0], filepath.Join(dir, JarName))
 }
 
 // ── Forge ────────────────────────────────────────────────────────────────────
@@ -452,6 +486,7 @@ func httpRequest(ctx context.Context, url string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "mcsm/0.1.0 (https://github.com/Trexler180/mcsm)")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -468,26 +503,89 @@ func download(ctx context.Context, url, dst string) error {
 		return err
 	}
 	tmp := dst + ".part"
+	_ = os.Remove(tmp)
+
 	resp, err := httpRequest(ctx, url)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 
 	f, err := os.Create(tmp)
 	if err != nil {
+		resp.Body.Close()
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
+	_, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	bodyErr := resp.Body.Close()
+	if copyErr != nil {
+		os.Remove(tmp)
+		return copyErr
+	}
+	if closeErr != nil {
+		os.Remove(tmp)
+		return closeErr
+	}
+	if bodyErr != nil {
+		os.Remove(tmp)
+		return bodyErr
+	}
+	if err := replaceFile(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return err
 	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+	return nil
+}
+
+func replaceFile(src, dst string) error {
+	var lastErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+		}
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			lastErr = err
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+
+	// Some Windows filesystems and endpoint scanners can deny same-directory
+	// rename even after all handles are closed. A non-atomic copy is still safe
+	// here because callers only invoke replaceFile after writing a complete temp
+	// file, and we clean up the source once the destination is fully closed.
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("rename failed: %w; copy fallback failed: %v", lastErr, err)
+	}
+	return os.Remove(src)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(dst)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(dst)
+		return closeErr
+	}
+	return nil
 }
 
 func snippet(b []byte, n int) string {

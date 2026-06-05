@@ -1,5 +1,5 @@
 param(
-    [int]$ApiPort = 8080,
+    [int]$ApiPort = 8081,
     [int]$AgentPort = 8090,
     [int]$WebPort = 3000,
     [string]$BindHost = "0.0.0.0",
@@ -8,6 +8,7 @@ param(
     [string]$AdminPassword = "changeme",
     [string]$JwtSecret = "local-dev-jwt-secret-change-me",
     [string]$AgentToken = "dev-agent-token",
+    [switch]$NoBackendWatch,
     [switch]$SkipInstall
 )
 
@@ -64,6 +65,16 @@ function Resolve-PublicHost {
     }
 
     return $FallbackHost
+}
+
+function Resolve-LocalConnectHost {
+    param([string]$HostName)
+
+    if ($HostName -eq "0.0.0.0" -or $HostName -eq "::") {
+        return "127.0.0.1"
+    }
+
+    return $HostName
 }
 
 function Join-ProcessArguments {
@@ -181,8 +192,12 @@ function Start-DevProcess {
     [pscustomobject]@{
         Name = $Name
         Process = $process
+        WorkingDirectory = $WorkingDirectory
+        Environment = $Environment
+        Command = $Command
         OutputEventId = $outputEventId
         ErrorEventId = $errorEventId
+        ExitReported = $false
     }
 }
 
@@ -201,6 +216,61 @@ function Receive-DevOutput {
     }
 }
 
+function Wait-DevHttp {
+    param(
+        [string]$Name,
+        [string]$Url,
+        [object[]]$Processes,
+        [int]$TimeoutSeconds = 90
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($devProcess in $Processes) {
+            Receive-DevOutput -DevProcess $devProcess
+        }
+
+        $exited = @($Processes | Where-Object { $_ -and $_.Process.HasExited })
+        if ($exited.Count -gt 0) {
+            foreach ($devProcess in $exited) {
+                Receive-DevOutput -DevProcess $devProcess
+            }
+            throw "$($exited[0].Name) exited before $Name became ready."
+        }
+
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ([int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 500) {
+                return
+            }
+        }
+        catch {
+            Start-Sleep -Milliseconds 250
+        }
+    }
+
+    throw "Timed out waiting for $Name at $Url."
+}
+
+function Stop-DevProcess {
+    param([pscustomobject]$DevProcess)
+
+    if (-not $DevProcess) {
+        return
+    }
+
+    Receive-DevOutput -DevProcess $DevProcess
+
+    if (-not $DevProcess.Process.HasExited) {
+        Stop-ProcessTree -ProcessId $DevProcess.Process.Id
+        [void]$DevProcess.Process.WaitForExit(1000)
+    }
+
+    Receive-DevOutput -DevProcess $DevProcess
+    Unregister-Event -SourceIdentifier $DevProcess.OutputEventId -ErrorAction SilentlyContinue
+    Unregister-Event -SourceIdentifier $DevProcess.ErrorEventId -ErrorAction SilentlyContinue
+}
+
 function Stop-DevProcesses {
     param([object[]]$Processes)
 
@@ -213,17 +283,57 @@ function Stop-DevProcesses {
             continue
         }
 
-        Receive-DevOutput -DevProcess $devProcess
+        Stop-DevProcess -DevProcess $devProcess
+    }
+}
 
-        if (-not $devProcess.Process.HasExited) {
-            Stop-ProcessTree -ProcessId $devProcess.Process.Id
-            [void]$devProcess.Process.WaitForExit(1000)
+function Get-DevSourceFingerprint {
+    param(
+        [string]$Path,
+        [string[]]$Extensions,
+        [string[]]$FileNames
+    )
+
+    $latest = 0
+    $count = 0
+    $ignoredDirs = @(
+        [System.IO.Path]::DirectorySeparatorChar + ".git" + [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::DirectorySeparatorChar + "bin" + [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::DirectorySeparatorChar + "dist" + [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::DirectorySeparatorChar + "node_modules" + [System.IO.Path]::DirectorySeparatorChar
+    )
+
+    Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $fullName = $_.FullName
+            foreach ($ignoredDir in $ignoredDirs) {
+                if ($fullName.Contains($ignoredDir)) {
+                    return $false
+                }
+            }
+            return ($Extensions -contains $_.Extension) -or ($FileNames -contains $_.Name)
+        } |
+        ForEach-Object {
+            $count++
+            if ($_.LastWriteTimeUtc.Ticks -gt $latest) {
+                $latest = $_.LastWriteTimeUtc.Ticks
+            }
         }
 
-        Receive-DevOutput -DevProcess $devProcess
-        Unregister-Event -SourceIdentifier $devProcess.OutputEventId -ErrorAction SilentlyContinue
-        Unregister-Event -SourceIdentifier $devProcess.ErrorEventId -ErrorAction SilentlyContinue
-    }
+    return "${count}:${latest}"
+}
+
+function Restart-DevProcess {
+    param([pscustomobject]$DevProcess)
+
+    Write-Host "[$($DevProcess.Name)] source changed; restarting..."
+    $name = $DevProcess.Name
+    $workingDirectory = $DevProcess.WorkingDirectory
+    $environment = $DevProcess.Environment
+    $command = $DevProcess.Command
+
+    Stop-DevProcess -DevProcess $DevProcess
+    return Start-DevProcess -Name $name -WorkingDirectory $workingDirectory -Environment $environment -Command $command
 }
 
 function Stop-ProcessTree {
@@ -263,6 +373,7 @@ Require-Command "pnpm"
 New-Item -ItemType Directory -Force -Path $ServerRoot | Out-Null
 
 $ResolvedPublicHost = Resolve-PublicHost -FallbackHost $BindHost
+$ApiConnectHost = Resolve-LocalConnectHost -HostName $BindHost
 
 if (-not $SkipInstall) {
     Write-Host "[setup] Installing web dependencies..."
@@ -302,6 +413,7 @@ $AgentEnv = @{
 }
 
 $WebEnv = @{
+    VITE_API_HOST = $ApiConnectHost
     VITE_API_PORT = "$ApiPort"
     PORT = "$WebPort"
 }
@@ -313,31 +425,83 @@ Write-Host "  API:   http://${ResolvedPublicHost}:$ApiPort"
 Write-Host "  Agent: http://${ResolvedPublicHost}:$AgentPort"
 Write-Host "  Bind:  $BindHost"
 Write-Host "  Admin: $AdminEmail / $AdminPassword"
+Write-Host "  Backend reload: $(if ($NoBackendWatch) { "off" } else { "on" })"
 Write-Host ""
 Write-Host "Press Ctrl+C to stop all services."
 Write-Host ""
 
 $processes = @()
+$apiProcess = $null
+$agentProcess = $null
+$webProcess = $null
 try {
-    $processes += Start-DevProcess -Name "api" -WorkingDirectory $ApiDir -Environment $ApiEnv -Command @("go", "run", "./cmd/server")
-    $processes += Start-DevProcess -Name "agent" -WorkingDirectory $AgentDir -Environment $AgentEnv -Command @("go", "run", "./cmd/agent")
-    $processes += Start-DevProcess -Name "web" -WorkingDirectory $WebDir -Environment $WebEnv -Command @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort")
+    $apiProcess = Start-DevProcess -Name "api" -WorkingDirectory $ApiDir -Environment $ApiEnv -Command @("go", "run", "./cmd/server")
+    $agentProcess = Start-DevProcess -Name "agent" -WorkingDirectory $AgentDir -Environment $AgentEnv -Command @("go", "run", "./cmd/agent")
+    $processes = @($apiProcess, $agentProcess)
+    Wait-DevHttp -Name "api" -Url "http://${ApiConnectHost}:$ApiPort/api/v1/health" -Processes $processes
+
+    # The initial boot resets the dev admin password for convenience. Hot
+    # backend reloads must not repeat that reset, because it deletes refresh
+    # tokens and forces browser sessions to log in again.
+    $ApiEnv["RESET_ADMIN_PASSWORD"] = "0"
+
+    $apiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
+    $agentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+    $lastWatchCheck = Get-Date
+
+    $webProcess = Start-DevProcess -Name "web" -WorkingDirectory $WebDir -Environment $WebEnv -Command @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort")
+    $processes = @($apiProcess, $agentProcess, $webProcess)
 
     while ($true) {
         if ($global:ServerManagerStopRequested -or $global:ServerManagerForceStopRequested) {
             break
         }
 
+        $processes = @($apiProcess, $agentProcess, $webProcess) | Where-Object { $_ }
         foreach ($devProcess in $processes) {
             Receive-DevOutput -DevProcess $devProcess
         }
 
-        $exited = $processes | Where-Object { $_.Process.HasExited }
-        if ($exited.Count -gt 0) {
-            foreach ($devProcess in $exited) {
+        $exited = @($processes | Where-Object { $_.Process.HasExited })
+        foreach ($devProcess in $exited) {
+            if (-not $devProcess.ExitReported) {
                 Receive-DevOutput -DevProcess $devProcess
                 Write-Host "[$($devProcess.Name)] exited with code $($devProcess.Process.ExitCode)"
+                $devProcess.ExitReported = $true
             }
+        }
+
+        if (-not $NoBackendWatch) {
+            $now = Get-Date
+            if (($now - $lastWatchCheck).TotalMilliseconds -ge 1000) {
+                $lastWatchCheck = $now
+
+                $nextApiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
+                if ($nextApiFingerprint -ne $apiFingerprint) {
+                    Start-Sleep -Milliseconds 300
+                    $apiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions @(".go", ".sql") -FileNames @("go.mod", "go.sum")
+                    $apiProcess = Restart-DevProcess -DevProcess $apiProcess
+                }
+
+                $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+                if ($nextAgentFingerprint -ne $agentFingerprint) {
+                    Start-Sleep -Milliseconds 300
+                    $agentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions @(".go") -FileNames @("go.mod", "go.sum")
+                    $agentProcess = Restart-DevProcess -DevProcess $agentProcess
+                }
+            }
+        }
+
+        $processes = @($apiProcess, $agentProcess, $webProcess) | Where-Object { $_ }
+        $exited = @($processes | Where-Object { $_.Process.HasExited })
+        if ($NoBackendWatch) {
+            $blockingExited = $exited
+        }
+        else {
+            $blockingExited = @($exited | Where-Object { $_.Name -notin @("api", "agent") })
+        }
+
+        if ($blockingExited.Count -gt 0) {
             break
         }
 
@@ -347,7 +511,7 @@ try {
 finally {
     Write-Host ""
     Write-Host "Stopping ServerManager..."
-    Stop-DevProcesses -Processes $processes
+    Stop-DevProcesses -Processes @($apiProcess, $agentProcess, $webProcess)
     Unregister-Event -SourceIdentifier $cancelEventId -ErrorAction SilentlyContinue
     Remove-Job -Job $cancelSubscriber -Force -ErrorAction SilentlyContinue
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,8 @@ import (
 
 const (
 	mojangManifest = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
+	paperProject   = "https://fill.papermc.io/v3/projects/paper"
+	purpurProject  = "https://api.purpurmc.org/v2/purpur"
 	fabricGame     = "https://meta.fabricmc.net/v2/versions/game"
 	fabricLoader   = "https://meta.fabricmc.net/v2/versions/loader"
 	quiltGame      = "https://meta.quiltmc.org/v3/versions/game"
@@ -93,6 +96,10 @@ func (c *Client) GameVersions(ctx context.Context, platform string, includeSnaps
 	var out []GameVersion
 	var err error
 	switch platform {
+	case "paper":
+		out, err = c.paperGame(ctx, includeSnapshots)
+	case "purpur":
+		out, err = c.purpurGame(ctx, includeSnapshots)
 	case "fabric":
 		out, err = c.fabricLikeGame(ctx, fabricGame, includeSnapshots)
 	case "quilt":
@@ -104,6 +111,48 @@ func (c *Client) GameVersions(ctx context.Context, platform string, includeSnaps
 		return nil, err
 	}
 	c.store(key, out)
+	return out, nil
+}
+
+func (c *Client) paperGame(ctx context.Context, includeSnapshots bool) ([]GameVersion, error) {
+	var raw struct {
+		Versions map[string][]string `json:"versions"`
+	}
+	if err := c.getJSON(ctx, paperProject, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]GameVersion, 0, len(raw.Versions))
+	seen := map[string]bool{}
+	for _, versions := range raw.Versions {
+		for _, v := range versions {
+			stable := stableGameVersion(v)
+			if seen[v] || (!includeSnapshots && !stable) {
+				continue
+			}
+			seen[v] = true
+			out = append(out, GameVersion{Version: v, Stable: stable})
+		}
+	}
+	sortGameVersions(out)
+	return out, nil
+}
+
+func (c *Client) purpurGame(ctx context.Context, includeSnapshots bool) ([]GameVersion, error) {
+	var raw struct {
+		Versions []string `json:"versions"`
+	}
+	if err := c.getJSON(ctx, purpurProject, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]GameVersion, 0, len(raw.Versions))
+	for _, v := range raw.Versions {
+		stable := stableGameVersion(v)
+		if !includeSnapshots && !stable {
+			continue
+		}
+		out = append(out, GameVersion{Version: v, Stable: stable})
+	}
+	sortGameVersions(out)
 	return out, nil
 }
 
@@ -175,4 +224,67 @@ func (c *Client) LoaderVersions(ctx context.Context, platform string) ([]GameVer
 	}
 	c.store(key, out)
 	return out, nil
+}
+
+func stableGameVersion(v string) bool {
+	return !strings.Contains(v, "-")
+}
+
+func sortGameVersions(versions []GameVersion) {
+	sort.SliceStable(versions, func(i, j int) bool {
+		return compareVersionIDs(versions[i].Version, versions[j].Version) > 0
+	})
+}
+
+func compareVersionIDs(a, b string) int {
+	aa := versionTokens(strings.SplitN(a, "-", 2)[0])
+	bb := versionTokens(strings.SplitN(b, "-", 2)[0])
+	if cmp := compareIntSlices(aa, bb); cmp != 0 {
+		return cmp
+	}
+	aStable := stableGameVersion(a)
+	bStable := stableGameVersion(b)
+	if aStable != bStable {
+		if aStable {
+			return 1
+		}
+		return -1
+	}
+	return compareIntSlices(versionTokens(a), versionTokens(b))
+}
+
+func compareIntSlices(aa, bb []int) int {
+	for i := 0; i < len(aa) || i < len(bb); i++ {
+		if i >= len(aa) {
+			return -1
+		}
+		if i >= len(bb) {
+			return 1
+		}
+		if aa[i] != bb[i] {
+			if aa[i] > bb[i] {
+				return 1
+			}
+			return -1
+		}
+	}
+	return 0
+}
+
+func versionTokens(v string) []int {
+	fields := strings.FieldsFunc(v, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+	out := make([]int, 0, len(fields))
+	for _, f := range fields {
+		if f == "" {
+			continue
+		}
+		n := 0
+		for _, r := range f {
+			n = n*10 + int(r-'0')
+		}
+		out = append(out, n)
+	}
+	return out
 }
