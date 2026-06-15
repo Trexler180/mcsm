@@ -11,7 +11,7 @@
 
 import type { ConfigNode, Primitive } from "./model";
 
-const KEY_RE = /^[A-Za-z_][\w.\-]*$/;
+const KEY_RE = /^[A-Za-z_][\w.-]*$/;
 
 function inferType(raw: string): { type: ConfigNode["type"]; value: Primitive } {
   const t = raw.trim();

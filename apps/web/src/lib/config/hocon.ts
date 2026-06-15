@@ -248,7 +248,7 @@ export function hoconScalar(value: Primitive, node: ConfigNode): string {
   if (
     wasQuoted ||
     s === "" ||
-    /[",:=#{}\[\]]/.test(s) ||
+    /[",:=#{}[\]]/.test(s) ||
     /^\s|\s$/.test(s) ||
     /^(true|false|null)$/.test(s) ||
     !Number.isNaN(Number(s))
