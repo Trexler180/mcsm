@@ -13,11 +13,20 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	secretKey []byte // AES-256 key for app_secrets; nil disables secret storage
 }
 
 func New(db *sql.DB) *Store {
 	return &Store{db: db}
+}
+
+// WithEncryption sets the master secret used to encrypt app_secrets at rest and
+// returns the same store for chaining. An empty master leaves secret storage
+// disabled (the secret methods then return a clear error).
+func (s *Store) WithEncryption(master string) *Store {
+	s.secretKey = deriveKey(master)
+	return s
 }
 
 // ── Models ───────────────────────────────────────────────────────
@@ -271,6 +280,13 @@ func (s *Store) UpdateUserLastLogin(ctx context.Context, id string) error {
 
 func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, id)
+	return err
+}
+
+func (s *Store) UpdateUser(ctx context.Context, id string, displayName *string, role string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET display_name = ?, role = ? WHERE id = ?`,
+		displayName, role, id)
 	return err
 }
 
