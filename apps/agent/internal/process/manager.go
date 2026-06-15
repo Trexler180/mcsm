@@ -11,12 +11,26 @@ type Manager struct {
 	mu        sync.RWMutex
 	instances map[string]*Instance
 	dirs      map[string]string
+
+	rosterMu sync.Mutex
+	roster   map[string]rosterCache
+}
+
+// rosterCache memoises the expensive part of AllPlayers (reading every
+// playerdata .dat plus the state files) keyed by a fingerprint of the relevant
+// files' mtimes. It is rebuilt only when roster membership or op/whitelist/ban
+// state changes — so the 5s online poll no longer re-reads the world each time.
+type rosterCache struct {
+	fingerprint string
+	offline     []Player
+	state       playerState
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		instances: make(map[string]*Instance),
 		dirs:      make(map[string]string),
+		roster:    make(map[string]rosterCache),
 	}
 }
 
@@ -25,10 +39,10 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 	defer m.mu.Unlock()
 
 	if inst, ok := m.instances[id]; ok {
-		// offline/crashed/mod_conflict all mean the process is dead and the
+		// offline/crashed/startup_failure all mean the process is dead and the
 		// instance is just a stale record we can replace with a fresh start.
 		s := inst.statusInfo().Status
-		if s != StatusOffline && s != StatusCrashed && s != StatusModConflict {
+		if s != StatusOffline && s != StatusCrashed && s != StatusStartupFailure {
 			return fmt.Errorf("server already running")
 		}
 	}
@@ -123,6 +137,10 @@ func (m *Manager) Unregister(id string) {
 	delete(m.dirs, id)
 	delete(m.instances, id)
 	m.mu.Unlock()
+
+	m.rosterMu.Lock()
+	delete(m.roster, id)
+	m.rosterMu.Unlock()
 }
 
 func (m *Manager) Players(id string) []Player {
@@ -147,15 +165,20 @@ func (m *Manager) RefreshPlayers(id string, timeout time.Duration) []Player {
 
 // AllPlayers returns the merged roster: players currently online (tracked live
 // from the console) plus offline players read from the world's playerdata
-// files. Online entries win — an offline .dat for someone currently online is
-// dropped so each player appears once.
+// files, each stamped with op/whitelist/ban status. Online entries win — an
+// offline .dat for someone currently online is dropped so each player appears
+// once.
 func (m *Manager) AllPlayers(id string) []Player {
 	online := m.RefreshPlayers(id, 750*time.Millisecond)
 
-	var offline []Player
-	if dir, ok := m.GetDir(id); ok {
-		offline, _ = OfflinePlayers(dir)
+	dir, ok := m.GetDir(id)
+	if !ok {
+		// No directory registered: we can only return the live roster.
+		return online
 	}
+
+	offline, state := m.offlineRoster(id, dir)
+	prefix, _ := bedrockPrefix(dir)
 
 	offlineByName := make(map[string]Player, len(offline))
 	for _, p := range offline {
@@ -175,6 +198,10 @@ func (m *Manager) AllPlayers(id string) []Player {
 				p.LastSeen = saved.LastSeen
 			}
 		}
+		state.stamp(&p)
+		// Stamp after the UUID backfill so a Floodgate UUID from the saved .dat
+		// is available even when /list only gave us the (possibly prefixed) name.
+		stampBedrock(&p, prefix)
 		out = append(out, p)
 	}
 
@@ -185,6 +212,27 @@ func (m *Manager) AllPlayers(id string) []Player {
 		out = append(out, p)
 	}
 	return out
+}
+
+// offlineRoster returns the cached offline roster + state for a server,
+// rebuilding only when the underlying files have changed since last time.
+func (m *Manager) offlineRoster(id, dir string) ([]Player, playerState) {
+	fp := rosterFingerprint(dir)
+
+	m.rosterMu.Lock()
+	if c, ok := m.roster[id]; ok && c.fingerprint == fp {
+		m.rosterMu.Unlock()
+		return c.offline, c.state
+	}
+	m.rosterMu.Unlock()
+
+	state := readServerState(dir)
+	offline := buildOfflineRoster(dir, state)
+
+	m.rosterMu.Lock()
+	m.roster[id] = rosterCache{fingerprint: fp, offline: offline, state: state}
+	m.rosterMu.Unlock()
+	return offline, state
 }
 
 // PlayerDetail parses one player's .dat file and resolves their name (from
@@ -209,6 +257,23 @@ func (m *Manager) PlayerDetail(id, uuid string) (*PlayerDetail, error) {
 			break
 		}
 	}
+
+	// Stamp op/whitelist/ban status and attach lifetime stats.
+	state := readServerState(dir)
+	key := strings.ToLower(d.Name)
+	_, d.Op = state.ops[key]
+	_, d.Whitelisted = state.whitelist[key]
+	if b, ok := state.banned[key]; ok {
+		d.Banned = true
+		d.BanReason = b.Reason
+	}
+	if isBedrockUUID(uuid) {
+		d.Bedrock = true
+	} else if prefix, _ := bedrockPrefix(dir); prefix != "" && strings.HasPrefix(d.Name, prefix) {
+		d.Bedrock = true
+	}
+	d.Stats = readPlayerStats(dir, uuid)
+
 	return d, nil
 }
 
@@ -263,6 +328,17 @@ func (m *Manager) DisableConflictMods(id string, ids []string) ([]string, error)
 		inst.ClearConflict()
 	}
 	return disabled, nil
+}
+
+// GeyserInfo reports whether a server has the Geyser/Floodgate Bedrock bridge
+// installed and its effective username prefix, so the UI can surface Bedrock
+// support even before any Bedrock player has joined.
+func (m *Manager) GeyserInfo(id string) (GeyserInfo, error) {
+	dir, ok := m.GetDir(id)
+	if !ok {
+		return GeyserInfo{}, fmt.Errorf("server directory not registered")
+	}
+	return detectGeyser(dir), nil
 }
 
 func (m *Manager) GetDir(id string) (string, bool) {

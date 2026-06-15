@@ -23,10 +23,14 @@ type ConflictSuggestion struct {
 	Requirements []string `json:"requirements,omitempty"`
 }
 
-// ModConflict captures a Fabric incompatible-mods failure parsed from the
-// server log, so the panel can show suggestions and offer one-click fixes.
+// ModConflict captures a startup failure parsed from the server log, so the
+// panel can show suggestions and offer one-click fixes. Kind distinguishes a
+// Fabric incompatible-mods block ("incompatible") from a mod that crashed the
+// server on startup, e.g. a broken mixin ("crash"); both fixes are "disable the
+// named mod(s)", so they share the same downstream UI and disable flow.
 type ModConflict struct {
 	Detected    bool                 `json:"detected"`
+	Kind        string               `json:"kind"` // "incompatible" | "crash"
 	Summary     string               `json:"summary"`
 	Suggestions []ConflictSuggestion `json:"suggestions"`
 	Raw         []string             `json:"raw"`
@@ -110,6 +114,7 @@ func (d *conflictDetector) build() *ModConflict {
 	}
 	return &ModConflict{
 		Detected:    true,
+		Kind:        "incompatible",
 		Summary:     summary,
 		Suggestions: d.sugg,
 		Raw:         d.raw,

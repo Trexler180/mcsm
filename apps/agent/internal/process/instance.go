@@ -24,13 +24,24 @@ var (
 
 // Player is a snapshot of one player. Online players carry JoinedAt (tracked
 // live from the console); offline players carry UUID + LastSeen (read from the
-// world's playerdata files).
+// world's playerdata files). The Op/Whitelisted/Banned flags are stamped from
+// the server's ops.json/whitelist.json/banned-players.json files.
 type Player struct {
 	Name     string    `json:"name"`
 	UUID     string    `json:"uuid,omitempty"`
 	Online   bool      `json:"online"`
 	JoinedAt time.Time `json:"joined_at,omitempty"`
 	LastSeen time.Time `json:"last_seen,omitempty"`
+
+	Op          bool   `json:"op,omitempty"`
+	OpLevel     int    `json:"op_level,omitempty"`
+	Whitelisted bool   `json:"whitelisted,omitempty"`
+	Banned      bool   `json:"banned,omitempty"`
+	BanReason   string `json:"ban_reason,omitempty"`
+
+	// Bedrock is true for players connected through Geyser/Floodgate (Bedrock
+	// Edition), detected by Floodgate's UUID signature or username prefix.
+	Bedrock bool `json:"bedrock,omitempty"`
 }
 
 const ringCapacity = 500
@@ -38,12 +49,14 @@ const ringCapacity = 500
 type Status string
 
 const (
-	StatusOffline     Status = "offline"
-	StatusStarting    Status = "starting"
-	StatusOnline      Status = "online"
-	StatusStopping    Status = "stopping"
-	StatusCrashed     Status = "crashed"
-	StatusModConflict Status = "mod_conflict"
+	StatusOffline  Status = "offline"
+	StatusStarting Status = "starting"
+	StatusOnline   Status = "online"
+	StatusStopping Status = "stopping"
+	StatusCrashed  Status = "crashed"
+	// StatusStartupFailure means the process died on startup with a diagnostic we
+	// parsed into a fix (incompatible mods, or a mod that crashed the launch).
+	StatusStartupFailure Status = "startup_failure"
 )
 
 type StartConfig struct {
@@ -99,12 +112,15 @@ type Instance struct {
 	playersChanged  chan struct{}
 	lastListRefresh time.Time
 
-	// Fabric incompatible-mods detection. detector is fed every console line
-	// (under conflictMu since stdout/stderr pipes run concurrently); once a
-	// conflict is found it's stored in conflict and the process is killed.
-	conflictMu sync.Mutex
-	detector   conflictDetector
-	conflict   *ModConflict
+	// Startup-failure detection. Both detectors are fed every console line
+	// (under conflictMu since stdout/stderr pipes run concurrently): detector
+	// catches Fabric incompatible-mods blocks, crashDetector catches a mod that
+	// crashes startup (e.g. a broken mixin). The first to fire is stored in
+	// conflict and the process is killed.
+	conflictMu    sync.Mutex
+	detector      conflictDetector
+	crashDetector mixinCrashDetector
+	conflict      *ModConflict
 
 	done chan struct{}
 }
@@ -206,19 +222,24 @@ func (inst *Instance) pipeStream(r io.Reader, stream string) {
 		default:
 		}
 
-		// Watch every line (both streams) for a Fabric incompatible-mods block.
-		// On detection, stash the parsed conflict, flip status, and kill the
-		// process — it would die on its own, but this captures the diagnostic
-		// before waitExit relabels it "crashed".
+		// Watch every line (both streams) for a Fabric incompatible-mods block or
+		// a mod that crashes startup. On detection, stash the parsed conflict,
+		// flip status, and kill the process — it would die on its own, but this
+		// captures the diagnostic before waitExit relabels it "crashed".
 		inst.conflictMu.Lock()
 		mc := inst.detector.feed(line)
-		if mc != nil {
+		if mc == nil {
+			mc = inst.crashDetector.feed(line)
+		}
+		if mc != nil && inst.conflict == nil {
 			inst.conflict = mc
+		} else {
+			mc = nil // already have one; don't re-kill/relabel
 		}
 		inst.conflictMu.Unlock()
 		if mc != nil {
 			inst.mu.Lock()
-			inst.status = StatusModConflict
+			inst.status = StatusStartupFailure
 			inst.mu.Unlock()
 			_ = inst.kill()
 		}
@@ -370,8 +391,8 @@ func (inst *Instance) waitExit() {
 
 	inst.mu.Lock()
 	prevStatus := inst.status
-	if prevStatus == StatusModConflict {
-		// Keep the mod-conflict status so the panel can surface suggestions
+	if prevStatus == StatusStartupFailure {
+		// Keep the startup-failure status so the panel can surface suggestions
 		// instead of a generic crash.
 	} else if err != nil && prevStatus != StatusStopping {
 		inst.status = StatusCrashed
@@ -512,5 +533,6 @@ func (inst *Instance) ClearConflict() {
 	inst.conflictMu.Lock()
 	inst.conflict = nil
 	inst.detector = conflictDetector{}
+	inst.crashDetector = mixinCrashDetector{}
 	inst.conflictMu.Unlock()
 }

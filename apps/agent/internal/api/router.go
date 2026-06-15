@@ -48,12 +48,15 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 			r.Delete("/backups/{backupId}", bh.DeleteBackup)
 			r.Get("/backups/{backupId}/download", bh.DownloadBackup)
 			r.Get("/players", ph.List)
+			r.Get("/players/meta", ph.Meta)
+			r.Post("/players/action", ph.Action)
 			r.Get("/players/{uuid}", ph.Detail)
 
 			r.Get("/console", ch.Console)
 			r.Get("/metrics", mh.ServerMetrics)
 
 			r.Get("/files", fh.List)
+			r.Get("/files/tree", fh.Tree)
 			r.Get("/files/content", fh.GetContent)
 			r.Put("/files/content", fh.PutContent)
 			r.Delete("/files", fh.Delete)

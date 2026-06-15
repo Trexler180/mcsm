@@ -1,19 +1,35 @@
 package process
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 )
 
-// ItemStack is one stack in an inventory/ender-chest, identified by its slot.
-type ItemStack struct {
-	Slot  int    `json:"slot"`
+// Enchant is one enchantment on an item ({id, level}).
+type Enchant struct {
 	ID    string `json:"id"`
-	Count int    `json:"count"`
+	Level int    `json:"level"`
+}
+
+// ItemStack is one stack in an inventory/ender-chest, identified by its slot.
+// Damage/CustomName/Enchantments are best-effort and only present when the .dat
+// stored them (so they stay omitted for plain stacks).
+type ItemStack struct {
+	Slot         int       `json:"slot"`
+	ID           string    `json:"id"`
+	Count        int       `json:"count"`
+	Damage       int       `json:"damage,omitempty"`
+	CustomName   string    `json:"custom_name,omitempty"`
+	Enchantments []Enchant `json:"enchantments,omitempty"`
 }
 
 // PlayerDetail is the parsed snapshot of a single player's .dat file plus
-// identity (name/online) resolved by the caller.
+// identity (name/online), status, and lifetime stats resolved by the caller.
 type PlayerDetail struct {
 	Name         string      `json:"name"`
 	UUID         string      `json:"uuid"`
@@ -30,6 +46,18 @@ type PlayerDetail struct {
 	SelectedSlot int         `json:"selected_slot"`
 	Inventory    []ItemStack `json:"inventory"`
 	EnderChest   []ItemStack `json:"ender_chest"`
+
+	// SnapshotAt is the .dat file mtime — the moment this data was last written
+	// to disk. It powers the "stale snapshot" hint, since Minecraft only flushes
+	// playerdata on autosave/logout, not in real time.
+	SnapshotAt time.Time `json:"snapshot_at,omitempty"`
+
+	Op          bool         `json:"op,omitempty"`
+	Whitelisted bool         `json:"whitelisted,omitempty"`
+	Banned      bool         `json:"banned,omitempty"`
+	BanReason   string       `json:"ban_reason,omitempty"`
+	Bedrock     bool         `json:"bedrock,omitempty"`
+	Stats       *PlayerStats `json:"stats,omitempty"`
 }
 
 // Loose accessors over the generic NBT tree. Everything numeric is stored as
@@ -71,7 +99,9 @@ func asMap(v any) map[string]any {
 }
 
 // parseItems reads an inventory-style list. Handles both the modern item format
-// (lowercase `count`, post-1.20.5) and the legacy one (byte `Count`).
+// (lowercase `count` + `components`, post-1.20.5) and the legacy one (byte
+// `Count` + `tag`), pulling out damage, custom name, and enchantments when
+// present.
 func parseItems(v any) []ItemStack {
 	list := asList(v)
 	out := make([]ItemStack, 0, len(list))
@@ -85,9 +115,115 @@ func parseItems(v any) []ItemStack {
 		if count == 0 {
 			count = asInt(m["Count"])
 		}
-		out = append(out, ItemStack{Slot: asInt(m["Slot"]), ID: id, Count: count})
+		tag := asMap(m["tag"])              // legacy (<=1.20.4)
+		comp := asMap(m["components"])      // modern (>=1.20.5)
+		out = append(out, ItemStack{
+			Slot:         asInt(m["Slot"]),
+			ID:           id,
+			Count:        count,
+			Damage:       parseDamage(tag, comp),
+			CustomName:   parseCustomName(tag, comp),
+			Enchantments: parseEnchantments(tag, comp),
+		})
 	}
 	return out
+}
+
+// parseDamage reads the item's accumulated damage from either schema.
+func parseDamage(tag, comp map[string]any) int {
+	if comp != nil {
+		if d, ok := comp["minecraft:damage"]; ok {
+			return asInt(d)
+		}
+	}
+	return asInt(tag["Damage"])
+}
+
+// parseEnchantments reads enchantments (and an enchanted book's stored
+// enchantments) from either schema, returning them sorted by id for a stable
+// UI. Modern: components["minecraft:enchantments"].levels is an id->level map.
+// Legacy: tag.Enchantments is a list of {id, lvl}.
+func parseEnchantments(tag, comp map[string]any) []Enchant {
+	var out []Enchant
+	if comp != nil {
+		for _, key := range []string{"minecraft:enchantments", "minecraft:stored_enchantments"} {
+			levels := asMap(asMap(comp[key])["levels"])
+			for id, lvl := range levels {
+				out = append(out, Enchant{ID: id, Level: asInt(lvl)})
+			}
+		}
+	}
+	for _, key := range []string{"Enchantments", "StoredEnchantments", "ench"} {
+		for _, e := range asList(tag[key]) {
+			m := asMap(e)
+			id := asString(m["id"])
+			if id == "" {
+				continue
+			}
+			out = append(out, Enchant{ID: id, Level: asInt(m["lvl"])})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// parseCustomName reads a player-assigned item name from either schema and
+// flattens its text-component JSON down to plain text.
+func parseCustomName(tag, comp map[string]any) string {
+	if comp != nil {
+		if n, ok := comp["minecraft:custom_name"]; ok {
+			return plainText(n)
+		}
+	}
+	if display := asMap(tag["display"]); display != nil {
+		if n, ok := display["Name"]; ok {
+			return plainText(n)
+		}
+	}
+	return ""
+}
+
+// plainText flattens a Minecraft text component (which may be a bare string, a
+// JSON-encoded string, or a {text,extra:[...]} tree) into readable text.
+func plainText(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || (s[0] != '{' && s[0] != '[' && s[0] != '"') {
+		return s
+	}
+	var parsed any
+	if json.Unmarshal([]byte(s), &parsed) != nil {
+		return s
+	}
+	var b strings.Builder
+	flattenComponent(parsed, &b)
+	if out := b.String(); out != "" {
+		return out
+	}
+	return s
+}
+
+func flattenComponent(v any, b *strings.Builder) {
+	switch t := v.(type) {
+	case string:
+		b.WriteString(t)
+	case []any:
+		for _, e := range t {
+			flattenComponent(e, b)
+		}
+	case map[string]any:
+		if text, ok := t["text"].(string); ok {
+			b.WriteString(text)
+		}
+		if extra, ok := t["extra"].([]any); ok {
+			for _, e := range extra {
+				flattenComponent(e, b)
+			}
+		}
+	}
 }
 
 // maxHealth pulls the max-health attribute base, falling back to 20. Handles
@@ -118,7 +254,8 @@ func ReadPlayerDetail(dir, uuid string) (*PlayerDetail, error) {
 	if pdDir == "" {
 		return nil, fmt.Errorf("no playerdata directory")
 	}
-	root, err := parseNBTFile(filepath.Join(pdDir, uuid+".dat"))
+	datPath := filepath.Join(pdDir, uuid+".dat")
+	root, err := parseNBTFile(datPath)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +276,9 @@ func ReadPlayerDetail(dir, uuid string) (*PlayerDetail, error) {
 	}
 	for _, p := range asList(root["Pos"]) {
 		d.Pos = append(d.Pos, asFloat(p))
+	}
+	if fi, err := os.Stat(datPath); err == nil {
+		d.SnapshotAt = fi.ModTime()
 	}
 	return d, nil
 }

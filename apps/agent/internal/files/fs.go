@@ -22,6 +22,21 @@ type Listing struct {
 	Entries []Entry `json:"entries"`
 }
 
+// TreeEntry is a single file discovered by a recursive walk. Path is relative to
+// the walk root, slash-separated, so callers can prefix it with the root.
+type TreeEntry struct {
+	Path     string    `json:"path"`
+	Type     string    `json:"type"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
+}
+
+type Tree struct {
+	Path      string      `json:"path"`
+	Entries   []TreeEntry `json:"entries"`
+	Truncated bool        `json:"truncated"`
+}
+
 func Resolve(base, userPath string) (string, error) {
 	cleanBase, err := secureBase(base)
 	if err != nil {
@@ -129,6 +144,70 @@ func List(base, userPath string) (*Listing, error) {
 		})
 	}
 	return listing, nil
+}
+
+// ListTree recursively walks userPath and returns every file beneath it in a
+// single pass — done locally on the agent so callers avoid one HTTP round-trip
+// per directory. Symlinks are not followed (WalkDir uses Lstat), so the walk
+// stays within the resolved root. maxDepth limits how deep directories are
+// descended (<=0 means unlimited); maxEntries caps the result (<=0 means
+// unlimited) and sets Truncated when hit.
+func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
+	abs, err := ResolveExisting(base, userPath)
+	if err != nil {
+		return nil, err
+	}
+
+	tree := &Tree{Path: userPath, Entries: make([]TreeEntry, 0, 256)}
+	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			// Skip unreadable subtrees rather than aborting the whole walk.
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if p == abs {
+			return nil // don't emit the root itself
+		}
+
+		rel, err := filepath.Rel(abs, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		depth := strings.Count(rel, "/") + 1
+
+		if d.IsDir() {
+			if maxDepth > 0 && depth >= maxDepth {
+				return filepath.SkipDir
+			}
+			return nil // we only emit files
+		}
+
+		if maxEntries > 0 && len(tree.Entries) >= maxEntries {
+			tree.Truncated = true
+			return filepath.SkipAll
+		}
+
+		var size int64
+		var mod time.Time
+		if info, err := d.Info(); err == nil {
+			size = info.Size()
+			mod = info.ModTime()
+		}
+		tree.Entries = append(tree.Entries, TreeEntry{
+			Path:     rel,
+			Type:     "file",
+			Size:     size,
+			Modified: mod,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tree, nil
 }
 
 func ReadContent(base, userPath string) ([]byte, error) {

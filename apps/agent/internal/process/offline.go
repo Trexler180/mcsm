@@ -2,6 +2,7 @@ package process
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,4 +109,61 @@ func OfflinePlayers(dir string) ([]Player, error) {
 		})
 	}
 	return out, nil
+}
+
+// buildOfflineRoster reads the world's offline players and stamps each with op/
+// whitelist/ban status. Players who hold a status but have no playerdata of
+// their own (e.g. someone banned or whitelisted by name before they ever
+// joined) are appended as state-only entries so they remain manageable.
+func buildOfflineRoster(dir string, state playerState) []Player {
+	players, _ := OfflinePlayers(dir)
+	prefix, _ := bedrockPrefix(dir)
+
+	seen := make(map[string]bool, len(players))
+	for i := range players {
+		seen[strings.ToLower(players[i].Name)] = true
+		state.stamp(&players[i])
+		stampBedrock(&players[i], prefix)
+	}
+
+	for key, name := range state.names() {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		p := Player{Name: name, Online: false}
+		state.stamp(&p)
+		stampBedrock(&p, prefix)
+		players = append(players, p)
+	}
+	return players
+}
+
+// rosterFingerprint is a cheap signature of the files AllPlayers reads. It
+// changes whenever a player joins/leaves the world (playerdata dir mtime) or
+// op/whitelist/ban state is edited, which is exactly when the cached roster
+// must be rebuilt. Per-.dat content changes (which only move an existing
+// player's last_seen) are intentionally not tracked, to keep the common online
+// poll cheap; the detail view reads each .dat live anyway.
+func rosterFingerprint(dir string) string {
+	var b strings.Builder
+	paths := []string{
+		playerDataDir(dir),
+		filepath.Join(dir, "usercache.json"),
+		filepath.Join(dir, "ops.json"),
+		filepath.Join(dir, "whitelist.json"),
+		filepath.Join(dir, "banned-players.json"),
+	}
+	for _, p := range paths {
+		if p == "" {
+			b.WriteByte('-')
+			continue
+		}
+		if fi, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "%d:%d;", fi.ModTime().UnixNano(), fi.Size())
+		} else {
+			b.WriteByte('x')
+		}
+	}
+	return b.String()
 }

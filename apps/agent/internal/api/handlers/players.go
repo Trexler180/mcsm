@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -43,4 +44,39 @@ func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// Meta reports the server's Bedrock-bridge setup (Geyser/Floodgate install and
+// the Bedrock username prefix), letting the UI show that Bedrock players are
+// supported even when none are currently in the roster.
+func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	info, err := h.mgr.GeyserInfo(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// Action performs a player administration action (op/deop/ban/pardon/kick/
+// whitelist add or remove). When the server is online it is issued as a console
+// command; when offline the relevant config file is edited directly.
+func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Action string `json:"action"`
+		Name   string `json:"name"`
+		UUID   string `json:"uuid"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.mgr.ApplyPlayerAction(id, body.Action, body.Name, body.UUID, body.Reason); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

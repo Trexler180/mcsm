@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	agentfiles "github.com/mcsm/agent/internal/files"
@@ -45,6 +46,37 @@ func (h *FileHandlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func (h *FileHandlers) Tree(w http.ResponseWriter, r *http.Request) {
+	base, err := h.base(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = "/"
+	}
+	depth := atoiDefault(r.URL.Query().Get("depth"), 0)
+	max := atoiDefault(r.URL.Query().Get("max"), 0)
+	tree, err := agentfiles.ListTree(base, path, depth, max)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tree)
 }
 
 func (h *FileHandlers) GetContent(w http.ResponseWriter, r *http.Request) {
