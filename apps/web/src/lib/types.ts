@@ -237,6 +237,65 @@ export interface AuditEntry {
   created_at: string;
 }
 
+// Persisted conflict record (DB-backed), distinct from the client-side
+// ModConflict that is detected live from console output.
+export interface ServerConflict {
+  id: string;
+  server_id: string;
+  kind: string; // "incompatible" | "crash"
+  summary: string;
+  mods: string[];
+  detected_at: string;
+  resolved_at: string | null;
+}
+
+export interface LogEvent {
+  id: number;
+  server_id: string;
+  level: string; // "warn" | "error"
+  message: string;
+  source: string;
+  created_at: string;
+}
+
+// Ops-cockpit aggregate (GET /overview).
+export interface OverviewServer {
+  id: string;
+  name: string;
+  status: string;
+  platform: string;
+  mc_version: string;
+  node_id: string;
+  active_conflict: boolean;
+  last_backup_at: string | null;
+  last_backup_ok: boolean;
+}
+
+export interface OverviewNode {
+  id: string;
+  name: string;
+  online: boolean;
+  memory_mb: number | null;
+  last_seen: string | null;
+}
+
+export interface OverviewCounts {
+  servers: number;
+  online: number;
+  transitioning: number;
+  conflicts: number;
+  offline_nodes: number;
+}
+
+export interface Overview {
+  servers: OverviewServer[];
+  nodes: OverviewNode[];
+  conflicts: ServerConflict[];
+  warnings: LogEvent[];
+  activity: AuditEntry[];
+  counts: OverviewCounts;
+}
+
 export interface IntegrationMeta {
   key: string;
   label: string;

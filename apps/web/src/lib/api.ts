@@ -10,7 +10,10 @@ import type {
   InstalledMod,
   IntegrationMeta,
   LoginResponse,
+  LogEvent,
   ModCategory,
+  Overview,
+  ServerConflict,
   ModSearchParams,
   ModSearchResult,
   ModUpdate,
@@ -262,6 +265,17 @@ export const api = {
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),
+    logEvents: (id: string, opts?: { level?: string; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (opts?.level) q.set("level", opts.level);
+      if (opts?.limit) q.set("limit", String(opts.limit));
+      const qs = q.toString();
+      return get<LogEvent[]>(`/servers/${id}/log-events${qs ? `?${qs}` : ""}`);
+    },
+  },
+
+  overview: {
+    get: (signal?: AbortSignal) => get<Overview>("/overview", signal),
   },
 
   resourcePacks: {
@@ -495,6 +509,14 @@ export const api = {
         `/servers/${serverId}/mods/disable-conflict`,
         { mod_ids: modIds },
       ),
+    conflicts: (serverId: string, activeOnly = false) =>
+      get<ServerConflict[]>(
+        `/servers/${serverId}/mods/conflicts${activeOnly ? "?active=1" : ""}`,
+      ),
+    recordConflict: (
+      serverId: string,
+      body: { kind: string; summary: string; mods: string[] },
+    ) => post<{ id: string }>(`/servers/${serverId}/mods/conflicts`, body),
   },
 
   minecraft: {

@@ -16,6 +16,10 @@ import (
 const (
 	pollInterval  = 15 * time.Second
 	perCallBudget = 3 * time.Second
+	// A restart issues no DB status change and the process is briefly offline
+	// between stop and start; tolerate that window before calling an offline a
+	// crash. Also covers a stop/kill whose audit row lands just after the poll.
+	crashGrace = 2 * time.Minute
 )
 
 // Run blocks until ctx is done. Spawn it in its own goroutine.
@@ -80,6 +84,18 @@ func pollAll(ctx context.Context, s *store.Store) {
 		}
 
 		if desired != "" && desired != srv.Status {
+			// A server we believed was online going offline on its own — with no
+			// recent panel-initiated stop/restart/kill to explain it — is a crash.
+			// Record it as a first-class signal for the ops cockpit before we
+			// overwrite the status (after which the transition is no longer visible).
+			if srv.Status == "online" && desired == "offline" {
+				recent, _ := s.HasRecentLifecycleAction(ctx, srv.ID, crashGrace)
+				if !recent {
+					msg := "Server went offline unexpectedly (possible crash)"
+					s.LogAction(ctx, "", srv.ID, "server.crash", "", map[string]any{"detail": msg})
+					_ = s.InsertLogEvent(ctx, srv.ID, "error", msg, "poller")
+				}
+			}
 			if err := s.UpdateServerStatus(ctx, srv.ID, desired); err != nil {
 				log.Printf("poller: update status %s -> %s: %v", srv.ID, desired, err)
 			}

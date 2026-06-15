@@ -34,6 +34,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	auditH := handlers.NewAuditHandlers(s)
 	mcH := handlers.NewMinecraftHandlers()
 	settingsH := handlers.NewSettingsHandlers(s)
+	overviewH := handlers.NewOverviewHandlers(s)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
@@ -53,6 +54,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)
 			r.Get("/minecraft/loaders", mcH.LoaderVersions)
+
+			// Ops cockpit aggregate (scoped to the caller's servers)
+			r.Get("/overview", overviewH.Overview)
 
 			// Nodes (admin only)
 			r.Route("/nodes", func(r chi.Router) {
@@ -115,6 +119,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.Post("/mods/install", modH.Install)
 					r.Post("/mods/upload", modH.UploadCustom)
 					r.Post("/mods/disable-conflict", modH.DisableConflict)
+					r.Get("/mods/conflicts", modH.ListConflicts)
+					r.Post("/mods/conflicts", modH.RecordConflict)
 					r.Post("/mods/install-modpack", modH.InstallModpack)
 					r.Get("/mods/updates", modH.Updates)
 					r.Post("/mods/auto-update", modH.AutoUpdate)
@@ -141,8 +147,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.Put("/tasks/{taskId}", taskH.Update)
 					r.Delete("/tasks/{taskId}", taskH.Delete)
 
-					// Per-server audit trail
+					// Per-server audit trail + indexed log warnings
 					r.Get("/audit", auditH.ListForServer)
+					r.Get("/log-events", serverH.LogEvents)
 				})
 			})
 

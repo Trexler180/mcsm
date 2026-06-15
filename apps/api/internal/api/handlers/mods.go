@@ -1178,8 +1178,46 @@ func (h *ModHandlers) DisableConflict(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The offending jars are now disabled, so any open conflict for this server
+	// is considered resolved.
+	_ = h.store.ResolveServerConflicts(r.Context(), serverID)
+
 	audit(h.store, r, serverID, "mod.disable_conflict", map[string]any{"mod_ids": body.ModIDs, "disabled": disabled})
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": disabled})
+}
+
+// ListConflicts returns persisted mod conflicts for a server. Pass ?active=1 to
+// only return unresolved conflicts.
+func (h *ModHandlers) ListConflicts(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	activeOnly := r.URL.Query().Get("active") == "1"
+	conflicts, err := h.store.ListConflicts(r.Context(), serverID, activeOnly)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, conflicts)
+}
+
+// RecordConflict persists a conflict detected client-side from the console
+// output, so the cockpit can surface unresolved conflicts across servers.
+func (h *ModHandlers) RecordConflict(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	var body struct {
+		Kind    string   `json:"kind"`
+		Summary string   `json:"summary"`
+		Mods    []string `json:"mods"`
+	}
+	if err := decode(r, &body); err != nil || body.Summary == "" {
+		writeError(w, http.StatusBadRequest, "summary required")
+		return
+	}
+	id, err := h.store.RecordConflict(r.Context(), serverID, body.Kind, body.Summary, body.Mods)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
 func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -329,6 +330,9 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	setStatus("starting")
 	if err := c.StartServer(ctx, id, cfg); err != nil {
 		setStatus("offline")
+		// Surface the failed start as a cockpit signal, not just an HTTP error.
+		audit(h.store, r, id, "server.start_failed", map[string]any{"error": err.Error()})
+		_ = h.store.InsertLogEvent(r.Context(), id, "error", "Server failed to start: "+err.Error(), "api")
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -461,6 +465,20 @@ func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
 	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
 	audit(h.store, r, id, "server.kill", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "offline"})
+}
+
+// LogEvents returns recent indexed warnings/errors for a server. Filter with
+// ?level=error and cap with ?limit=N.
+func (h *ServerHandlers) LogEvents(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	level := r.URL.Query().Get("level")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	events, err := h.store.ListLogEvents(r.Context(), id, level, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
