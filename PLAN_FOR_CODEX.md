@@ -67,9 +67,8 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below.
 
 ### P0 — correctness / safety
-1. **`apps/web/src/routes/servers/$id.tsx` is 2819 lines** (was flagged at 1000+, now nearly tripled). Top maintainability hotspot. Split into per-tab components under `components/servers/` (console, files, mods, backups, tasks, players, settings, versions). Route file should be thin.
-2. **Web ships one 1.4 MB JS chunk** (412 KB gzip), no code-splitting. Lazy-load heavy deps per route — xterm, codemirror, recharts — via dynamic `import()` / `manualChunks`. Cuts initial load a lot.
-3. **`pnpm lint` is a lie.** Script is `tsc -b --pretty false` (typecheck only); `eslint` is a devDependency with **no `eslint.config.js` and no script invoking it**. Either add a flat eslint config + a real `lint` script, or drop the dead dep. README/CI both imply real linting.
+1. **`apps/web/src/routes/servers/$id.tsx` is 3301 lines** (was flagged at 1000+, now tripled). Top maintainability hotspot. Split into per-tab components under `components/servers/` (console, files, mods, backups, tasks, players, settings, versions). Route file should be thin.
+2. **`pnpm lint` is a lie.** Script is `tsc -b --pretty false` (typecheck only); `eslint` is a devDependency with **no `eslint.config.js` and no script invoking it**. Either add a flat eslint config + a real `lint` script, or drop the dead dep. README/CI both imply real linting.
 
 ### P1 — verify or finish
 4. **`api_keys` table.** Docs (`docs/security.md`) declare it reserved/future, not a bug. If staying deferred, leave it; only build the handler + `Authorization: ApiKey` path when there's a concrete automation need.
@@ -128,6 +127,15 @@ Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below
 
 Newest first. Move items here from `## 4` as they land.
 
+- **Web code-splitting** (`feat(web): … route code-splitting`) — was §4 P0 #2. `vite.config.ts` `manualChunks` splits react/markdown/terminal/editor/charts; initial JS chunk dropped from ~1.4 MB (412 KB gzip) to ~561 KB (160 KB gzip).
+- **App-secret encryption at rest** (`feat(secrets): app-secret store …`) — partial of §4 P2 #17. `app_secrets` table (migration 007) + store layer encrypts integration secrets (e.g. CurseForge key) before SQLite write. Agent-token-at-rest encryption still open.
+- **Mod auto-update engine** (`feat(autoupdate): …`, `feat(api): …`) — was §4 P3 #25. Cron-driven update runs with per-mod skip-version handling, run history endpoints, and a settings-driven cadence. Migration 006.
+- **Plugin sources: Hangar + SpigotMC** (`feat(api): … plugin sources`) — was §4 P3 #28. New mod-source clients normalized to the modrinth shape; CurseForge changelog + HTML→markdown sanitizer. Custom mod upload added.
+- **Integration settings UI** (`feat(web): settings page …`, `feat(api): … settings`) — admin endpoints + page to manage integration secrets, backed by the encrypted store.
+- **Admin user PUT** (`feat(api): …`) — partial of §4 P1 #9. `PUT /api/v1/users/{id}` lands; self `PUT /auth/me` still open.
+- **Agent crash diagnostics** (`feat(agent): crash diagnostics …`) — Fabric/Mixin crash-trace parsing, geyser/admin/stats/state introspection, player kick/ban/op/whitelist actions, directory-tree endpoint.
+- **PWA** (`feat(web): … PWA …`) — installable web bundle: manifest, icons, service worker via vite-plugin-pwa.
+- **Supervised dev script** (`chore(dev): supervised run.ps1 …`) — backend file-watch reload + crash/backoff supervision for all three processes.
 - **Dropped Docker** (`chore: remove docker, native deployment only`): deleted Dockerfiles/compose/nginx; README + `docs/deployment.md` rewritten for native three-process deployment. Decision: no containers/VMs.
 - **Single-host hardening pass** (`feat: single-host hardening`): git history + README + `docs/`; restricted `?token=` auth to console/metrics/download (was every route — JWT leak); prod guards requiring `JWT_SECRET` and rejecting default `dev-agent-token`; SecurityHeaders middleware; public resource-pack download (constant-time ID + path allowlist); writable-dir preflight; node heartbeat polling; health endpoints; GH Actions CI; tests across auth/middleware/db/migrations/health/server-access. (Docker bits from this pass were removed immediately after — see above.)
 - **Mod conflict detection, config editors, player detail, offline NBT viewing** (`3e5dfa8`).
