@@ -67,8 +67,7 @@ Dev loop: `./run.ps1` (Win) or `make dev-api / dev-agent / dev-web` (3 terminals
 Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below.
 
 ### P0 — correctness / safety
-1. **`apps/web/src/routes/servers/$id.tsx` is 3301 lines** (was flagged at 1000+, now tripled). Top maintainability hotspot. Split into per-tab components under `components/servers/` (console, files, mods, backups, tasks, players, settings, versions). Route file should be thin.
-2. **`pnpm lint` is a lie.** Script is `tsc -b --pretty false` (typecheck only); `eslint` is a devDependency with **no `eslint.config.js` and no script invoking it**. Either add a flat eslint config + a real `lint` script, or drop the dead dep. README/CI both imply real linting.
+1. **`pnpm lint` is a lie.** Script is `tsc -b --pretty false` (typecheck only); `eslint` is a devDependency with **no `eslint.config.js` and no script invoking it**. Either add a flat eslint config + a real `lint` script, or drop the dead dep. README/CI both imply real linting.
 
 ### P1 — verify or finish
 4. **`api_keys` table.** Docs (`docs/security.md`) declare it reserved/future, not a bug. If staying deferred, leave it; only build the handler + `Authorization: ApiKey` path when there's a concrete automation need.
@@ -127,6 +126,7 @@ Many original P0/P1 items have landed — see `## 8 Changelog`. Open items below
 
 Newest first. Move items here from `## 4` as they land.
 
+- **Split `servers/$id.tsx`** (`refactor(web): split server detail …`) — was §4 P0 #1. The 3301-line route file is now 363 lines; per-tab components live in `components/servers/` (`shared`, `backups-tab`, `dashboard-tab`, `tasks-tab`, `logs-tab`, `worlds-tab`, `options-properties`). Route file is now just the page shell + sidebar + tab switch. Behaviour unchanged (exact code moves); `tsc -b` + `vite build` green.
 - **Web code-splitting** (`feat(web): … route code-splitting`) — was §4 P0 #2. `vite.config.ts` `manualChunks` splits react/markdown/terminal/editor/charts; initial JS chunk dropped from ~1.4 MB (412 KB gzip) to ~561 KB (160 KB gzip).
 - **App-secret encryption at rest** (`feat(secrets): app-secret store …`) — partial of §4 P2 #17. `app_secrets` table (migration 007) + store layer encrypts integration secrets (e.g. CurseForge key) before SQLite write. Agent-token-at-rest encryption still open.
 - **Mod auto-update engine** (`feat(autoupdate): …`, `feat(api): …`) — was §4 P3 #25. Cron-driven update runs with per-mod skip-version handling, run history endpoints, and a settings-driven cadence. Migration 006.
