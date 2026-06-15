@@ -836,14 +836,13 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
             saveBarPinned ? "save-toolbar--pinned" : "pointer-events-none"
           }`}
         >
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold text-text-primary">
-              Minecraft Properties
-            </h3>
-            <p className="truncate text-xs text-text-secondary">
-              Edits /server.properties on the server.
-            </p>
-          </div>
+          {/* Title lives in the normal-flow header below; the docked bar only
+              re-surfaces the Save action once that header scrolls away, so it
+              deliberately omits the title to avoid a duplicate "Minecraft
+              Properties" heading. */}
+          <span className="truncate text-xs text-text-secondary">
+            Unsaved changes save to /server.properties
+          </span>
           <Button
             size="sm"
             className="flex-shrink-0"

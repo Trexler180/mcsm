@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { Backup } from "@/lib/types";
@@ -82,10 +83,11 @@ export function BackupsTab({ serverId }: { serverId: string }) {
           <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
         </div>
       ) : backups.length === 0 ? (
-        <div className="text-center py-12 text-text-secondary">
-          <HardDrive className="h-8 w-8 mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No backups yet</p>
-        </div>
+        <EmptyState
+          icon={HardDrive}
+          title="No backups yet"
+          hint="Create a backup before risky changes like mod updates, or schedule recurring backups under Tasks."
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
           {backups.map((b, i) => (

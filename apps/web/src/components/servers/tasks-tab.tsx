@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -286,9 +287,16 @@ export function TasksTab({ serverId }: { serverId: string }) {
           <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
         </div>
       ) : tasks.length === 0 ? (
-        <div className="text-center py-12 text-text-secondary">
-          <p className="text-sm">No scheduled tasks</p>
-        </div>
+        <EmptyState
+          icon={CalendarClock}
+          title="No scheduled tasks"
+          hint="Automate recurring backups, restarts, or console commands on a cron schedule."
+          action={
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="h-3.5 w-3.5" /> New Task
+            </Button>
+          }
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
           {tasks.map((task, i) => (

@@ -878,6 +878,7 @@ function InstalledModRow({
             variant="ghost"
             onClick={onSwitchVersion}
             title="Switch version"
+            aria-label="Switch version"
           >
             <ArrowRightLeft className="h-3.5 w-3.5 text-text-secondary" />
           </Button>
@@ -889,6 +890,7 @@ function InstalledModRow({
             onClick={() => updateMutation.mutate()}
             loading={updateMutation.isPending}
             title={`Update to ${update.latest_version}`}
+            aria-label={`Update to ${update.latest_version}`}
           >
             <ArrowUpCircle className="h-3.5 w-3.5" />
           </Button>
@@ -906,6 +908,7 @@ function InstalledModRow({
             onClick={() => pinMutation.mutate()}
             loading={pinMutation.isPending}
             title={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
+            aria-label={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
           >
             {mod.pinned ? (
               <PinOff className="h-3.5 w-3.5 text-amber-400" />
@@ -914,7 +917,13 @@ function InstalledModRow({
             )}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={onUninstall} title="Uninstall">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onUninstall}
+          title="Uninstall"
+          aria-label="Uninstall mod"
+        >
           <Trash2 className="h-3.5 w-3.5 text-red-400" />
         </Button>
       </div>

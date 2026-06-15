@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Globe2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
 import { Panel } from "./shared";
 
@@ -31,9 +32,11 @@ export function WorldsTab({ serverId }: { serverId: string }) {
             <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
           </div>
         ) : worlds.length === 0 ? (
-          <div className="py-10 text-center text-sm text-text-secondary">
-            No world folders detected yet.
-          </div>
+          <EmptyState
+            icon={Globe2}
+            title="No world folders detected"
+            hint="Worlds appear here once the server has run and generated a world directory."
+          />
         ) : (
           <div className="divide-y divide-border rounded-md border border-border">
             {worlds.map((world) => (

@@ -158,6 +158,7 @@ function ServerDetailPage() {
           size="icon"
           onClick={() => navigate({ to: "/servers" })}
           title="Back to servers"
+          aria-label="Back to servers"
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
@@ -176,7 +177,7 @@ function ServerDetailPage() {
 
         {/* Resource metrics */}
         <div className="hidden lg:block w-64">
-          <ResourceChart serverId={id} />
+          <ResourceChart serverId={id} ramMaxMb={server.ram_mb_max} />
         </div>
 
         {/* Controls */}
@@ -188,6 +189,7 @@ function ServerDetailPage() {
               onClick={() => start.mutate()}
               loading={busy}
               title="Start"
+              aria-label="Start server"
             >
               <Play className="h-4 w-4 text-green-400" />
             </Button>
@@ -199,6 +201,7 @@ function ServerDetailPage() {
                 onClick={() => restart.mutate()}
                 loading={busy}
                 title="Restart"
+                aria-label="Restart server"
               >
                 <RotateCcw className="h-4 w-4 text-yellow-400" />
               </Button>
@@ -208,6 +211,7 @@ function ServerDetailPage() {
                 onClick={() => stop.mutate()}
                 loading={busy}
                 title="Stop"
+                aria-label="Stop server"
               >
                 <Square className="h-4 w-4 text-red-400" />
               </Button>
@@ -217,6 +221,7 @@ function ServerDetailPage() {
                 onClick={() => kill.mutate()}
                 loading={busy}
                 title="Kill"
+                aria-label="Kill server"
               >
                 <Skull className="h-4 w-4 text-red-600" />
               </Button>

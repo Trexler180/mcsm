@@ -55,7 +55,12 @@ function formatDuration(joinedAt: string): string {
 }
 
 function formatLastSeen(lastSeen: string): string {
-  const ms = Date.now() - new Date(lastSeen).getTime()
+  const t = new Date(lastSeen).getTime()
+  // Guard against missing / unparseable / epoch-zero timestamps that otherwise
+  // render as absurd durations (e.g. "739781d ago").
+  if (!lastSeen || Number.isNaN(t) || t <= 0) return 'never'
+  const ms = Date.now() - t
+  if (ms < 0) return 'just now'
   const min = Math.floor(ms / 60000)
   if (min < 1) return 'just now'
   if (min < 60) return `${min}m ago`

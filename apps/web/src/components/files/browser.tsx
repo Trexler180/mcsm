@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { FileEntry } from "@/lib/types";
@@ -261,6 +262,17 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
                   </td>
                 </tr>
               ))}
+              {(listing?.entries ?? []).length === 0 && (
+                <tr>
+                  <td colSpan={3} className="px-4 py-12">
+                    <EmptyState
+                      icon={Folder}
+                      title="This folder is empty"
+                      hint="Upload files with the button above, or create a new folder to get started."
+                    />
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}

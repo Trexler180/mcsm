@@ -52,7 +52,15 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
   )
 }
 
-export function ResourceChart({ serverId }: { serverId: string }) {
+export function ResourceChart({
+  serverId,
+  ramMaxMb,
+}: {
+  serverId: string
+  // The server's configured max heap, so we can graph process RAM against the
+  // limit it actually competes for rather than the (much larger) host total.
+  ramMaxMb?: number
+}) {
   const [samples, setSamples] = useState<Sample[]>([])
   const wsRef = useRef<ServerMetrics | null>(null)
 
@@ -87,9 +95,14 @@ export function ResourceChart({ serverId }: { serverId: string }) {
 
   const latest = samples[samples.length - 1]
   const cpuData = samples.map((s) => s.cpu)
-  const ramData = samples.map((s) =>
-    s.ram_total_mb > 0 ? (s.ram_used_mb / s.ram_total_mb) * 100 : 0,
-  )
+  // Graph process RAM as a fraction of the server's configured heap when we know
+  // it; otherwise fall back to the host total. ram_used_mb is per-process RSS,
+  // ram_total_mb is host memory — graphing one against the other understates the
+  // server's actual memory pressure.
+  const ramData = samples.map((s) => {
+    const denom = ramMaxMb && ramMaxMb > 0 ? ramMaxMb : s.ram_total_mb
+    return denom > 0 ? (s.ram_used_mb / denom) * 100 : 0
+  })
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -110,7 +123,9 @@ export function ResourceChart({ serverId }: { serverId: string }) {
               <>
                 <span className="text-sm">{latest.ram_used_mb} MB</span>
                 <span className="block text-[10px] text-text-secondary">
-                  / {latest.ram_total_mb} MB
+                  {ramMaxMb && ramMaxMb > 0
+                    ? `/ ${ramMaxMb} MB heap`
+                    : `/ ${latest.ram_total_mb} MB host`}
                 </span>
               </>
             ) : (
@@ -119,6 +134,11 @@ export function ResourceChart({ serverId }: { serverId: string }) {
           </span>
         </div>
         <Sparkline data={ramData} color="#3b82f6" />
+        {latest && ramMaxMb && ramMaxMb > 0 ? (
+          <p className="mt-1 text-[10px] text-text-secondary">
+            Host: {latest.ram_total_mb} MB total
+          </p>
+        ) : null}
       </div>
     </div>
   )
