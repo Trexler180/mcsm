@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -307,28 +306,7 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := map[string]any{
-		"directory":   srv.DirectoryPath,
-		"java_binary": srv.JavaBinary,
-		"jvm_args":    srv.JVMArgs,
-		"start_args":  []string{"nogui"},
-		"platform":    srv.Platform,
-		"mc_version":  srv.MCVersion,
-	}
-
-	ramArg := false
-	for _, a := range srv.JVMArgs {
-		if len(a) > 4 && a[:4] == "-Xmx" {
-			ramArg = true
-			break
-		}
-	}
-	if !ramArg {
-		cfg["jvm_args"] = append(srv.JVMArgs,
-			"-Xms"+ramStr(srv.RAMMbMin),
-			"-Xmx"+ramStr(srv.RAMMbMax),
-		)
-	}
+	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
 
 	// Long deadline because the agent may auto-install the server runtime on
 	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
@@ -540,11 +518,4 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
-}
-
-func ramStr(mb int) string {
-	if mb >= 1024 && mb%1024 == 0 {
-		return fmt.Sprintf("%dg", mb/1024)
-	}
-	return fmt.Sprintf("%dm", mb)
 }

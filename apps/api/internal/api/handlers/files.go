@@ -45,6 +45,10 @@ func (h *FileHandlers) List(w http.ResponseWriter, r *http.Request) {
 	h.proxyToAgent(w, r, "/files")
 }
 
+func (h *FileHandlers) Tree(w http.ResponseWriter, r *http.Request) {
+	h.proxyToAgent(w, r, "/files/tree")
+}
+
 func (h *FileHandlers) GetContent(w http.ResponseWriter, r *http.Request) {
 	h.proxyToAgent(w, r, "/files/content")
 }

@@ -57,19 +57,67 @@ func TestRefreshRotatesRefreshToken(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	var out struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
+		AccessToken string `json:"access_token"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.AccessToken == "" || out.RefreshToken == "" || out.RefreshToken == oldToken {
+	if out.AccessToken == "" {
 		t.Fatalf("unexpected token response: %+v", out)
+	}
+	cookie := refreshCookieFromResponse(t, rr.Result())
+	if cookie.Value == "" || cookie.Value == oldToken {
+		t.Fatalf("unexpected refresh cookie: %+v", cookie)
+	}
+	if !cookie.HttpOnly {
+		t.Fatal("refresh cookie should be HttpOnly")
+	}
+	if cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("refresh cookie SameSite=%v, want Strict", cookie.SameSite)
 	}
 	if _, err := s.GetRefreshToken(ctx, oldHash); err == nil {
 		t.Fatal("old refresh token should be invalidated")
 	}
-	if _, err := s.GetRefreshToken(ctx, hashToken(out.RefreshToken)); err != nil {
+	if _, err := s.GetRefreshToken(ctx, hashToken(cookie.Value)); err != nil {
 		t.Fatalf("new refresh token was not stored: %v", err)
 	}
+}
+
+func TestRefreshAcceptsCookieToken(t *testing.T) {
+	ctx := context.Background()
+	s := authTestStore(t)
+	user, err := s.CreateUser(ctx, "owner@example.com", "hash", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldToken, oldHash, err := generateRefreshToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateRefreshToken(ctx, user.ID, oldHash, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewAuthHandlers(s, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: oldToken})
+	rr := httptest.NewRecorder()
+	h.Refresh(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if cookie := refreshCookieFromResponse(t, rr.Result()); cookie.Value == "" || cookie.Value == oldToken {
+		t.Fatalf("unexpected refresh cookie: %+v", cookie)
+	}
+}
+
+func refreshCookieFromResponse(t *testing.T, res *http.Response) *http.Cookie {
+	t.Helper()
+	for _, c := range res.Cookies() {
+		if c.Name == refreshCookieName {
+			return c
+		}
+	}
+	t.Fatal("refresh cookie was not set")
+	return nil
 }

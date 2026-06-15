@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -269,6 +272,105 @@ func (c *Client) PurgeServer(ctx context.Context, serverID, directory string, fi
 	}
 	defer resp.Body.Close()
 	return checkError(resp)
+}
+
+// UploadFile streams a local file to the agent's upload endpoint without
+// buffering the whole file in memory: an io.Pipe feeds a multipart writer that
+// copies straight from disk.
+func (c *Client) UploadFile(ctx context.Context, serverID, destDir, filename, localPath string) error {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open temp: %w", err)
+	}
+	defer f.Close()
+
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		fw, err := mw.CreateFormFile("files", filename)
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(fw, f); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.CloseWithError(mw.Close())
+	}()
+
+	uploadURL := fmt.Sprintf("%s/agent/v1/servers/%s/files/upload?path=%s",
+		c.BaseURL, serverID, url.QueryEscape(destDir))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload to agent failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("agent upload returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteFile removes a file in the server directory. A 404 is treated as
+// success — the file is already gone, which is what the caller wanted.
+func (c *Client) DeleteFile(ctx context.Context, serverID, path string) error {
+	delURL := fmt.Sprintf("%s/agent/v1/servers/%s/files?path=%s",
+		c.BaseURL, serverID, url.QueryEscape(path))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, delURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// StartConfig builds the /start payload for a server. When no explicit -Xmx is
+// present in jvmArgs, the panel's RAM settings are translated to -Xms/-Xmx.
+func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVersion string, ramMbMin, ramMbMax int) map[string]any {
+	hasXmx := false
+	for _, a := range jvmArgs {
+		if strings.HasPrefix(a, "-Xmx") {
+			hasXmx = true
+			break
+		}
+	}
+	if !hasXmx {
+		jvmArgs = append(append([]string{}, jvmArgs...),
+			"-Xms"+ramArg(ramMbMin),
+			"-Xmx"+ramArg(ramMbMax),
+		)
+	}
+	return map[string]any{
+		"directory":   directory,
+		"java_binary": javaBinary,
+		"jvm_args":    jvmArgs,
+		"start_args":  []string{"nogui"},
+		"platform":    platform,
+		"mc_version":  mcVersion,
+	}
+}
+
+func ramArg(mb int) string {
+	if mb >= 1024 && mb%1024 == 0 {
+		return fmt.Sprintf("%dg", mb/1024)
+	}
+	return fmt.Sprintf("%dm", mb)
 }
 
 // ProxyHTTP forwards an HTTP request to the agent and writes the response back.

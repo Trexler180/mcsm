@@ -23,6 +23,7 @@ import (
 
 	panelapi "github.com/mcsm/api/internal/api"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/poller"
 	"github.com/mcsm/api/internal/scheduler"
 	"github.com/mcsm/api/internal/store"
@@ -139,7 +140,7 @@ func main() {
 	}
 	log.Println("migrations applied")
 
-	s := store.New(db)
+	s := store.New(db).WithEncryption(resolveMasterKey(dbPath, jwtSecret))
 
 	// Seed admin user on first boot
 	if n, _ := s.CountUsers(ctx); n == 0 {
@@ -201,7 +202,8 @@ func main() {
 		log.Printf("registered local agent node: %s (%s://%s:%d)", n.Name, n.Scheme, n.FQDN, n.Port)
 	}
 
-	router := panelapi.NewRouter(s, jwtSecret, serverRoot)
+	updater := autoupdate.New(s)
+	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", host, port),
@@ -214,7 +216,7 @@ func main() {
 	// Background workers: cron-driven scheduled tasks + status synchronization
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
-	sched := scheduler.New(s)
+	sched := scheduler.New(s, updater)
 	sched.Start(bgCtx)
 
 	go poller.Run(bgCtx, s)
@@ -268,6 +270,47 @@ func defaultServerRoot() string {
 func isDevMode() bool {
 	v := strings.ToLower(os.Getenv("APP_ENV"))
 	return os.Getenv("MCSM_DEV_MODE") == "1" || v == "dev" || v == "development" || v == "local"
+}
+
+// resolveMasterKey returns the master secret used to encrypt app secrets at
+// rest, chosen so stored keys survive restarts without re-entry. Precedence:
+//
+//  1. APP_ENCRYPTION_KEY — explicit, strongest: the key lives only in the
+//     environment, never on disk, and is unaffected by anything else.
+//  2. A persistent key auto-generated once and stored beside the database
+//     (override the path with APP_ENCRYPTION_KEY_FILE). This is the zero-config
+//     default: it survives restarts and JWT_SECRET rotation, so a key pasted in
+//     Settings stays valid. At-rest protection here is only as strong as the
+//     file permissions on the key file.
+//  3. The JWT secret — last-resort fallback only if the key file can't be read
+//     or written. If that secret is ephemeral (dev mode, no JWT_SECRET set),
+//     stored secrets won't survive a restart; the log line says so.
+func resolveMasterKey(dbPath, jwtSecret string) string {
+	if k := os.Getenv("APP_ENCRYPTION_KEY"); k != "" {
+		return k
+	}
+
+	keyPath := os.Getenv("APP_ENCRYPTION_KEY_FILE")
+	if keyPath == "" {
+		keyPath = filepath.Join(filepath.Dir(dbPath), ".mcsm-secret-key")
+	}
+	if b, err := os.ReadFile(keyPath); err == nil {
+		if k := strings.TrimSpace(string(b)); k != "" {
+			return k
+		}
+	}
+
+	k, err := randomHex(32)
+	if err != nil {
+		log.Printf("could not generate app encryption key (%v); falling back to JWT secret", err)
+		return jwtSecret
+	}
+	if err := os.WriteFile(keyPath, []byte(k), 0600); err != nil {
+		log.Printf("could not persist app encryption key at %s (%v); stored secrets will not survive restart unless APP_ENCRYPTION_KEY is set", keyPath, err)
+		return jwtSecret
+	}
+	log.Printf("generated persistent app encryption key at %s", keyPath)
+	return k
 }
 
 func ensureWritableDir(dir string) error {

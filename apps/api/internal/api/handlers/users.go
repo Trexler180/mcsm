@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 )
+
+var validRoles = map[string]bool{"admin": true, "operator": true, "user": true}
 
 type UserHandlers struct {
 	store     *store.Store
@@ -55,6 +58,74 @@ func (h *UserHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, user)
+}
+
+func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := h.store.GetUserByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	var body struct {
+		DisplayName *string `json:"display_name"`
+		Role        *string `json:"role"`
+		Password    string  `json:"password"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	role := existing.Role
+	if body.Role != nil && *body.Role != "" {
+		if !validRoles[*body.Role] {
+			writeError(w, http.StatusBadRequest, "role must be admin, operator, or user")
+			return
+		}
+		role = *body.Role
+	}
+
+	// Guard against an admin locking themselves out by self-demotion.
+	if claims := auth.ClaimsFrom(r.Context()); claims != nil && claims.UserID == id && role != "admin" {
+		writeError(w, http.StatusBadRequest, "you cannot change your own admin role")
+		return
+	}
+
+	displayName := existing.DisplayName
+	if body.DisplayName != nil {
+		trimmed := strings.TrimSpace(*body.DisplayName)
+		if trimmed == "" {
+			displayName = nil
+		} else {
+			displayName = &trimmed
+		}
+	}
+
+	if err := h.store.UpdateUser(r.Context(), id, displayName, role); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if body.Password != "" {
+		hash, err := auth.HashPassword(body.Password)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "password hashing failed")
+			return
+		}
+		if err := h.store.UpdateUserPassword(r.Context(), id, hash); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	updated, err := h.store.GetUserByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (h *UserHandlers) Delete(w http.ResponseWriter, r *http.Request) {

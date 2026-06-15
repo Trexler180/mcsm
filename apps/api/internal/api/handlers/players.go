@@ -53,3 +53,16 @@ func (h *PlayersHandlers) List(w http.ResponseWriter, r *http.Request) {
 func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 	h.proxy(w, r, "/players/"+chi.URLParam(r, "uuid"))
 }
+
+// Meta proxies the server's Bedrock-bridge info (Geyser/Floodgate install +
+// username prefix).
+func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players/meta")
+}
+
+// Action proxies a player administration action (op/ban/whitelist/etc.). The
+// agent applies it live via console when the server is up, or by editing the
+// config files directly when it is down.
+func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players/action")
+}

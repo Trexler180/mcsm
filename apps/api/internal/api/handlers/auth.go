@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mcsm/api/internal/auth"
@@ -16,6 +17,10 @@ type AuthHandlers struct {
 	store     *store.Store
 	jwtSecret string
 }
+
+const refreshCookieName = "mcsm_refresh_token"
+
+var refreshTokenTTL = 7 * 24 * time.Hour
 
 func NewAuthHandlers(s *store.Store, jwtSecret string) *AuthHandlers {
 	return &AuthHandlers{store: s, jwtSecret: jwtSecret}
@@ -49,34 +54,33 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	expiresAt := time.Now().Add(refreshTokenTTL)
 	if err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, expiresAt); err != nil {
 		writeError(w, http.StatusInternalServerError, "token storage error")
 		return
 	}
+	setRefreshCookie(w, r, refreshToken, expiresAt)
 
 	_ = h.store.UpdateUserLastLogin(r.Context(), user.ID)
 	// Login is a public route (no JWT claims yet), so attribute directly.
 	h.store.LogAction(r.Context(), user.ID, "", "auth.login", clientIP(r), nil)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"user":          user,
+		"access_token": accessToken,
+		"user":         user,
 	})
 }
 
 func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := decode(r, &body); err != nil || body.RefreshToken == "" {
+	refreshToken := refreshTokenFromRequest(r)
+	if refreshToken == "" {
 		writeError(w, http.StatusBadRequest, "refresh_token required")
 		return
 	}
 
-	rt, err := h.store.GetRefreshToken(r.Context(), hashToken(body.RefreshToken))
+	rt, err := h.store.GetRefreshToken(r.Context(), hashToken(refreshToken))
 	if err != nil {
+		clearRefreshCookie(w, r)
 		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
@@ -103,26 +107,24 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "token error")
 		return
 	}
-	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	expiresAt := time.Now().Add(refreshTokenTTL)
 	if err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, expiresAt); err != nil {
 		writeError(w, http.StatusInternalServerError, "token storage error")
 		return
 	}
+	setRefreshCookie(w, r, refreshToken, expiresAt)
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
+		"access_token": accessToken,
 	})
 }
 
 func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		RefreshToken string `json:"refresh_token"`
+	refreshToken := refreshTokenFromRequest(r)
+	if refreshToken != "" {
+		_ = h.store.DeleteRefreshToken(r.Context(), hashToken(refreshToken))
 	}
-	_ = decode(r, &body)
-	if body.RefreshToken != "" {
-		_ = h.store.DeleteRefreshToken(r.Context(), hashToken(body.RefreshToken))
-	}
+	clearRefreshCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
@@ -153,4 +155,48 @@ func generateRefreshToken() (token, hash string, err error) {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func refreshTokenFromRequest(r *http.Request) string {
+	if c, err := r.Cookie(refreshCookieName); err == nil {
+		return c.Value
+	}
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	_ = decode(r, &body)
+	if body.RefreshToken != "" {
+		return body.RefreshToken
+	}
+	return ""
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    token,
+		Path:     "/api/v1/auth",
+		Expires:  expiresAt,
+		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/api/v1/auth",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

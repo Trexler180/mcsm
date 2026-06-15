@@ -17,9 +17,16 @@ import (
 	"github.com/mcsm/api/internal/store"
 )
 
+// ModUpdater triggers a safe auto-update run for a server. Satisfied by
+// *autoupdate.Engine; the run itself is asynchronous.
+type ModUpdater interface {
+	Trigger(ctx context.Context, serverID, trigger string) (*store.ModUpdateRun, error)
+}
+
 type Scheduler struct {
 	cron       *cron.Cron
 	store      *store.Store
+	updater    ModUpdater
 	refreshInt time.Duration
 
 	mu      sync.Mutex
@@ -32,11 +39,12 @@ type registration struct {
 	action   string
 }
 
-func New(s *store.Store) *Scheduler {
+func New(s *store.Store, updater ModUpdater) *Scheduler {
 	return &Scheduler{
 		// SecondField off; we use 5-field cron expressions like "0 4 * * *".
 		cron:       cron.New(),
 		store:      s,
+		updater:    updater,
 		refreshInt: 30 * time.Second,
 		entries:    map[string]registration{},
 	}
@@ -136,6 +144,23 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 		log.Printf("scheduler: task %s server lookup: %v", task.ID, err)
 		return
 	}
+
+	// mod_update runs through the auto-update engine (which manages its own
+	// agent connection and run lifecycle), not the per-task agent client.
+	if task.Action == "mod_update" {
+		if s.updater == nil {
+			log.Printf("scheduler: task %s skipped (no auto-update engine)", task.Name)
+			return
+		}
+		run, err := s.updater.Trigger(ctx, srv.ID, "scheduled")
+		if err != nil {
+			log.Printf("scheduler: task %s auto-update: %v", task.Name, err)
+			return
+		}
+		log.Printf("scheduler: task %q started auto-update run %s", task.Name, run.ID)
+		return
+	}
+
 	node, err := s.store.GetNode(ctx, srv.NodeID)
 	if err != nil {
 		log.Printf("scheduler: task %s node lookup: %v", task.ID, err)

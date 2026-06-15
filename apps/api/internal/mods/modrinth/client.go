@@ -281,7 +281,10 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 
 // Category is a Modrinth tag from /v2/tag/category. The endpoint also returns
 // loader entries; callers filter by ProjectType to keep only the relevant ones.
+// The curseforge package reuses this shape: there ID carries the numeric CF
+// category id search filters by, and Icon is an image URL instead of inline SVG.
 type Category struct {
+	ID          string `json:"id,omitempty"`
 	Icon        string `json:"icon"`
 	Name        string `json:"name"`
 	ProjectType string `json:"project_type"`

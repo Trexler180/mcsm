@@ -36,6 +36,14 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// currentUserID returns the authenticated user's ID from JWT claims, or "".
+func currentUserID(r *http.Request) string {
+	if c := auth.ClaimsFrom(r.Context()); c != nil {
+		return c.UserID
+	}
+	return ""
+}
+
 // audit records an action attributed to the current user (from JWT claims) and
 // the caller IP. Fire-and-forget; never blocks the response on logging.
 func audit(s *store.Store, r *http.Request, serverID, action string, detail any) {

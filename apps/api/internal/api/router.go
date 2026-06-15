@@ -8,10 +8,11 @@ import (
 	"github.com/mcsm/api/internal/api/handlers"
 	apimw "github.com/mcsm/api/internal/api/middleware"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/store"
 )
 
-func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
+func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
@@ -24,7 +25,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	serverH := handlers.NewServerHandlers(s, serverRoot)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s)
+	modH := handlers.NewModHandlers(s, updater)
 	backupH := handlers.NewBackupHandlers(s)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
@@ -32,6 +33,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 	playersH := handlers.NewPlayersHandlers(s)
 	auditH := handlers.NewAuditHandlers(s)
 	mcH := handlers.NewMinecraftHandlers()
+	settingsH := handlers.NewSettingsHandlers(s)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
@@ -87,10 +89,13 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 
 					// Players (online roster + offline from world files)
 					r.Get("/players", playersH.List)
+					r.Get("/players/meta", playersH.Meta)
+					r.Post("/players/action", playersH.Action)
 					r.Get("/players/{uuid}", playersH.Detail)
 
 					// Files
 					r.Get("/files", fileH.List)
+					r.Get("/files/tree", fileH.Tree)
 					r.Get("/files/content", fileH.GetContent)
 					r.Put("/files/content", fileH.PutContent)
 					r.Delete("/files", fileH.Delete)
@@ -108,9 +113,15 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 					r.Get("/mods/version", modH.GetVersion)
 					r.Get("/mods/versions", modH.GetVersions)
 					r.Post("/mods/install", modH.Install)
+					r.Post("/mods/upload", modH.UploadCustom)
 					r.Post("/mods/disable-conflict", modH.DisableConflict)
 					r.Post("/mods/install-modpack", modH.InstallModpack)
 					r.Get("/mods/updates", modH.Updates)
+					r.Post("/mods/auto-update", modH.AutoUpdate)
+					r.Get("/mods/update-runs", modH.ListUpdateRuns)
+					r.Get("/mods/update-runs/{runId}", modH.GetUpdateRun)
+					r.Get("/mods/skipped-versions", modH.ListSkippedVersions)
+					r.Delete("/mods/skipped-versions", modH.UnskipVersion)
 					r.Post("/mods/{modId}/update", modH.Update)
 					r.Post("/mods/{modId}/pin", modH.Pin)
 					r.Post("/mods/{modId}/enabled", modH.SetEnabled)
@@ -140,7 +151,16 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string) http.Handler {
 				r.Use(auth.AdminOnly)
 				r.Get("/", userH.List)
 				r.Post("/", userH.Create)
+				r.Put("/{id}", userH.Update)
 				r.Delete("/{id}", userH.Delete)
+			})
+
+			// App settings — integration secrets (admin only)
+			r.Route("/settings/integrations", func(r chi.Router) {
+				r.Use(auth.AdminOnly)
+				r.Get("/", settingsH.ListIntegrations)
+				r.Put("/{key}", settingsH.SetIntegration)
+				r.Delete("/{key}", settingsH.DeleteIntegration)
 			})
 
 			// Global audit log (admin only)
