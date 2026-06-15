@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +20,14 @@ import {
   X,
   RefreshCw,
   ArrowDownAZ,
+  Upload,
+  SlidersHorizontal,
+  ShieldCheck,
+  Ban,
+  CheckCircle2,
+  XCircle,
+  Undo2,
+  KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +42,8 @@ import type {
   ModSortIndex,
   ModSource,
   ModUpdate,
+  ModUpdateRun,
+  ModUpdateStep,
   ModVersion,
 } from "@/lib/types";
 
@@ -82,6 +93,170 @@ type BulkUpdateProgress = {
   currentName: string;
 };
 
+// ── Safe auto-update banner ──────────────────────────────────────────
+// Renders a running run's live phase + per-mod steps, or a finished run's
+// outcome (with dismiss) until the user closes it.
+
+const RUN_PHASE_LABELS: Record<string, string> = {
+  checking: "Checking for updates…",
+  applying: "Applying updates…",
+  verifying: "Restarting & verifying boot…",
+  isolating: "Boot failed — isolating the broken update…",
+  reverting: "Boot failed — reverting updates…",
+  restoring: "Restoring server state…",
+  done: "Finished",
+};
+
+const RUN_STATUS_LABELS: Record<string, string> = {
+  success: "Safe update finished",
+  no_updates: "Everything is up to date",
+  partial: "Safe update finished with issues",
+  reverted: "Updates reverted — broken versions blocklisted",
+  failed: "Safe update failed",
+};
+
+function StepStatusIcon({ status }: { status: ModUpdateStep["status"] }) {
+  switch (status) {
+    case "updated":
+      return <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />;
+    case "reverted_skipped":
+      return <Undo2 className="h-3.5 w-3.5 text-warning shrink-0" />;
+    case "failed":
+      return <XCircle className="h-3.5 w-3.5 text-danger shrink-0" />;
+    default:
+      return (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />
+      );
+  }
+}
+
+function stepLabel(s: ModUpdateStep): string {
+  switch (s.status) {
+    case "updated":
+      return `${s.from_version} → ${s.to_version}`;
+    case "reverted_skipped":
+      return `${s.to_version} broke the boot — reverted to ${s.from_version}, version blocklisted`;
+    case "failed":
+      return s.error || "update failed";
+    default:
+      return `${s.from_version} → ${s.to_version}…`;
+  }
+}
+
+function AutoUpdateBanner({
+  run,
+  onDismiss,
+}: {
+  run: ModUpdateRun;
+  onDismiss?: () => void;
+}) {
+  const running = run.status === "running";
+  const detail = run.detail;
+  const headline = running
+    ? RUN_PHASE_LABELS[detail?.phase ?? "checking"] || "Working…"
+    : RUN_STATUS_LABELS[run.status] || "Safe update finished";
+  const tone =
+    run.status === "failed"
+      ? "text-danger"
+      : run.status === "reverted" || run.status === "partial"
+        ? "text-warning"
+        : "text-text-primary";
+  const steps = detail?.mods ?? [];
+
+  return (
+    <div className="border-b border-border bg-surface px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          {running ? (
+            <Loader2 className="h-4 w-4 animate-spin text-accent shrink-0" />
+          ) : (
+            <ShieldCheck className={`h-4 w-4 shrink-0 ${tone}`} />
+          )}
+          <span className={`font-medium ${tone}`}>{headline}</span>
+          {detail?.message && (
+            <span className="min-w-0 truncate text-text-secondary">
+              {detail.message}
+            </span>
+          )}
+        </div>
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            className="text-text-secondary hover:text-text-primary shrink-0"
+            title="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+      {steps.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {steps.map((s) => (
+            <li
+              key={s.mod_id}
+              className="flex items-center gap-2 text-xs text-text-secondary"
+            >
+              <StepStatusIcon status={s.status} />
+              <span className="font-medium text-text-primary">{s.name}</span>
+              <span className="min-w-0 truncate">{stepLabel(s)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// sourceBadgeClass colors the installed-list source chip per origin: Modrinth
+// green, CurseForge orange, Hangar blue, SpigotMC yellow, custom uploads neutral.
+function sourceBadgeClass(source: string): string {
+  switch (source) {
+    case "modrinth":
+      return "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+    case "curseforge":
+      return "bg-orange-500/15 text-orange-400 border-orange-500/30";
+    case "hangar":
+      return "bg-sky-500/15 text-sky-400 border-sky-500/30";
+    case "spigotmc":
+      return "bg-yellow-500/15 text-yellow-400 border-yellow-500/30";
+    default:
+      return "bg-surface-2 text-text-secondary border-border/50";
+  }
+}
+
+// environmentTag derives a side chip from Modrinth's client_side/server_side
+// metadata. CurseForge doesn't expose sides, so its hits carry empty values
+// and get no tag.
+function environmentTag(
+  clientSide?: string,
+  serverSide?: string,
+): { label: string; className: string; title: string } | null {
+  const onServer = serverSide === "required" || serverSide === "optional";
+  const onClient = clientSide === "required" || clientSide === "optional";
+  if (onServer && clientSide === "unsupported") {
+    return {
+      label: "server only",
+      className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+      title: "Runs on the server only — players don't need to install it",
+    };
+  }
+  if (onServer) {
+    return {
+      label: "server any",
+      className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
+      title: "Runs on the server; also used or needed on the client",
+    };
+  }
+  if (onClient && serverSide === "unsupported") {
+    return {
+      label: "client only",
+      className: "bg-rose-500/15 text-rose-400 border-rose-500/30",
+      title: "Client-side only — does nothing when installed on a server",
+    };
+  }
+  return null;
+}
+
 function formatDownloads(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
@@ -91,14 +266,17 @@ function formatDownloads(n: number): string {
 // compatible reports whether a search hit can install onto the server without a
 // forced override. Modrinth lists loader names inside hit.categories; CurseForge
 // does not, so callers pass an empty serverLoader for CF to skip the loader half.
+// Sources without reliable per-version data (SpigotMC) pass an empty serverMc;
+// hits with no version list at all also skip the MC gate.
 function compatible(
   hit: ModSearchHit,
   serverLoader: string,
   serverMc: string,
   projectType: ModProjectType,
 ): boolean {
-  if (serverMc && !hit.versions.includes(serverMc)) return false;
-  if (projectType === "mod" && serverLoader && !hit.categories.includes(serverLoader))
+  const vers = hit.versions ?? [];
+  if (serverMc && vers.length > 0 && !vers.includes(serverMc)) return false;
+  if (projectType === "mod" && serverLoader && !(hit.categories ?? []).includes(serverLoader))
     return false;
   return true;
 }
@@ -557,6 +735,7 @@ function InstalledModRow({
     staleTime: 10 * 60_000,
   });
   const project = projectQuery.data;
+  const envTag = environmentTag(project?.client_side, project?.server_side);
 
   const updateMutation = useMutation({
     mutationFn: () => api.mods.update(serverId, mod.id),
@@ -623,6 +802,24 @@ function InstalledModRow({
             {!mod.enabled && (
               <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-2 text-text-secondary border border-border/50">
                 disabled
+              </span>
+            )}
+            <span
+              className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${sourceBadgeClass(mod.source)}`}
+              title={
+                mod.source === "custom"
+                  ? "Uploaded manually"
+                  : `Installed from ${mod.source}`
+              }
+            >
+              {mod.source}
+            </span>
+            {envTag && (
+              <span
+                className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${envTag.className}`}
+                title={envTag.title}
+              >
+                {envTag.label}
               </span>
             )}
             {mod.installed_as_dep && (
@@ -702,19 +899,21 @@ function InstalledModRow({
           disabled={enabledMutation.isPending}
           title={mod.enabled ? "Disable (keep file)" : "Enable"}
         />
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => pinMutation.mutate()}
-          loading={pinMutation.isPending}
-          title={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
-        >
-          {mod.pinned ? (
-            <PinOff className="h-3.5 w-3.5 text-amber-400" />
-          ) : (
-            <Pin className="h-3.5 w-3.5 text-text-secondary" />
-          )}
-        </Button>
+        {mod.source_id && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => pinMutation.mutate()}
+            loading={pinMutation.isPending}
+            title={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
+          >
+            {mod.pinned ? (
+              <PinOff className="h-3.5 w-3.5 text-amber-400" />
+            ) : (
+              <Pin className="h-3.5 w-3.5 text-text-secondary" />
+            )}
+          </Button>
+        )}
         <Button size="sm" variant="ghost" onClick={onUninstall} title="Uninstall">
           <Trash2 className="h-3.5 w-3.5 text-red-400" />
         </Button>
@@ -786,11 +985,14 @@ function SearchHitCard({
     onError: (e: Error) => error("Install failed", e.message),
   });
 
+  const envTag = environmentTag(hit.client_side, hit.server_side);
   const isInstalled = installedIds.has(hit.project_id);
+  // SpigotMC "tested versions" are major-only and often stale, so skip the MC
+  // gate there rather than flagging nearly everything incompatible.
   const isCompatible = compatible(
     hit,
     source === "modrinth" ? serverLoader : "",
-    serverMc,
+    source === "spigotmc" ? "" : serverMc,
     projectType,
   );
 
@@ -864,8 +1066,16 @@ function SearchHitCard({
           <p className="text-xs text-text-secondary line-clamp-2 mt-0.5">
             {hit.description}
           </p>
-          {hit.categories.length > 0 && (
+          {(envTag || hit.categories.length > 0) && (
             <div className="flex flex-wrap gap-1 mt-1.5">
+              {envTag && (
+                <span
+                  className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${envTag.className}`}
+                  title={envTag.title}
+                >
+                  {envTag.label}
+                </span>
+              )}
               {hit.categories.slice(0, 5).map((c) => (
                 <span
                   key={c}
@@ -1023,8 +1233,8 @@ export function ModSearch({
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [mcFilter, setMcFilter] = useState<string>(mcVersion);
   const [loaderFilter, setLoaderFilter] = useState<string>(loader);
-  // Default to server-only content (server-side mods the client doesn't need).
-  const [environment, setEnvironment] = useState<string>("server_only");
+  // Default to anything that runs on the server (client-optional included).
+  const [environment, setEnvironment] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [hideInstalled, setHideInstalled] = useState(false);
   // Name filter for the Installed tab (independent of the Browse search box).
@@ -1060,11 +1270,43 @@ export function ModSearch({
   const [activeTab, setActiveTab] = useState<"installed" | "search">(
     "installed",
   );
+  // Browse filters live in a slide-in drawer on phones; static sidebar on ≥md.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [bulkUpdateProgress, setBulkUpdateProgress] =
     useState<BulkUpdateProgress | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   // Mods filter by modloader; plugins/datapacks/etc. don't.
   const browseLoader = projectType === "mod" ? loaderFilter : "";
+
+  // Sort vocabularies differ per source: CurseForge has no relevance/follows
+  // ranking (both map to popularity server-side), Hangar's "follows" is stars,
+  // Spiget's is likes (and its relevance is just download popularity).
+  const sortOptions: { value: ModSortIndex; label: string }[] =
+    source === "curseforge"
+      ? [
+          { value: "relevance", label: "Popularity" },
+          { value: "downloads", label: "Downloads" },
+          { value: "newest", label: "Newest" },
+          { value: "updated", label: "Updated" },
+        ]
+      : source === "hangar"
+        ? [
+            { value: "relevance", label: "Relevance" },
+            { value: "downloads", label: "Downloads" },
+            { value: "follows", label: "Stars" },
+            { value: "newest", label: "Newest" },
+            { value: "updated", label: "Updated" },
+          ]
+        : source === "spigotmc"
+          ? [
+              { value: "relevance", label: "Popularity" },
+              { value: "downloads", label: "Downloads" },
+              { value: "follows", label: "Likes" },
+              { value: "newest", label: "Newest" },
+              { value: "updated", label: "Updated" },
+            ]
+          : SORTS;
 
   // Reset paging whenever any browse dimension changes.
   useEffect(() => {
@@ -1097,8 +1339,72 @@ export function ModSearch({
   const updatesByMod = new Map(updates.map((u) => [u.mod_id, u]));
   const refreshingContent = refreshingInstalled || refreshingUpdates;
 
-  // CurseForge still needs a query; Modrinth browses with an empty one.
-  const browseEnabled = source === "modrinth" || query.length >= 2;
+  // ── Safe auto-update: trigger a run, poll it live, surface the outcome ──
+  const [dismissedRunId, setDismissedRunId] = useState<string | null>(null);
+  const [showSkipped, setShowSkipped] = useState(false);
+
+  const { data: updateRuns = [] } = useQuery({
+    queryKey: ["mod-update-runs", serverId],
+    queryFn: () => api.mods.updateRuns(serverId, 5),
+    // Poll fast while a run is in flight so the banner tracks phases live.
+    refetchInterval: (q) =>
+      q.state.data?.some((r) => r.status === "running") ? 2500 : false,
+  });
+  const activeRun = updateRuns.find((r) => r.status === "running") ?? null;
+  const lastRun = updateRuns[0] ?? null;
+  const prevActiveRunId = useRef<string | null>(null);
+  useEffect(() => {
+    // When the run we were watching reaches a terminal state, the mod list and
+    // available-updates list may both have changed (updates kept or reverted).
+    if (prevActiveRunId.current && !activeRun) {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-skipped", serverId] });
+    }
+    prevActiveRunId.current = activeRun?.id ?? null;
+  }, [activeRun, qc, serverId]);
+  // Show the most recent finished run until dismissed, but only if it finished
+  // within the last 10 minutes (don't resurrect week-old banners on mount).
+  const finishedBannerRun =
+    !activeRun &&
+    lastRun &&
+    lastRun.status !== "running" &&
+    lastRun.id !== dismissedRunId &&
+    lastRun.finished_at &&
+    Date.now() - new Date(lastRun.finished_at).getTime() < 10 * 60_000
+      ? lastRun
+      : null;
+  const bannerRun = activeRun ?? finishedBannerRun;
+
+  const { data: skippedVersions = [] } = useQuery({
+    queryKey: ["mod-skipped", serverId],
+    queryFn: () => api.mods.skippedVersions(serverId),
+    staleTime: 60_000,
+  });
+
+  const autoUpdateMutation = useMutation({
+    mutationFn: () => api.mods.autoUpdate(serverId),
+    onSuccess: (run) => {
+      setDismissedRunId(null);
+      qc.setQueryData<ModUpdateRun[]>(["mod-update-runs", serverId], (old) => [
+        run,
+        ...(old ?? []),
+      ]);
+      qc.invalidateQueries({ queryKey: ["mod-update-runs", serverId] });
+    },
+    onError: (e: Error) => error("Safe update failed to start", e.message),
+  });
+
+  const unskipMutation = useMutation({
+    mutationFn: (v: { project_id: string; version_id: string }) =>
+      api.mods.unskipVersion(serverId, v.project_id, v.version_id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mod-skipped", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      success("Version allowed again");
+    },
+    onError: (e: Error) => error("Failed to allow version", e.message),
+  });
 
   const { data: searchResult, isFetching: searching } = useQuery({
     queryKey: [
@@ -1127,14 +1433,16 @@ export function ModSearch({
         limit: PAGE_SIZE,
         offset,
       }),
-    enabled: browseEnabled,
+    // Skip CurseForge requests until a key is configured — the UI shows an
+    // add-a-key prompt instead, so the call would just 502.
+    enabled: source !== "curseforge" || curseforgeEnabled,
   });
 
   const { data: categories = [] } = useQuery({
-    queryKey: ["mod-categories", projectType],
-    queryFn: () => api.mods.categories(serverId, projectType),
-    enabled: source === "modrinth",
+    queryKey: ["mod-categories", source, projectType],
+    queryFn: () => api.mods.categories(serverId, projectType, source),
     staleTime: 60 * 60_000,
+    enabled: source !== "curseforge" || curseforgeEnabled,
   });
 
   const groupedCats = useMemo(() => {
@@ -1203,6 +1511,29 @@ export function ModSearch({
     onError: (e: Error) => error("Uninstall failed", e.message),
   });
 
+  const uploadCustomMutation = useMutation({
+    mutationFn: (files: File[]) => {
+      if (files.length === 0) {
+        throw new Error("Choose one or more jar files.");
+      }
+      const invalid = files.find((file) => !file.name.toLowerCase().endsWith(".jar"));
+      if (invalid) {
+        throw new Error(`${invalid.name} is not a jar file.`);
+      }
+      return api.mods.uploadCustom(serverId, files);
+    },
+    onSuccess: (mods) => {
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      setActiveTab("installed");
+      success(
+        mods.length === 1 ? "Custom jar uploaded" : "Custom jars uploaded",
+        mods.map((m) => m.file_name).join(", "),
+      );
+    },
+    onError: (e: Error) => error("Upload failed", e.message),
+  });
+
   // Install from the detail dialog. versionId "" → latest compatible; an explicit
   // id force-installs that exact file (used for the mismatch override).
   const detailInstallMutation = useMutation({
@@ -1243,7 +1574,7 @@ export function ModSearch({
       !compatible(
         hit,
         detailTarget.source === "modrinth" ? loader : "",
-        mcVersion,
+        detailTarget.source === "spigotmc" ? "" : mcVersion,
         projectType,
       )
     ) {
@@ -1281,6 +1612,14 @@ export function ModSearch({
     e.preventDefault();
     setQuery(searchInput.trim());
     setActiveTab("search");
+  };
+
+  const handleCustomUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length > 0) {
+      uploadCustomMutation.mutate(files);
+    }
   };
 
   const toggleCat = (name: string) => {
@@ -1345,8 +1684,16 @@ export function ModSearch({
 
   return (
     <div className="flex flex-col h-full">
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept=".jar"
+        multiple
+        className="hidden"
+        onChange={handleCustomUpload}
+      />
       {/* Tab bar */}
-      <div className="flex border-b border-border bg-surface items-center">
+      <div className="flex-shrink-0 flex border-b border-border bg-surface items-center">
         <button
           onClick={() => setActiveTab("installed")}
           className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
@@ -1369,6 +1716,16 @@ export function ModSearch({
           {searchResult && ` (${searchResult.total_hits})`}
         </button>
         <div className="ml-auto flex items-center gap-2 mr-2">
+          <Button
+            size="sm"
+            variant={activeTab === "installed" ? "outline" : "ghost"}
+            onClick={() => uploadInputRef.current?.click()}
+            loading={uploadCustomMutation.isPending}
+            title="Upload custom jar"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Upload jar
+          </Button>
           {activeTab === "installed" && (
             <Button
               size="sm"
@@ -1385,7 +1742,7 @@ export function ModSearch({
       {activeTab === "installed" ? (
         /* ── Installed: status chips + name filter, then a table ───────── */
         <>
-          <div className="px-4 py-3 border-b border-border bg-surface flex flex-wrap items-center gap-2">
+          <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-surface flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1">
               {STATUS_CHIPS.map((c) => (
                 <button
@@ -1444,6 +1801,27 @@ export function ModSearch({
             </Button>
             <Button
               size="sm"
+              variant="outline"
+              onClick={() => autoUpdateMutation.mutate()}
+              loading={autoUpdateMutation.isPending || !!activeRun}
+              disabled={autoUpdateMutation.isPending || !!activeRun}
+              title="Update mods, restart the server, and automatically revert + blocklist any update that breaks the boot"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {activeRun ? "Safe update running…" : "Safe update"}
+            </Button>
+            {skippedVersions.length > 0 && (
+              <button
+                onClick={() => setShowSkipped(true)}
+                className="text-xs px-3 py-1 rounded-full border bg-surface-2 text-text-secondary border-border hover:text-text-primary transition-colors inline-flex items-center gap-1.5"
+                title="Versions the auto-updater reverted and will not install again"
+              >
+                <Ban className="h-3 w-3" />
+                Skipped ({skippedVersions.length})
+              </button>
+            )}
+            <Button
+              size="sm"
               variant="ghost"
               onClick={refreshInstalledContent}
               loading={refreshingContent}
@@ -1478,8 +1856,18 @@ export function ModSearch({
               </div>
             </div>
           )}
+          {bannerRun && (
+            <AutoUpdateBanner
+              run={bannerRun}
+              onDismiss={
+                bannerRun.status !== "running"
+                  ? () => setDismissedRunId(bannerRun.id)
+                  : undefined
+              }
+            />
+          )}
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {loadingInstalled ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-accent" />
@@ -1492,9 +1880,10 @@ export function ModSearch({
                   size="sm"
                   variant="outline"
                   className="mt-3"
-                  onClick={() => setActiveTab("search")}
+                  onClick={() => uploadInputRef.current?.click()}
+                  loading={uploadCustomMutation.isPending}
                 >
-                  <Compass className="h-3.5 w-3.5" /> Browse content
+                  <Upload className="h-3.5 w-3.5" /> Upload jar
                 </Button>
               </div>
             ) : visibleInstalled.length === 0 ? (
@@ -1522,7 +1911,10 @@ export function ModSearch({
                     onUninstall={() => setUninstallTarget(mod)}
                     onSwitchVersion={
                       mod.source_id &&
-                      (mod.source === "modrinth" || mod.source === "curseforge")
+                      (mod.source === "modrinth" ||
+                        mod.source === "curseforge" ||
+                        mod.source === "hangar" ||
+                        mod.source === "spigotmc")
                         ? () => setSwitchTarget(mod)
                         : undefined
                     }
@@ -1545,10 +1937,10 @@ export function ModSearch({
         </>
       ) : (
         /* ── Browse: search bar on top, results + right filter sidebar ─── */
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col md:flex-row flex-1 min-h-0">
           {/* Main column */}
-          <div className="flex-1 min-w-0 flex flex-col">
-            <div className="px-4 py-3 border-b border-border bg-surface space-y-2">
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-surface space-y-2">
               <form onSubmit={handleSearch} className="flex gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-secondary pointer-events-none" />
@@ -1557,32 +1949,64 @@ export function ModSearch({
                     placeholder={
                       source === "curseforge"
                         ? "Search CurseForge…"
-                        : "Search content…"
+                        : source === "hangar"
+                          ? "Search Hangar…"
+                          : source === "spigotmc"
+                            ? "Search SpigotMC…"
+                            : "Search content…"
                     }
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
                   />
                 </div>
                 <Button type="submit" size="md" loading={searching}>
-                  {source === "curseforge" ? "Search" : "Apply"}
+                  Search
                 </Button>
               </form>
-              <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer select-none w-fit">
-                <input
-                  type="checkbox"
-                  className="accent-accent"
-                  checked={hideInstalled}
-                  onChange={(e) => setHideInstalled(e.target.checked)}
-                />
-                Hide already installed content
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={hideInstalled}
+                    onChange={(e) => setHideInstalled(e.target.checked)}
+                  />
+                  Hide already installed content
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="md:hidden flex-shrink-0"
+                  onClick={() => setFiltersOpen(true)}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  Filters
+                </Button>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
-              {!browseEnabled ? (
-                <div className="text-center py-12 text-text-secondary">
-                  <Search className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">Enter at least 2 characters to search</p>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {source === "curseforge" && !curseforgeEnabled ? (
+                <div className="max-w-md mx-auto text-center py-12 space-y-3">
+                  <div className="w-11 h-11 rounded-lg bg-accent/10 flex items-center justify-center mx-auto">
+                    <KeyRound className="h-5 w-5 text-accent" />
+                  </div>
+                  <p className="text-sm text-text-primary font-medium">
+                    CurseForge search needs an API key
+                  </p>
+                  <p className="text-sm text-text-secondary">
+                    Add a CurseForge API key in Settings to search and browse
+                    CurseForge. Modrinth works without one, and installed
+                    CurseForge mods still update normally.
+                  </p>
+                  <Link
+                    to="/settings"
+                    className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline"
+                  >
+                    <KeyRound className="h-3.5 w-3.5" />
+                    Open Settings → Integrations
+                  </Link>
                 </div>
               ) : searching ? (
                 <div className="flex justify-center py-8">
@@ -1678,18 +2102,57 @@ export function ModSearch({
             </div>
           </div>
 
-          {/* Right filter sidebar */}
-          <aside className="w-60 flex-shrink-0 border-l border-border bg-surface overflow-y-auto p-4 space-y-4">
+          {/* Dim the results behind the filter drawer on phones. */}
+          {filtersOpen && (
+            <div
+              className="fixed inset-0 z-30 bg-black/50 md:hidden"
+              onClick={() => setFiltersOpen(false)}
+            />
+          )}
+
+          {/* Right filter sidebar — slide-in drawer on phones, static on ≥md. */}
+          <aside
+            className={`${
+              filtersOpen
+                ? "fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] shadow-2xl"
+                : "hidden"
+            } md:static md:z-auto md:block md:w-60 md:max-w-none md:shadow-none md:flex-shrink-0 border-l border-border bg-surface overflow-y-auto p-4 space-y-4`}
+          >
+            <div className="flex items-center justify-between md:hidden">
+              <span className="text-sm font-medium text-text-primary">
+                Filters
+              </span>
+              <button
+                onClick={() => setFiltersOpen(false)}
+                className="text-text-secondary hover:text-text-primary"
+                title="Close filters"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
             <FilterSelect
               label="Source"
               value={source}
-              onChange={(v) => setSource(v as ModSource)}
+              onChange={(v) => {
+                setSource(v as ModSource);
+                // Category filter values and available sorts differ per source.
+                setSelectedCats([]);
+                if (v === "curseforge" && sortIndex === "follows") {
+                  setSortIndex("relevance");
+                }
+                // Hangar and SpigotMC host plugins exclusively.
+                if (v === "hangar" || v === "spigotmc") {
+                  setProjectType("plugin");
+                }
+              }}
               title="Mod source"
             >
               <option value="modrinth">Modrinth</option>
-              <option value="curseforge" disabled={!curseforgeEnabled}>
-                CurseForge{curseforgeEnabled ? "" : " (no API key)"}
+              <option value="curseforge">
+                CurseForge{curseforgeEnabled ? "" : " (needs API key)"}
               </option>
+              <option value="hangar">Hangar (PaperMC)</option>
+              <option value="spigotmc">SpigotMC</option>
             </FilterSelect>
 
             <FilterSelect
@@ -1700,7 +2163,10 @@ export function ModSearch({
                 setSelectedCats([]);
               }}
             >
-              {PROJECT_TYPES.map((t) => (
+              {(source === "hangar" || source === "spigotmc"
+                ? PROJECT_TYPES.filter((t) => t.value === "plugin")
+                : PROJECT_TYPES
+              ).map((t) => (
                 <option key={t.value} value={t.value}>
                   {t.label}
                 </option>
@@ -1712,26 +2178,30 @@ export function ModSearch({
               value={sortIndex}
               onChange={(v) => setSortIndex(v as ModSortIndex)}
             >
-              {SORTS.map((s) => (
+              {sortOptions.map((s) => (
                 <option key={s.value} value={s.value}>
                   {s.label}
                 </option>
               ))}
             </FilterSelect>
 
-            <FilterSelect
-              label="Game version"
-              value={mcFilter}
-              onChange={setMcFilter}
-              title="Minecraft version"
-            >
-              <option value="">Any version</option>
-              {mcVersions.map((v) => (
-                <option key={v.version} value={v.version}>
-                  {v.version}
-                </option>
-              ))}
-            </FilterSelect>
+            {/* Spiget has no version facet, so the filter would silently do
+                nothing on SpigotMC. */}
+            {source !== "spigotmc" && (
+              <FilterSelect
+                label="Game version"
+                value={mcFilter}
+                onChange={setMcFilter}
+                title="Minecraft version"
+              >
+                <option value="">Any version</option>
+                {mcVersions.map((v) => (
+                  <option key={v.version} value={v.version}>
+                    {v.version}
+                  </option>
+                ))}
+              </FilterSelect>
+            )}
 
             {projectType === "mod" && (
               <FilterSelect
@@ -1749,21 +2219,25 @@ export function ModSearch({
               </FilterSelect>
             )}
 
-            <FilterSelect
-              label="Environment"
-              value={environment}
-              onChange={setEnvironment}
-              title="Environment"
-            >
-              <option value="">Server (any)</option>
-              <option value="server_only">Server only</option>
-              <option value="client_server">Client + Server</option>
-              <option value="client">Client</option>
-              <option value="any">Any</option>
-            </FilterSelect>
+            {/* CurseForge has no side metadata, so the environment facet only
+                exists for Modrinth. */}
+            {source === "modrinth" && (
+              <FilterSelect
+                label="Environment"
+                value={environment}
+                onChange={setEnvironment}
+                title="Environment"
+              >
+                <option value="">Server (any)</option>
+                <option value="server_only">Server only</option>
+                <option value="client_server">Client + Server</option>
+                <option value="client">Client</option>
+                <option value="any">Any</option>
+              </FilterSelect>
+            )}
 
-            {/* Category tags (Modrinth only) */}
-            {source === "modrinth" && groupedCats.length > 0 && (
+            {/* Category tags */}
+            {groupedCats.length > 0 && (
               <div className="space-y-3 pt-1">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] uppercase tracking-wide text-text-secondary">
@@ -1785,21 +2259,31 @@ export function ModSearch({
                     </p>
                     <div className="flex flex-wrap gap-1">
                       {cats.map((c) => {
-                        const active = selectedCats.includes(c.name);
+                        // CF filters by numeric id, Modrinth by tag name.
+                        const value = c.id ?? c.name;
+                        const active = selectedCats.includes(value);
                         return (
                           <button
-                            key={c.name}
-                            onClick={() => toggleCat(c.name)}
+                            key={value}
+                            onClick={() => toggleCat(value)}
                             className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
                               active
                                 ? "bg-accent/15 text-accent border-accent/40"
                                 : "bg-surface-2 text-text-secondary border-border hover:text-text-primary"
                             }`}
                           >
-                            <span
-                              className="h-3.5 w-3.5 inline-flex items-center justify-center [&_svg]:h-full [&_svg]:w-full"
-                              dangerouslySetInnerHTML={{ __html: c.icon }}
-                            />
+                            {c.icon.startsWith("http") ? (
+                              <img
+                                src={c.icon}
+                                alt=""
+                                className="h-3.5 w-3.5 rounded-sm object-cover"
+                              />
+                            ) : c.icon ? (
+                              <span
+                                className="h-3.5 w-3.5 inline-flex items-center justify-center [&_svg]:h-full [&_svg]:w-full"
+                                dangerouslySetInnerHTML={{ __html: c.icon }}
+                              />
+                            ) : null}
                             {c.name}
                           </button>
                         );
@@ -1832,8 +2316,67 @@ export function ModSearch({
         serverId={serverId}
         mod={switchTarget}
         loader={loader}
-        mcVersion={mcVersion}
+        // SpigotMC version entries inherit the resource's stale major-only
+        // "tested versions", so the MC compat tag would mislead — skip it.
+        mcVersion={switchTarget?.source === "spigotmc" ? "" : mcVersion}
       />
+
+      <Dialog
+        open={showSkipped}
+        onClose={() => setShowSkipped(false)}
+        title="Skipped versions"
+      >
+        <p className="text-xs text-text-secondary mb-3">
+          These versions broke the server boot during a safe update, were
+          reverted, and will not be auto-installed again. Allow a version again
+          if the author re-released a fixed build under the same version.
+        </p>
+        {skippedVersions.length === 0 ? (
+          <p className="text-sm text-text-secondary py-4 text-center">
+            No skipped versions
+          </p>
+        ) : (
+          <ul className="space-y-2 max-h-80 overflow-y-auto">
+            {skippedVersions.map((v) => (
+              <li
+                key={`${v.project_id}:${v.version_id}`}
+                className="flex items-center gap-3 rounded-md border border-border bg-surface-2/40 px-3 py-2"
+              >
+                <Ban className="h-4 w-4 text-warning shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-text-primary truncate">
+                    {v.mod_name || v.project_id}{" "}
+                    <span className="text-text-secondary">
+                      {v.version || v.version_id}
+                    </span>
+                  </div>
+                  {v.reason && (
+                    <div
+                      className="text-xs text-text-secondary truncate"
+                      title={v.reason}
+                    >
+                      {v.reason}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    unskipMutation.mutate({
+                      project_id: v.project_id,
+                      version_id: v.version_id,
+                    })
+                  }
+                  loading={unskipMutation.isPending}
+                >
+                  Allow again
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Dialog>
 
       <ConfirmDialog
         open={detailConfirm}

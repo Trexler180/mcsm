@@ -1,5 +1,5 @@
 import { createRoute, useParams, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -8,8 +8,8 @@ import {
   Skull,
   ArrowLeft,
   Plus,
+  Pencil,
   Trash2,
-  ToggleLeft,
   ToggleRight,
   HardDrive,
   Save,
@@ -25,6 +25,11 @@ import {
   Copy,
   Link2,
   Upload,
+  Search,
+  RefreshCw,
+  FileWarning,
+  FileArchive,
+  ChevronRight,
 } from "lucide-react";
 import { Route as rootRoute } from "../__root";
 import { Button } from "@/components/ui/button";
@@ -84,14 +89,34 @@ function Panel({
   description,
   actions,
   children,
+  onClick,
 }: {
   title: string;
   description?: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick;
   return (
-    <section className="rounded-md border border-border bg-surface">
+    <section
+      className={`rounded-md border border-border bg-surface ${
+        clickable ? "cursor-pointer transition-colors hover:border-border-hover" : ""
+      }`}
+      onClick={onClick}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+    >
       <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 sm:px-5 sm:py-4">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
@@ -99,7 +124,10 @@ function Panel({
             <p className="mt-1 text-xs text-text-secondary">{description}</p>
           )}
         </div>
-        {actions}
+        {actions ??
+          (clickable && (
+            <ChevronRight className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+          ))}
       </div>
       <div className="p-4 sm:p-5">{children}</div>
     </section>
@@ -360,7 +388,11 @@ function DashboardTab({
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Panel title="Server Details">
+        <Panel
+          title="Server Details"
+          description="Edit name, directory, and runtime in Options."
+          onClick={() => onSection("options")}
+        >
           <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">
             <dt className="text-text-secondary">Name</dt>
             <dd className="text-text-primary">{server.name}</dd>
@@ -378,7 +410,11 @@ function DashboardTab({
             </dd>
           </dl>
         </Panel>
-        <Panel title="Latest Backup">
+        <Panel
+          title="Latest Backup"
+          description="View and manage all backups."
+          onClick={() => onSection("backups")}
+        >
           {latestBackup ? (
             <div className="space-y-2 text-sm">
               <div className="flex items-center justify-between">
@@ -413,45 +449,63 @@ function DashboardTab({
 
 // ── Tasks tab ─────────────────────────────────────────────────────────────────
 
-function CreateTaskDialog({
+const EMPTY_TASK_FORM = {
+  name: "",
+  cron_expr: "0 4 * * *",
+  action: "command",
+  command: "",
+};
+
+function TaskDialog({
   serverId,
   open,
   onClose,
+  task,
 }: {
   serverId: string;
   open: boolean;
   onClose: () => void;
+  task?: ScheduledTask | null;
 }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
-  const [form, setForm] = useState({
-    name: "",
-    cron_expr: "0 4 * * *",
-    action: "command",
-    command: "",
-  });
+  const isEdit = !!task;
+  const [form, setForm] = useState(EMPTY_TASK_FORM);
+
+  // Load the task being edited (or reset) whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    setForm(
+      task
+        ? {
+            name: task.name,
+            cron_expr: task.cron_expr,
+            action: task.action,
+            command: (task.payload?.command as string) ?? "",
+          }
+        : EMPTY_TASK_FORM,
+    );
+  }, [open, task]);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      api.tasks.create(serverId, {
+    mutationFn: () => {
+      const data = {
         name: form.name,
         cron_expr: form.cron_expr,
         action: form.action,
         payload: form.action === "command" ? { command: form.command } : {},
-        enabled: true,
-      }),
+      };
+      return isEdit
+        ? api.tasks.update(serverId, task!.id, data)
+        : api.tasks.create(serverId, { ...data, enabled: true });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tasks", serverId] });
-      success("Task created");
+      success(isEdit ? "Task updated" : "Task created");
       onClose();
-      setForm({
-        name: "",
-        cron_expr: "0 4 * * *",
-        action: "command",
-        command: "",
-      });
     },
-    onError: (e: Error) => error("Create failed", e.message),
+    onError: (e: Error) =>
+      error(isEdit ? "Update failed" : "Create failed", e.message),
   });
 
   const f =
@@ -463,7 +517,7 @@ function CreateTaskDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title="New Scheduled Task"
+      title={isEdit ? "Edit Scheduled Task" : "New Scheduled Task"}
       className="max-w-md"
     >
       <div className="space-y-4">
@@ -498,8 +552,15 @@ function CreateTaskDialog({
             <option value="restart">Restart server</option>
             <option value="stop">Stop server</option>
             <option value="backup">Create backup</option>
+            <option value="mod_update">Auto-update mods (safe)</option>
           </select>
         </div>
+        {form.action === "mod_update" && (
+          <p className="text-xs text-text-secondary">
+            Updates mods, restarts the server, and automatically reverts +
+            blocklists any update that breaks the boot.
+          </p>
+        )}
         {form.action === "command" && (
           <div className="space-y-1.5">
             <Label>Command</Label>
@@ -519,7 +580,91 @@ function CreateTaskDialog({
             onClick={() => mutation.mutate()}
             loading={mutation.isPending}
           >
-            Create
+            {isEdit ? "Save" : "Create"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
+function TaskDetailsDialog({
+  task,
+  open,
+  onClose,
+  onEdit,
+  onDelete,
+}: {
+  task: ScheduledTask | null;
+  open: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  if (!task) return null;
+  const command = (task.payload?.command as string) ?? "";
+  return (
+    <Dialog open={open} onClose={onClose} title={task.name} className="max-w-md">
+      <div className="space-y-4">
+        <dl className="grid grid-cols-[110px_1fr] gap-y-2.5 text-sm">
+          <dt className="text-text-secondary">Status</dt>
+          <dd>
+            <Badge variant={task.enabled ? "success" : "muted"}>
+              {task.enabled ? "Enabled" : "Disabled"}
+            </Badge>
+          </dd>
+          <dt className="text-text-secondary">Action</dt>
+          <dd className="text-text-primary">{task.action}</dd>
+          {command && (
+            <>
+              <dt className="text-text-secondary">Command</dt>
+              <dd className="break-all font-mono text-text-primary">
+                {command}
+              </dd>
+            </>
+          )}
+          <dt className="text-text-secondary">Schedule</dt>
+          <dd className="font-mono text-text-primary">{task.cron_expr}</dd>
+          <dt className="text-text-secondary">Next run</dt>
+          <dd className="text-text-primary">
+            {task.next_run
+              ? task.enabled
+                ? `${new Date(task.next_run).toLocaleString()} (in ${formatCountdown(
+                    new Date(task.next_run).getTime() - Date.now(),
+                  )})`
+                : new Date(task.next_run).toLocaleString()
+              : "—"}
+          </dd>
+          <dt className="text-text-secondary">Last run</dt>
+          <dd className="text-text-primary">
+            {task.last_run ? new Date(task.last_run).toLocaleString() : "Never"}
+          </dd>
+          <dt className="text-text-secondary">Created</dt>
+          <dd className="text-text-primary">
+            {new Date(task.created_at).toLocaleString()}
+          </dd>
+        </dl>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onDelete}>
+            <Trash2 className="h-3.5 w-3.5 text-red-400" /> Delete
+          </Button>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          <Button onClick={onEdit}>
+            <Pencil className="h-3.5 w-3.5" /> Edit
           </Button>
         </div>
       </div>
@@ -531,12 +676,21 @@ function TasksTab({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [showCreate, setShowCreate] = useState(false);
+  const [detailsTarget, setDetailsTarget] = useState<ScheduledTask | null>(null);
+  const [editTarget, setEditTarget] = useState<ScheduledTask | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ScheduledTask | null>(null);
 
   const { data: tasks = [], isLoading } = useQuery({
     queryKey: ["tasks", serverId],
     queryFn: () => api.tasks.list(serverId),
   });
+
+  // Ticking clock so the "executes in" countdown stays live.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -582,20 +736,30 @@ function TasksTab({ serverId }: { serverId: string }) {
               className={`flex items-center gap-4 px-4 py-3 ${i < tasks.length - 1 ? "border-b border-border/50" : ""}`}
             >
               <button
+                type="button"
+                role="switch"
+                aria-checked={task.enabled}
                 onClick={() =>
                   toggleMutation.mutate({ id: task.id, enabled: !task.enabled })
                 }
-                className="flex-shrink-0"
                 title={task.enabled ? "Disable" : "Enable"}
+                className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+                  task.enabled ? "bg-accent" : "bg-surface-2 border border-border"
+                }`}
               >
-                {task.enabled ? (
-                  <ToggleRight className="h-5 w-5 text-accent" />
-                ) : (
-                  <ToggleLeft className="h-5 w-5 text-text-secondary" />
-                )}
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    task.enabled ? "translate-x-[18px]" : "translate-x-0.5"
+                  }`}
+                />
               </button>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-text-primary">
+              <button
+                type="button"
+                onClick={() => setDetailsTarget(task)}
+                className="min-w-0 flex-1 text-left"
+                title="View details"
+              >
+                <p className="text-sm font-medium text-text-primary hover:text-accent">
                   {task.name}
                 </p>
                 <p className="text-xs text-text-secondary font-mono mt-0.5">
@@ -604,8 +768,21 @@ function TasksTab({ serverId }: { serverId: string }) {
                     ? `: ${task.payload.command as string}`
                     : ""}
                 </p>
-              </div>
+              </button>
               <div className="text-right text-xs text-text-secondary flex-shrink-0">
+                {task.next_run &&
+                  (task.enabled ? (
+                    <p>
+                      In{" "}
+                      <span className="font-mono text-text-primary">
+                        {formatCountdown(
+                          new Date(task.next_run).getTime() - now,
+                        )}
+                      </span>
+                    </p>
+                  ) : (
+                    <p>Disabled</p>
+                  ))}
                 {task.next_run && (
                   <p>Next: {new Date(task.next_run).toLocaleString()}</p>
                 )}
@@ -616,7 +793,16 @@ function TasksTab({ serverId }: { serverId: string }) {
               <Button
                 size="sm"
                 variant="ghost"
+                onClick={() => setEditTarget(task)}
+                title="Edit task"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
                 onClick={() => setDeleteTarget(task)}
+                title="Delete task"
               >
                 <Trash2 className="h-3.5 w-3.5 text-red-400" />
               </Button>
@@ -625,10 +811,31 @@ function TasksTab({ serverId }: { serverId: string }) {
         </div>
       )}
 
-      <CreateTaskDialog
+      <TaskDetailsDialog
+        task={detailsTarget}
+        open={detailsTarget !== null}
+        onClose={() => setDetailsTarget(null)}
+        onEdit={() => {
+          setEditTarget(detailsTarget);
+          setDetailsTarget(null);
+        }}
+        onDelete={() => {
+          setDeleteTarget(detailsTarget);
+          setDetailsTarget(null);
+        }}
+      />
+
+      <TaskDialog
         serverId={serverId}
         open={showCreate}
         onClose={() => setShowCreate(false)}
+      />
+
+      <TaskDialog
+        serverId={serverId}
+        task={editTarget}
+        open={editTarget !== null}
+        onClose={() => setEditTarget(null)}
       />
 
       <ConfirmDialog
@@ -1388,11 +1595,15 @@ function ServerPropertiesPanel({ serverId }: { serverId: string }) {
 
   const original = propsQuery.data ?? "";
 
-  useEffect(() => {
-    if (propsQuery.data) {
-      setValues(parseProperties(propsQuery.data));
-    }
-  }, [propsQuery.data]);
+  // Populate values during render (not in an effect) so the fields' first paint
+  // already reflects the loaded data. Doing this in an effect would paint every
+  // switch in its default "off" state for one frame, then flip the on-by-default
+  // ones, making them animate on load.
+  const [loadedFrom, setLoadedFrom] = useState<string | null>(null);
+  if (propsQuery.data !== undefined && propsQuery.data !== loadedFrom) {
+    setLoadedFrom(propsQuery.data);
+    setValues(parseProperties(propsQuery.data));
+  }
 
   useEffect(() => {
     const sentinel = saveBarSentinelRef.current;
@@ -2457,36 +2668,274 @@ function PropertiesTab({ serverId }: { serverId: string }) {
   );
 }
 
+type LogFileItem = {
+  path: string;
+  name: string;
+  kind: "log" | "crash";
+  size: number;
+  modified: string;
+};
+
+function formatLogFileSize(bytes: number) {
+  if (bytes <= 0) return "-";
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function logFileName(path: string) {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+async function readGzipLog(serverId: string, path: string) {
+  if (!("DecompressionStream" in window)) {
+    throw new Error("Gzip extraction is not supported in this browser.");
+  }
+
+  const bytes = await api.files.readBytes(serverId, path);
+  const stream = new Blob([bytes as BlobPart])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text();
+}
+
 function LogsTab({ serverId }: { serverId: string }) {
   const [path, setPath] = useState("/logs/latest.log");
+  const [search, setSearch] = useState("");
+  const [extractedLog, setExtractedLog] = useState<{
+    path: string;
+    content: string;
+  } | null>(null);
+  const [extractingLog, setExtractingLog] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const {
+    data: logFiles = [],
+    isLoading: isLoadingFiles,
+    refetch: refetchFiles,
+  } = useQuery({
+    queryKey: ["log-files", serverId],
+    queryFn: async () => {
+      const roots: Array<{ path: string; kind: LogFileItem["kind"] }> = [
+        { path: "/logs", kind: "log" },
+        { path: "/crash-reports", kind: "crash" },
+      ];
+
+      const groups = await Promise.all(
+        roots.map(async (root) => {
+          try {
+            const tree = await api.files.tree(serverId, root.path);
+            return tree.entries
+              .filter((entry) => entry.type === "file")
+              .map((entry) => {
+                const fullPath = `${root.path}/${entry.path}`.replace(
+                  /\/+/g,
+                  "/",
+                );
+                return {
+                  path: fullPath,
+                  name: logFileName(fullPath),
+                  kind: root.kind,
+                  size: entry.size,
+                  modified: entry.modified,
+                };
+              });
+          } catch {
+            return [];
+          }
+        }),
+      );
+
+      return groups
+        .flat()
+        .sort(
+          (a, b) =>
+            new Date(b.modified).getTime() - new Date(a.modified).getTime(),
+      );
+    },
+  });
+
+  useEffect(() => {
+    setExtractedLog(null);
+    setExtractError(null);
+  }, [path]);
+
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["file-content", serverId, path],
     queryFn: () => api.files.readContent(serverId, path),
+    enabled: path.trim().length > 0 && !path.toLowerCase().endsWith(".gz"),
     retry: false,
   });
 
+  const isCompressedLog = path.trim().toLowerCase().endsWith(".gz");
+  const visibleLog =
+    isCompressedLog && extractedLog?.path === path ? extractedLog.content : data;
+
+  const filteredLogFiles = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return logFiles;
+    return logFiles.filter(
+      (file) =>
+        file.path.toLowerCase().includes(query) ||
+        file.name.toLowerCase().includes(query) ||
+        file.kind.includes(query),
+    );
+  }, [logFiles, search]);
+
+  const selectedLogFile = logFiles.find((file) => file.path === path);
+
+  const refreshAll = () => {
+    refetchFiles();
+    if (isCompressedLog) {
+      setExtractedLog(null);
+      setExtractError(null);
+    } else {
+      refetch();
+    }
+  };
+
+  const extractCompressedLog = async () => {
+    const currentPath = path.trim();
+    if (!currentPath) return;
+
+    setExtractingLog(true);
+    setExtractError(null);
+    try {
+      const content = await readGzipLog(serverId, currentPath);
+      setExtractedLog({ path: currentPath, content });
+    } catch (err) {
+      setExtractedLog(null);
+      setExtractError(err instanceof Error ? err.message : "Failed to extract log.");
+    } finally {
+      setExtractingLog(false);
+    }
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col p-4 sm:p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <Input
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          className="min-w-0 flex-1 font-mono sm:max-w-[20rem]"
-        />
-        <Button variant="outline" onClick={() => refetch()}>
-          Refresh
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-[#0f0f0f] p-4 font-mono text-xs leading-5 text-text-primary">
-        {isLoading ? (
-          <div className="text-text-secondary">Loading log...</div>
-        ) : isError ? (
-          <div className="text-text-secondary">
-            No log file found at {path}.
+    <div className="grid h-full min-h-0 gap-4 p-4 sm:p-5 lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-col rounded-md border border-border bg-surface">
+        <div className="border-b border-border p-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search logs and crashes"
+              className="pl-9"
+            />
           </div>
-        ) : (
-          <pre className="whitespace-pre-wrap">{data}</pre>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          {isLoadingFiles ? (
+            <div className="flex justify-center py-8">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            </div>
+          ) : filteredLogFiles.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-text-secondary">
+              {logFiles.length === 0
+                ? "No logs or crash reports found."
+                : "No matching logs or crash reports."}
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {filteredLogFiles.map((file) => {
+                const active = file.path === path;
+                return (
+                  <button
+                    key={file.path}
+                    type="button"
+                    onClick={() => setPath(file.path)}
+                    className={[
+                      "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors",
+                      active ? "bg-accent/10" : "hover:bg-surface-2",
+                    ].join(" ")}
+                  >
+                    {file.kind === "crash" ? (
+                      <FileWarning className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                    ) : file.path.toLowerCase().endsWith(".gz") ? (
+                      <FileArchive className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" />
+                    ) : (
+                      <FileText className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-text-primary">
+                        {file.name}
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-text-secondary">
+                        {file.path}
+                      </span>
+                      <span className="mt-1 flex items-center gap-2 text-xs text-text-secondary">
+                        <Badge
+                          variant={file.kind === "crash" ? "error" : "muted"}
+                        >
+                          {file.kind === "crash" ? "crash" : "log"}
+                        </Badge>
+                        <span>{formatLogFileSize(file.size)}</span>
+                        <span>{new Date(file.modified).toLocaleString()}</span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-col">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            className="min-w-0 flex-1 font-mono"
+          />
+          <Button
+            variant="outline"
+            onClick={refreshAll}
+            className="shrink-0"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+          {isCompressedLog && (
+            <Button
+              onClick={extractCompressedLog}
+              disabled={extractingLog || !path.trim()}
+              className="shrink-0"
+            >
+              <FileArchive className="h-4 w-4" />
+              {extractingLog ? "Extracting..." : "Extract view"}
+            </Button>
+          )}
+        </div>
+        {selectedLogFile && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <Badge variant={selectedLogFile.kind === "crash" ? "error" : "muted"}>
+              {selectedLogFile.kind === "crash" ? "crash report" : "log file"}
+            </Badge>
+            <span>{formatLogFileSize(selectedLogFile.size)}</span>
+            <span>
+              Modified {new Date(selectedLogFile.modified).toLocaleString()}
+            </span>
+          </div>
         )}
+        <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-[#0f0f0f] p-4 font-mono text-xs leading-5 text-text-primary">
+          {isCompressedLog && extractError ? (
+            <div className="text-red-400">{extractError}</div>
+          ) : isCompressedLog && extractedLog?.path !== path ? (
+            <div className="text-text-secondary">
+              This log is compressed. Use Extract view to temporarily decompress
+              it here.
+            </div>
+          ) : isLoading ? (
+            <div className="text-text-secondary">Loading log...</div>
+          ) : isError ? (
+            <div className="text-text-secondary">
+              No log file found at {path}.
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap">{visibleLog}</pre>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2716,7 +3165,7 @@ function ServerDetailPage() {
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
         <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-56 md:border-b-0 md:border-r md:p-3">
-          <nav className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
+          <nav className="scrollbar-none flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
             {serverSections.map((section) => {
               const Icon = section.icon;
               const active = tab === section.value;

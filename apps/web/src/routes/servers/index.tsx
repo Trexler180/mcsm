@@ -295,6 +295,38 @@ function ServersPage() {
             )}
           </div>
         ) : (
+          <>
+          {/* Phones: tappable cards instead of a 7-column table. */}
+          <div className="space-y-3 md:hidden">
+            {servers.map((srv) => (
+              <div
+                key={srv.id}
+                className="rounded-lg border border-border bg-surface p-4 active:bg-surface-2/60"
+                onClick={() =>
+                  navigate({ to: "/servers/$id", params: { id: srv.id } })
+                }
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+                    {srv.name}
+                  </span>
+                  <StatusBadge status={srv.status as ServerStatus} />
+                </div>
+                <p className="mt-1 text-xs text-text-secondary">
+                  <span className="capitalize">{srv.platform}</span>{" "}
+                  {srv.mc_version} · :{srv.port} · {srv.ram_mb_max} MB
+                </p>
+                <div
+                  className="mt-3 border-t border-border/50 pt-2"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ServerActions server={srv} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -334,6 +366,8 @@ function ServersPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
+          </>
         )}
       </div>
       {isAdmin && (

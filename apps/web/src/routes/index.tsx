@@ -1,6 +1,6 @@
-import { createRoute } from '@tanstack/react-router'
+import { createRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Server, Activity, Users } from 'lucide-react'
+import { Server, Activity, Users, ChevronRight } from 'lucide-react'
 import { Route as rootRoute } from './__root'
 import { Header } from '@/components/layout/header'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import { api } from '@/lib/api'
 import type { ServerStatus } from '@/lib/types'
 
 function DashboardPage() {
+  const navigate = useNavigate()
   const { data: servers = [] } = useQuery({
     queryKey: ['servers'],
     queryFn: () => api.servers.list(),
@@ -32,7 +33,19 @@ function DashboardPage() {
       <div className="p-4 sm:p-6 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {stats.map((s) => (
-            <Card key={s.label}>
+            <Card
+              key={s.label}
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate({ to: '/servers' })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  navigate({ to: '/servers' })
+                }
+              }}
+              className="cursor-pointer transition-colors hover:border-border-hover"
+            >
               <CardContent className="flex items-center gap-4 py-4">
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center ${s.accent ? 'bg-accent/20' : 'bg-surface-2'}`}
@@ -59,14 +72,22 @@ function DashboardPage() {
               </p>
             )}
             {servers.map((srv) => (
-              <div key={srv.id} className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3">
+              <button
+                key={srv.id}
+                type="button"
+                onClick={() => navigate({ to: '/servers/$id', params: { id: srv.id } })}
+                className="flex w-full items-center justify-between gap-3 px-4 sm:px-5 py-3 text-left transition-colors hover:bg-surface-2/60"
+              >
                 <div className="flex min-w-0 items-center gap-3">
                   <StatusBadge status={srv.status as ServerStatus} />
                   <span className="truncate text-sm font-medium text-text-primary">{srv.name}</span>
                   <span className="hidden truncate text-xs text-text-secondary sm:inline">{srv.platform} {srv.mc_version}</span>
                 </div>
-                <span className="flex-shrink-0 text-xs text-text-secondary">:{srv.port}</span>
-              </div>
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <span className="text-xs text-text-secondary">:{srv.port}</span>
+                  <ChevronRight className="h-4 w-4 text-text-secondary" />
+                </div>
+              </button>
             ))}
           </div>
         </Card>

@@ -69,7 +69,7 @@ export function Toaster() {
   const hidden = toasts.length - visible.length
 
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 items-end">
+    <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-4 right-4 z-[100] flex flex-col gap-2 items-end sm:left-auto">
       {hidden > 0 && (
         <span className="rounded-full bg-surface border border-border px-2 py-0.5 text-[10px] text-text-secondary shadow">
           +{hidden} more

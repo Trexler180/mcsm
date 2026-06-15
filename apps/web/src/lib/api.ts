@@ -3,18 +3,24 @@ import type {
   Backup,
   BackupTarget,
   FileListing,
+  FileTree,
   AgentStatus,
   GameVersion,
+  GeyserInfo,
   InstalledMod,
+  IntegrationMeta,
   LoginResponse,
   ModCategory,
   ModSearchParams,
   ModSearchResult,
   ModUpdate,
+  ModUpdateRun,
   ModVersion,
+  SkippedModVersion,
   ModrinthProject,
   Node,
   Player,
+  PlayerActionKind,
   PlayerDetail,
   ScheduledTask,
   Server,
@@ -28,11 +34,109 @@ function getToken(): string | null {
   return localStorage.getItem("access_token");
 }
 
+function setAccessToken(token: string) {
+  localStorage.setItem("access_token", token);
+  localStorage.removeItem("refresh_token");
+}
+
+function clearStoredSession() {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+}
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "same-origin",
+    })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const { access_token } = (await res.json()) as TokenResponse;
+        if (!access_token) return null;
+        setAccessToken(access_token);
+        return access_token;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+function tokenExpiresSoon(token: string, leewaySeconds = 60): boolean {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return true;
+    const normalized = payload
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const decoded = JSON.parse(window.atob(normalized)) as { exp?: number };
+    if (!decoded.exp) return true;
+    return decoded.exp * 1000 <= Date.now() + leewaySeconds * 1000;
+  } catch {
+    return true;
+  }
+}
+
+async function ensureAccessToken(): Promise<string | null> {
+  const token = getToken();
+  if (token && !tokenExpiresSoon(token)) {
+    return token;
+  }
+  return refreshAccessToken();
+}
+
+async function retryAfterRefresh<T>(
+  retry: () => Promise<T>,
+): Promise<T | null> {
+  const token = await refreshAccessToken();
+  if (!token) return null;
+  return retry();
+}
+
+function redirectToLogin() {
+  clearStoredSession();
+  if (window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
+async function fetchWithAuth(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  retry = true,
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(input, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+  });
+
+  if (res.status === 401 && retry) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return fetchWithAuth(input, init, false);
+    }
+    redirectToLogin();
+  }
+
+  return res;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  retry = true,
 ): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {};
@@ -44,29 +148,17 @@ async function request<T>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
+    credentials: "same-origin",
   });
 
-  if (res.status === 401) {
-    // Attempt token refresh
-    const refreshToken = localStorage.getItem("refresh_token");
-    if (refreshToken) {
-      const refreshRes = await fetch(`${BASE}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (refreshRes.ok) {
-        const { access_token, refresh_token } =
-          (await refreshRes.json()) as TokenResponse;
-        localStorage.setItem("access_token", access_token);
-        localStorage.setItem("refresh_token", refresh_token);
-        // Retry original request
-        return request<T>(method, path, body, signal);
-      }
+  if (res.status === 401 && retry && path !== "/auth/login") {
+    const retried = await retryAfterRefresh(() =>
+      request<T>(method, path, body, signal, false),
+    );
+    if (retried !== null) {
+      return retried;
     }
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
-    window.location.href = "/login";
+    redirectToLogin();
     throw new Error("Unauthorized");
   }
 
@@ -87,6 +179,7 @@ async function requestText(
   method: string,
   path: string,
   body?: string,
+  retry = true,
 ): Promise<string> {
   const token = getToken();
   const headers: Record<string, string> = {};
@@ -97,27 +190,17 @@ async function requestText(
     method,
     headers,
     body,
+    credentials: "same-origin",
   });
 
-  if (res.status === 401) {
-    const refreshToken = localStorage.getItem("refresh_token");
-    if (refreshToken) {
-      const refreshRes = await fetch(`${BASE}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (refreshRes.ok) {
-        const { access_token, refresh_token } =
-          (await refreshRes.json()) as TokenResponse;
-        localStorage.setItem("access_token", access_token);
-        localStorage.setItem("refresh_token", refresh_token);
-        return requestText(method, path, body);
-      }
+  if (res.status === 401 && retry) {
+    const retried = await retryAfterRefresh(() =>
+      requestText(method, path, body, false),
+    );
+    if (retried !== null) {
+      return retried;
     }
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
-    window.location.href = "/login";
+    redirectToLogin();
     throw new Error("Unauthorized");
   }
 
@@ -147,10 +230,13 @@ export const api = {
   auth: {
     login: (email: string, password: string) =>
       post<LoginResponse>("/auth/login", { email, password }),
-    logout: (refreshToken: string) =>
-      post("/auth/logout", { refresh_token: refreshToken }),
-    refresh: (refreshToken: string) =>
-      post<TokenResponse>("/auth/refresh", { refresh_token: refreshToken }),
+    logout: () => post("/auth/logout"),
+    refresh: async () => {
+      const accessToken = await refreshAccessToken();
+      if (!accessToken) throw new Error("Unauthorized");
+      return { access_token: accessToken };
+    },
+    ensureAccessToken,
     me: () => get<User>("/auth/me"),
   },
 
@@ -190,6 +276,20 @@ export const api = {
       get<FileListing>(
         `/servers/${serverId}/files?path=${encodeURIComponent(path)}`,
       ),
+    // Recursively list every file beneath path in a single request. The agent
+    // walks the tree locally, so this avoids one round-trip per directory.
+    tree: (
+      serverId: string,
+      path: string,
+      opts?: { depth?: number; max?: number },
+    ) => {
+      const params = new URLSearchParams({ path });
+      if (opts?.depth) params.set("depth", String(opts.depth));
+      if (opts?.max) params.set("max", String(opts.max));
+      return get<FileTree>(
+        `/servers/${serverId}/files/tree?${params.toString()}`,
+      );
+    },
     readContent: (serverId: string, path: string) =>
       requestText(
         "GET",
@@ -219,7 +319,7 @@ export const api = {
       const token = getToken();
       const params = new URLSearchParams({ path });
       if (token) params.set("token", token);
-      return fetch(
+      return fetchWithAuth(
         `${BASE}/servers/${serverId}/files/download?${params.toString()}`,
       ).then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -229,17 +329,15 @@ export const api = {
     // Overwrite a file with raw bytes by uploading into its parent directory
     // under the same name. WriteUpload uses os.Create, so it replaces in place.
     writeBytes: (serverId: string, path: string, bytes: Uint8Array) => {
-      const token = getToken();
       const slash = path.lastIndexOf("/");
       const dir = slash <= 0 ? "/" : path.slice(0, slash);
       const name = path.slice(slash + 1);
       const fd = new FormData();
       fd.append("files", new Blob([bytes as BlobPart]), name);
-      return fetch(
+      return fetchWithAuth(
         `${BASE}/servers/${serverId}/files/upload?path=${encodeURIComponent(dir)}`,
         {
           method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: fd,
         },
       ).then((r) => {
@@ -247,14 +345,12 @@ export const api = {
       });
     },
     upload: (serverId: string, dirPath: string, file: File) => {
-      const token = getToken();
       const fd = new FormData();
       fd.append("files", file);
-      return fetch(
+      return fetchWithAuth(
         `${BASE}/servers/${serverId}/files/upload?path=${encodeURIComponent(dirPath)}`,
         {
           method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: fd,
         },
       ).then((r) => {
@@ -265,8 +361,19 @@ export const api = {
 
   players: {
     list: (serverId: string) => get<Player[]>(`/servers/${serverId}/players`),
+    meta: (serverId: string) =>
+      get<GeyserInfo>(`/servers/${serverId}/players/meta`),
     get: (serverId: string, uuid: string) =>
       get<PlayerDetail>(`/servers/${serverId}/players/${uuid}`),
+    action: (
+      serverId: string,
+      body: {
+        action: PlayerActionKind;
+        name: string;
+        uuid?: string;
+        reason?: string;
+      },
+    ) => post(`/servers/${serverId}/players/action`, body),
   },
 
   mods: {
@@ -335,8 +442,42 @@ export const api = {
         project_id: projectId,
         version_id: versionId,
       }),
+    uploadCustom: (serverId: string, files: File[]) => {
+      const fd = new FormData();
+      files.forEach((file) => fd.append("files", file));
+      return fetchWithAuth(`${BASE}/servers/${serverId}/mods/upload`, {
+        method: "POST",
+        body: fd,
+      }).then(async (r) => {
+        if (!r.ok) {
+          let msg = `HTTP ${r.status}`;
+          try {
+            const err = await r.json();
+            msg = err.error || msg;
+          } catch {}
+          throw new Error(msg);
+        }
+        return r.json() as Promise<InstalledMod[]>;
+      });
+    },
     updates: (serverId: string) =>
       get<ModUpdate[]>(`/servers/${serverId}/mods/updates`),
+    // Safe auto-update: apply updates, restart, watch boot health, revert and
+    // blocklist anything that breaks the boot. Async; poll updateRun().
+    autoUpdate: (serverId: string) =>
+      post<ModUpdateRun>(`/servers/${serverId}/mods/auto-update`),
+    updateRuns: (serverId: string, limit = 20) =>
+      get<ModUpdateRun[]>(
+        `/servers/${serverId}/mods/update-runs?limit=${limit}`,
+      ),
+    updateRun: (serverId: string, runId: string) =>
+      get<ModUpdateRun>(`/servers/${serverId}/mods/update-runs/${runId}`),
+    skippedVersions: (serverId: string) =>
+      get<SkippedModVersion[]>(`/servers/${serverId}/mods/skipped-versions`),
+    unskipVersion: (serverId: string, projectId: string, versionId: string) =>
+      del(
+        `/servers/${serverId}/mods/skipped-versions?project_id=${encodeURIComponent(projectId)}&version_id=${encodeURIComponent(versionId)}`,
+      ),
     update: (serverId: string, modId: string, versionId?: string) =>
       post(`/servers/${serverId}/mods/${modId}/update`, {
         version_id: versionId,
@@ -412,6 +553,19 @@ export const api = {
     list: () => get<User[]>("/users"),
     create: (email: string, password: string, role = "user") =>
       post<User>("/users", { email, password, role }),
+    update: (
+      id: string,
+      data: { display_name?: string | null; role?: string; password?: string },
+    ) => put<User>(`/users/${id}`, data),
     delete: (id: string) => del(`/users/${id}`),
+  },
+
+  settings: {
+    integrations: {
+      list: () => get<IntegrationMeta[]>("/settings/integrations"),
+      set: (key: string, value: string) =>
+        put(`/settings/integrations/${key}`, { value }),
+      remove: (key: string) => del(`/settings/integrations/${key}`),
+    },
   },
 };

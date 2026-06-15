@@ -34,7 +34,7 @@ export function TableHead({ className, ...props }: React.ThHTMLAttributes<HTMLTa
   return (
     <th
       className={clsx(
-        'h-10 px-4 text-left align-middle font-medium text-text-secondary text-xs uppercase tracking-wider',
+        'h-10 whitespace-nowrap px-4 text-left align-middle font-medium text-text-secondary text-xs uppercase tracking-wider',
         className,
       )}
       {...props}

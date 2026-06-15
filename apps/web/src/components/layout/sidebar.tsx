@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   ScrollText,
+  Settings,
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -18,6 +19,7 @@ const nav = [
   { to: '/nodes', label: 'Nodes', icon: Layers },
   { to: '/users', label: 'Users', icon: Users, adminOnly: true },
   { to: '/audit', label: 'Audit Log', icon: ScrollText, adminOnly: true },
+  { to: '/settings', label: 'Settings', icon: Settings, adminOnly: true },
 ]
 
 // Shared inner content for both the desktop sidebar and the mobile drawer.
@@ -94,7 +96,7 @@ export function Sidebar() {
   return (
     <>
       {/* Desktop: static sidebar, part of the flex layout. */}
-      <aside className="hidden md:flex flex-col w-56 border-r border-border bg-surface h-screen sticky top-0">
+      <aside className="hidden md:flex flex-col w-56 border-r border-border bg-surface h-dvh sticky top-0">
         <SidebarContent />
       </aside>
 
@@ -108,7 +110,10 @@ export function Sidebar() {
         <div className="absolute inset-0 bg-black/60" onClick={closeSidebar} />
         <aside
           className={clsx(
+            // Fixed overlays ignore the body's safe-area padding, so the
+            // drawer carries its own insets for notched phones.
             'absolute inset-y-0 left-0 flex w-64 max-w-[80%] flex-col border-r border-border bg-surface shadow-xl transition-transform',
+            'pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]',
             sidebarOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >

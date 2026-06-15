@@ -63,33 +63,27 @@ const MAX_DEPTH = 8;
 
 async function discoverConfigs(serverId: string): Promise<ConfigFile[]> {
   const out: ConfigFile[] = [];
-  for (const root of CONFIG_ROOTS) {
-    let exists = true;
-    const queue: Array<{ path: string; depth: number }> = [];
-    try {
-      const listing = await api.files.list(serverId, root);
-      for (const e of listing.entries) {
-        if (e.type === "dir") queue.push({ path: `${root}/${e.name}`, depth: 1 });
-        else addFile(out, root, e.name, e.size);
-      }
-    } catch {
-      exists = false;
-    }
-    if (!exists) continue;
+  // One recursive request per root, fired in parallel. The agent walks each
+  // tree locally, so we no longer pay a round-trip per directory. Missing
+  // roots reject and are skipped.
+  const trees = await Promise.all(
+    CONFIG_ROOTS.map((root) =>
+      api.files.tree(serverId, root, { depth: MAX_DEPTH, max: MAX_FILES }).catch(
+        () => null,
+      ),
+    ),
+  );
 
-    while (queue.length > 0 && out.length < MAX_FILES) {
-      const { path, depth } = queue.shift()!;
-      if (depth > MAX_DEPTH) continue;
-      try {
-        const listing = await api.files.list(serverId, path);
-        for (const e of listing.entries) {
-          if (e.type === "dir")
-            queue.push({ path: `${path}/${e.name}`, depth: depth + 1 });
-          else addFile(out, path, e.name, e.size);
-        }
-      } catch {
-        /* ignore unreadable dirs */
-      }
+  for (let i = 0; i < trees.length; i++) {
+    const tree = trees[i];
+    if (!tree) continue;
+    const root = CONFIG_ROOTS[i];
+    for (const e of tree.entries) {
+      if (e.type !== "file") continue;
+      const full = `${root}/${e.path}`;
+      const slash = full.lastIndexOf("/");
+      addFile(out, full.slice(0, slash), full.slice(slash + 1), e.size);
+      if (out.length >= MAX_FILES) break;
     }
   }
   out.sort((a, b) => a.path.localeCompare(b.path));
@@ -377,6 +371,10 @@ function ConfigEditor({
     queryKey: ["file-content", serverId, path],
     queryFn: () => api.files.readContent(serverId, path),
     retry: false,
+    // Keep recently-opened files cached so flipping between them is instant;
+    // an explicit reload still refetches via refetch().
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
   });
 
   const [baseText, setBaseText] = useState("");
@@ -607,7 +605,10 @@ export function ConfigsTab({ serverId }: { serverId: string }) {
   } = useQuery({
     queryKey: ["config-files", serverId],
     queryFn: () => discoverConfigs(serverId),
-    staleTime: 30_000,
+    // The scan is cheap to keep around; serve it instantly when revisiting the
+    // tab and only refetch on an explicit rescan.
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
   });
 
   return (

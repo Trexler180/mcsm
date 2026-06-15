@@ -107,6 +107,10 @@ export function ServerTerminal({ serverId }: TerminalProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="send"
         />
         <button
           onClick={sendCommand}

@@ -1,5 +1,5 @@
 import { createRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Users, Trash2 } from 'lucide-react'
 import { Route as rootRoute } from './__root'
@@ -14,20 +14,53 @@ import { useNotifications } from '@/store/notifications'
 import { useAuthStore } from '@/store/auth'
 import type { User } from '@/lib/types'
 
-function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+const EMPTY_USER_FORM = { email: '', display_name: '', password: '', role: 'user' }
+
+function UserDialog({
+  open,
+  onClose,
+  user,
+}: {
+  open: boolean
+  onClose: () => void
+  user?: User | null
+}) {
   const qc = useQueryClient()
   const { success, error } = useNotifications()
-  const [form, setForm] = useState({ email: '', password: '', role: 'user' })
+  const isEdit = !!user
+  const [form, setForm] = useState(EMPTY_USER_FORM)
+
+  // Load the user being edited (or reset) whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    setForm(
+      user
+        ? {
+            email: user.email,
+            display_name: user.display_name ?? '',
+            password: '',
+            role: user.role,
+          }
+        : EMPTY_USER_FORM,
+    )
+  }, [open, user])
 
   const mutation = useMutation({
-    mutationFn: () => api.users.create(form.email, form.password, form.role),
+    mutationFn: () =>
+      isEdit
+        ? api.users.update(user!.id, {
+            display_name: form.display_name,
+            role: form.role,
+            ...(form.password ? { password: form.password } : {}),
+          })
+        : api.users.create(form.email, form.password, form.role),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
-      success('User created')
+      success(isEdit ? 'User updated' : 'User created')
       onClose()
-      setForm({ email: '', password: '', role: 'user' })
     },
-    onError: (e: Error) => error('Failed to create user', e.message),
+    onError: (e: Error) =>
+      error(isEdit ? 'Update failed' : 'Failed to create user', e.message),
   })
 
   const f =
@@ -36,15 +69,41 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
       setForm((p) => ({ ...p, [k]: e.target.value }))
 
   return (
-    <Dialog open={open} onClose={onClose} title="Create User" className="max-w-md">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={isEdit ? 'Edit User' : 'Create User'}
+      className="max-w-md"
+    >
       <div className="space-y-4">
         <div className="space-y-1.5">
           <Label>Email</Label>
-          <Input type="email" placeholder="user@example.com" value={form.email} onChange={f('email')} />
+          <Input
+            type="email"
+            placeholder="user@example.com"
+            value={form.email}
+            onChange={f('email')}
+            disabled={isEdit}
+          />
         </div>
+        {isEdit && (
+          <div className="space-y-1.5">
+            <Label>Display Name</Label>
+            <Input
+              placeholder="Optional"
+              value={form.display_name}
+              onChange={f('display_name')}
+            />
+          </div>
+        )}
         <div className="space-y-1.5">
-          <Label>Password</Label>
-          <Input type="password" placeholder="••••••••" value={form.password} onChange={f('password')} />
+          <Label>{isEdit ? 'Reset Password' : 'Password'}</Label>
+          <Input
+            type="password"
+            placeholder={isEdit ? 'Leave blank to keep current' : '••••••••'}
+            value={form.password}
+            onChange={f('password')}
+          />
         </div>
         <div className="space-y-1.5">
           <Label>Role</Label>
@@ -63,7 +122,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
             Cancel
           </Button>
           <Button onClick={() => mutation.mutate()} loading={mutation.isPending}>
-            Create
+            {isEdit ? 'Save' : 'Create'}
           </Button>
         </div>
       </div>
@@ -73,6 +132,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
 function UsersPage() {
   const [showCreate, setShowCreate] = useState(false)
+  const [editTarget, setEditTarget] = useState<User | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
   const qc = useQueryClient()
   const { success, error } = useNotifications()
@@ -136,7 +196,11 @@ function UsersPage() {
             </TableHeader>
             <TableBody>
               {users.map((u) => (
-                <TableRow key={u.id}>
+                <TableRow
+                  key={u.id}
+                  className="cursor-pointer"
+                  onClick={() => setEditTarget(u)}
+                >
                   <TableCell className="font-medium">{u.email}</TableCell>
                   <TableCell className="text-text-secondary">{u.display_name ?? '—'}</TableCell>
                   <TableCell>{roleBadge(u.role)}</TableCell>
@@ -146,7 +210,10 @@ function UsersPage() {
                   <TableCell className="text-text-secondary text-sm">
                     {new Date(u.created_at).toLocaleDateString()}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell
+                    className="text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <Button
                       size="sm"
                       variant="ghost"
@@ -164,7 +231,13 @@ function UsersPage() {
         )}
       </div>
 
-      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <UserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+
+      <UserDialog
+        open={editTarget !== null}
+        user={editTarget}
+        onClose={() => setEditTarget(null)}
+      />
 
       <ConfirmDialog
         open={deleteTarget !== null}

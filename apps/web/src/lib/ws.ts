@@ -1,3 +1,5 @@
+import { api } from './api'
+
 export type WsMessage = {
   type: string
   data: unknown
@@ -25,9 +27,10 @@ export class ServerConsole {
     this.serverId = serverId
   }
 
-  connect() {
+  async connect() {
     if (this.closed) return
-    const token = localStorage.getItem('access_token') ?? ''
+    const token = (await api.auth.ensureAccessToken().catch(() => null)) ?? ''
+    if (this.closed) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
     // Browsers can't set Authorization on a WebSocket handshake — pass the JWT
@@ -95,9 +98,10 @@ export class ServerMetrics {
     this.serverId = serverId
   }
 
-  connect() {
+  async connect() {
     if (this.closed) return
-    const token = localStorage.getItem('access_token') ?? ''
+    const token = (await api.auth.ensureAccessToken().catch(() => null)) ?? ''
+    if (this.closed) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/api/v1/servers/${this.serverId}/metrics?token=${encodeURIComponent(token)}`
     this.ws = new WebSocket(url)

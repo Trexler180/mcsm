@@ -301,7 +301,7 @@ export function DatViewer({ serverId, path }: DatViewerProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-surface">
+      <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-border bg-surface">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-sm text-text-secondary font-mono truncate">
             {path}
@@ -321,7 +321,7 @@ export function DatViewer({ serverId, path }: DatViewerProps) {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-auto bg-[#0f0f0f] px-3 py-2">
+      <div className="flex-1 min-h-0 overflow-auto bg-[#0f0f0f] px-3 py-2">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="h-5 w-5 text-accent animate-spin" />

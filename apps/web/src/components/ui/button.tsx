@@ -19,7 +19,8 @@ const variantClasses: Record<Variant, string> = {
 }
 
 const sizeClasses: Record<Size, string> = {
-  sm: 'h-7 px-3 text-xs rounded',
+  // touch:h-9 — 28px is below a usable tap target on touch screens.
+  sm: 'h-7 touch:h-9 px-3 text-xs rounded',
   md: 'h-9 px-4 text-sm rounded-md',
   lg: 'h-11 px-6 text-base rounded-md',
   icon: 'h-9 w-9 rounded-md flex items-center justify-center',

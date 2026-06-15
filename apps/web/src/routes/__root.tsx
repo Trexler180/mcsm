@@ -20,7 +20,7 @@ function RootLayout() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-dvh items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
           <p className="text-sm text-text-secondary">Loading...</p>
@@ -40,7 +40,9 @@ function RootLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    // h-dvh (not h-screen): mobile browsers resize dvh as the URL bar
+    // collapses, so the layout never hides behind it.
+    <div className="flex h-dvh bg-background overflow-hidden">
       <Sidebar />
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <Outlet />

@@ -8,10 +8,11 @@ import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { ModConflict } from "@/lib/types";
 
-// ModConflictDialog surfaces a Fabric incompatible-mods failure the agent
-// detected while starting the server. Each suggestion names a mod that can be
-// disabled (its jar renamed to .disabled) to break the conflict; the user picks
-// which to disable, then optionally restarts.
+// ModConflictDialog surfaces a startup failure the agent detected while
+// starting the server — either a Fabric incompatible-mods block or a mod that
+// crashed startup (e.g. a broken mixin). Each suggestion names a mod that can
+// be disabled (its jar renamed to .disabled) to fix it; the user picks which to
+// disable, then optionally restarts.
 export function ModConflictDialog({
   serverId,
   conflict,
@@ -24,6 +25,14 @@ export function ModConflictDialog({
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [showLog, setShowLog] = useState(false);
+
+  const isCrash = conflict.kind === "crash";
+  const title = isCrash
+    ? "A mod crashed the server"
+    : "Incompatible mods detected";
+  const banner = isCrash
+    ? "The server crashed on startup because a mod failed to load (often a broken or outdated mixin). Disable the mod below, then restart."
+    : "The server stopped because Fabric found mods that can't run together. Disable one or more of the conflicting mods, then restart.";
 
   // De-dupe mod ids across suggestions; default every conflicting mod selected.
   const modIds = Array.from(
@@ -64,16 +73,13 @@ export function ModConflictDialog({
     <Dialog
       open
       onClose={onClose}
-      title="Incompatible mods detected"
+      title={title}
       description={conflict.summary}
       className="max-w-xl"
     >
       <div className="flex items-start gap-2 rounded-md border border-yellow-800/50 bg-yellow-900/20 p-3 text-sm text-yellow-300">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-        <p>
-          The server stopped because Fabric found mods that can't run together.
-          Disable one or more of the conflicting mods, then restart.
-        </p>
+        <p>{banner}</p>
       </div>
 
       <div className="mt-4 space-y-2">

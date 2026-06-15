@@ -41,15 +41,18 @@ export function Dialog({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div
         ref={overlayRef}
         className="absolute inset-0 bg-black/60"
         onClick={onClose}
       />
+      {/* Phones get a bottom sheet (full width, rounded top, safe-area
+          padding for the home bar); sm+ keeps the centered card. */}
       <div
         className={clsx(
-          'relative z-10 max-h-[90vh] w-[calc(100vw-2rem)] max-w-md overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-xl',
+          'relative z-10 max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-t-xl border border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl',
+          'sm:max-h-[90dvh] sm:w-[calc(100vw-2rem)] sm:rounded-lg sm:p-6 sm:pb-6',
           className,
         )}
       >

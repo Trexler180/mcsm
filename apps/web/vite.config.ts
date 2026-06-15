@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import type { ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -21,7 +22,40 @@ function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+      manifest: {
+        name: 'MCSM — Minecraft Server Manager',
+        short_name: 'MCSM',
+        description: 'Self-hosted Minecraft server panel',
+        theme_color: '#0f0f0f',
+        background_color: '#0f0f0f',
+        display: 'standalone',
+        start_url: '/',
+        scope: '/',
+        icons: [
+          { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: '/pwa-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // The API (including WebSockets) must always hit the network; only
+        // the app shell and static assets are precached.
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
+      },
+    }),
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

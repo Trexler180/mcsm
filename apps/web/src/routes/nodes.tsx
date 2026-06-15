@@ -1,5 +1,5 @@
 import { createRoute } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Layers, Trash2, CheckCircle2, XCircle } from 'lucide-react'
 import { Route as rootRoute } from './__root'
@@ -13,26 +13,62 @@ import { api } from '@/lib/api'
 import { useNotifications } from '@/store/notifications'
 import type { Node } from '@/lib/types'
 
-function CreateNodeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+const EMPTY_NODE_FORM = { name: '', fqdn: '', port: '8090', location: '', token: '' }
+
+function NodeDialog({
+  open,
+  onClose,
+  node,
+}: {
+  open: boolean
+  onClose: () => void
+  node?: Node | null
+}) {
   const qc = useQueryClient()
   const { success, error } = useNotifications()
-  const [form, setForm] = useState({ name: '', fqdn: '', port: '8090', token: '' })
+  const isEdit = !!node
+  const [form, setForm] = useState(EMPTY_NODE_FORM)
+
+  // Load the node being edited (or reset) whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    setForm(
+      node
+        ? {
+            name: node.name,
+            fqdn: node.fqdn,
+            port: String(node.port),
+            location: node.location ?? '',
+            token: '',
+          }
+        : EMPTY_NODE_FORM,
+    )
+  }, [open, node])
 
   const mutation = useMutation({
     mutationFn: () =>
-      api.nodes.create({
-        name: form.name,
-        fqdn: form.fqdn,
-        port: Number(form.port),
-        scheme: 'http',
-        token: form.token,
-      }),
+      isEdit
+        ? api.nodes.update(node!.id, {
+            name: form.name,
+            fqdn: form.fqdn,
+            port: Number(form.port),
+            location: form.location || null,
+          })
+        : api.nodes.create({
+            name: form.name,
+            fqdn: form.fqdn,
+            port: Number(form.port),
+            scheme: 'http',
+            location: form.location || null,
+            token: form.token,
+          }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['nodes'] })
-      success('Node added')
+      success(isEdit ? 'Node updated' : 'Node added')
       onClose()
     },
-    onError: (e: Error) => error('Failed to add node', e.message),
+    onError: (e: Error) =>
+      error(isEdit ? 'Update failed' : 'Failed to add node', e.message),
   })
 
   const f =
@@ -40,8 +76,31 @@ function CreateNodeDialog({ open, onClose }: { open: boolean; onClose: () => voi
       setForm((p) => ({ ...p, [k]: e.target.value }))
 
   return (
-    <Dialog open={open} onClose={onClose} title="Add Node" className="max-w-md">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={isEdit ? 'Edit Node' : 'Add Node'}
+      className="max-w-md"
+    >
       <div className="space-y-4">
+        {isEdit && node && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">
+            {node.online ? (
+              <span className="flex items-center gap-1.5 text-green-400">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Online
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-text-secondary">
+                <XCircle className="h-3.5 w-3.5" /> Offline
+              </span>
+            )}
+            <span className="text-text-secondary">
+              {node.last_seen
+                ? `Last seen ${new Date(node.last_seen).toLocaleString()}`
+                : 'Never seen'}
+            </span>
+          </div>
+        )}
         <div className="space-y-1.5">
           <Label>Name</Label>
           <Input placeholder="Node 1" value={form.name} onChange={f('name')} />
@@ -50,25 +109,33 @@ function CreateNodeDialog({ open, onClose }: { open: boolean; onClose: () => voi
           <Label>Hostname / IP</Label>
           <Input placeholder="node1.example.com" value={form.fqdn} onChange={f('fqdn')} />
         </div>
-        <div className="space-y-1.5">
-          <Label>Agent Port</Label>
-          <Input type="number" value={form.port} onChange={f('port')} />
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Agent Port</Label>
+            <Input type="number" value={form.port} onChange={f('port')} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Location</Label>
+            <Input placeholder="Optional" value={form.location} onChange={f('location')} />
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <Label>Agent Token</Label>
-          <Input
-            type="password"
-            placeholder="Secret token from agent config"
-            value={form.token}
-            onChange={f('token')}
-          />
-        </div>
+        {!isEdit && (
+          <div className="space-y-1.5">
+            <Label>Agent Token</Label>
+            <Input
+              type="password"
+              placeholder="Secret token from agent config"
+              value={form.token}
+              onChange={f('token')}
+            />
+          </div>
+        )}
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={() => mutation.mutate()} loading={mutation.isPending}>
-            Add Node
+            {isEdit ? 'Save' : 'Add Node'}
           </Button>
         </div>
       </div>
@@ -78,6 +145,7 @@ function CreateNodeDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
 function NodesPage() {
   const [showCreate, setShowCreate] = useState(false)
+  const [editTarget, setEditTarget] = useState<Node | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Node | null>(null)
   const qc = useQueryClient()
   const { success, error } = useNotifications()
@@ -136,7 +204,11 @@ function NodesPage() {
             </TableHeader>
             <TableBody>
               {nodes.map((node) => (
-                <TableRow key={node.id}>
+                <TableRow
+                  key={node.id}
+                  className="cursor-pointer"
+                  onClick={() => setEditTarget(node)}
+                >
                   <TableCell className="font-medium">{node.name}</TableCell>
                   <TableCell className="font-mono text-sm">{node.fqdn}</TableCell>
                   <TableCell>{node.port}</TableCell>
@@ -154,7 +226,10 @@ function NodesPage() {
                   <TableCell className="text-text-secondary text-sm">
                     {node.last_seen ? new Date(node.last_seen).toLocaleString() : '—'}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell
+                    className="text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <Button
                       size="sm"
                       variant="ghost"
@@ -171,7 +246,13 @@ function NodesPage() {
         )}
       </div>
 
-      <CreateNodeDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <NodeDialog open={showCreate} onClose={() => setShowCreate(false)} />
+
+      <NodeDialog
+        open={editTarget !== null}
+        node={editTarget}
+        onClose={() => setEditTarget(null)}
+      />
 
       <ConfirmDialog
         open={deleteTarget !== null}

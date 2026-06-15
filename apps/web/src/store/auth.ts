@@ -17,33 +17,34 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   init: async () => {
-    const token = localStorage.getItem('access_token')
-    if (!token) {
-      set({ isLoading: false })
-      return
+    localStorage.removeItem('refresh_token')
+    if (!localStorage.getItem('access_token')) {
+      try {
+        await api.auth.refresh()
+      } catch {
+        set({ isLoading: false })
+        return
+      }
     }
     try {
       const user = await api.auth.me()
       set({ user, isAuthenticated: true, isLoading: false })
     } catch {
       localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
       set({ isLoading: false })
     }
   },
 
   login: async (email, password) => {
-    const { access_token, refresh_token, user } = await api.auth.login(email, password)
+    const { access_token, user } = await api.auth.login(email, password)
     localStorage.setItem('access_token', access_token)
-    localStorage.setItem('refresh_token', refresh_token)
+    localStorage.removeItem('refresh_token')
     set({ user, isAuthenticated: true })
   },
 
   logout: async () => {
-    const refreshToken = localStorage.getItem('refresh_token') ?? ''
-    await api.auth.logout(refreshToken).catch(() => {})
+    await api.auth.logout().catch(() => {})
     localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
     set({ user: null, isAuthenticated: false })
   },
 }))

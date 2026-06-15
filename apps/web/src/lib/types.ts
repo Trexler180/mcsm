@@ -28,7 +28,7 @@ export type ServerStatus =
   | "online"
   | "stopping"
   | "crashed"
-  | "mod_conflict"
+  | "startup_failure"
   | "error";
 
 export interface ConflictSuggestion {
@@ -41,6 +41,10 @@ export interface ConflictSuggestion {
 
 export interface ModConflict {
   detected: boolean;
+  // "incompatible" = Fabric incompatible-mods block; "crash" = a mod (e.g. a
+  // broken mixin) crashed the server on startup. Both are fixed by disabling
+  // the named mod(s), so they share one dialog.
+  kind?: "incompatible" | "crash";
   summary: string;
   suggestions: ConflictSuggestion[];
   raw: string[];
@@ -88,6 +92,19 @@ export interface FileListing {
   entries: FileEntry[];
 }
 
+export interface FileTreeEntry {
+  path: string; // relative to the tree root, slash-separated
+  type: "file" | "dir";
+  size: number;
+  modified: string;
+}
+
+export interface FileTree {
+  path: string;
+  entries: FileTreeEntry[];
+  truncated: boolean;
+}
+
 export interface InstalledMod {
   id: string;
   server_id: string;
@@ -124,7 +141,7 @@ export type ModSortIndex =
   | "newest"
   | "updated";
 
-export type ModSource = "modrinth" | "curseforge";
+export type ModSource = "modrinth" | "curseforge" | "hangar" | "spigotmc";
 
 export interface ModSearchParams {
   query: string;
@@ -152,6 +169,59 @@ export interface ModUpdate {
   latest_version_id: string;
 }
 
+/** Per-mod outcome inside an auto-update run. */
+export interface ModUpdateStep {
+  mod_id: string;
+  project_id: string;
+  name: string;
+  from_version: string;
+  to_version: string;
+  to_version_id: string;
+  status: "pending" | "updated" | "reverted_skipped" | "failed";
+  error?: string;
+}
+
+export interface ModUpdateRunDetail {
+  phase:
+    | "checking"
+    | "applying"
+    | "verifying"
+    | "isolating"
+    | "reverting"
+    | "restoring"
+    | "done";
+  message?: string;
+  was_running: boolean;
+  mods: ModUpdateStep[];
+}
+
+export interface ModUpdateRun {
+  id: string;
+  server_id: string;
+  trigger: string;
+  status:
+    | "running"
+    | "success"
+    | "no_updates"
+    | "partial"
+    | "reverted"
+    | "failed";
+  detail: ModUpdateRunDetail | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** A version the auto-updater blocklisted after it broke the server boot. */
+export interface SkippedModVersion {
+  server_id: string;
+  project_id: string;
+  version_id: string;
+  mod_name: string;
+  version: string;
+  reason: string;
+  created_at: string;
+}
+
 export interface GameVersion {
   version: string;
   stable: boolean;
@@ -165,6 +235,16 @@ export interface AuditEntry {
   detail: string | null;
   ip_address: string | null;
   created_at: string;
+}
+
+export interface IntegrationMeta {
+  key: string;
+  label: string;
+  description: string;
+  doc_url: string;
+  configured: boolean;
+  hint: string;
+  updated_at?: string;
 }
 
 export interface ModSearchHit {
@@ -182,7 +262,9 @@ export interface ModSearchHit {
 }
 
 export interface ModCategory {
-  /** Raw inline SVG string shipped by Modrinth. */
+  /** CurseForge numeric category id used as the search filter value; absent for Modrinth (which filters by name). */
+  id?: string;
+  /** Raw inline SVG string (Modrinth) or an image URL (CurseForge). */
   icon: string;
   name: string;
   project_type: string;
@@ -265,12 +347,58 @@ export interface Player {
   joined_at?: string;
   /** Set for offline players: mtime of their playerdata .dat file. */
   last_seen?: string;
+  /** Stamped from ops.json / whitelist.json / banned-players.json. */
+  op?: boolean;
+  op_level?: number;
+  whitelisted?: boolean;
+  banned?: boolean;
+  ban_reason?: string;
+  /** True for Bedrock Edition players bridged in via Geyser/Floodgate. */
+  bedrock?: boolean;
+}
+
+/** Geyser/Floodgate (Bedrock bridge) status for a server. */
+export interface GeyserInfo {
+  installed: boolean;
+  geyser: boolean;
+  floodgate: boolean;
+  /** Floodgate username prefix applied to Bedrock players (default "."). */
+  prefix?: string;
+}
+
+/** A player administration action the backend can apply (live or offline). */
+export type PlayerActionKind =
+  | "op"
+  | "deop"
+  | "ban"
+  | "pardon"
+  | "kick"
+  | "whitelist_add"
+  | "whitelist_remove";
+
+export interface Enchant {
+  id: string; // e.g. "minecraft:sharpness"
+  level: number;
 }
 
 export interface ItemStack {
   slot: number;
   id: string; // e.g. "minecraft:diamond_sword"
   count: number;
+  /** Accumulated damage (durability used); absent for undamaged/unbreakable items. */
+  damage?: number;
+  /** Player-assigned (anvil) name, flattened to plain text. */
+  custom_name?: string;
+  enchantments?: Enchant[];
+}
+
+export interface PlayerStats {
+  play_time_ticks?: number;
+  deaths?: number;
+  player_kills?: number;
+  mob_kills?: number;
+  jumps?: number;
+  walked_cm?: number;
 }
 
 export interface PlayerDetail {
@@ -289,6 +417,14 @@ export interface PlayerDetail {
   selected_slot: number;
   inventory: ItemStack[];
   ender_chest: ItemStack[];
+  /** mtime of the .dat file — the moment this snapshot was last saved to disk. */
+  snapshot_at?: string;
+  op?: boolean;
+  whitelisted?: boolean;
+  banned?: boolean;
+  ban_reason?: string;
+  bedrock?: boolean;
+  stats?: PlayerStats | null;
 }
 
 export interface ScheduledTask {
@@ -306,11 +442,9 @@ export interface ScheduledTask {
 
 export interface LoginResponse {
   access_token: string;
-  refresh_token: string;
   user: User;
 }
 
 export interface TokenResponse {
   access_token: string;
-  refresh_token: string;
 }

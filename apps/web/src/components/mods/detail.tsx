@@ -120,10 +120,16 @@ export function ModDetailDialog({
   const gallery = project?.gallery ?? [];
   const featured = gallery.find((g) => g.featured) ?? gallery[0];
 
-  const modrinthUrl =
+  // External project page per source. Hangar slugs are "owner/slug"; SpigotMC
+  // resource pages resolve by numeric id alone.
+  const projectUrl =
     source === "modrinth"
       ? `https://modrinth.com/${project?.project_type ?? "mod"}/${slug ?? projectId}`
-      : `https://www.curseforge.com/minecraft/mc-mods/${slug ?? ""}`;
+      : source === "hangar"
+        ? `https://hangar.papermc.io/${project?.slug ?? slug ?? projectId}`
+        : source === "spigotmc"
+          ? `https://www.spigotmc.org/resources/${projectId}`
+          : `https://www.curseforge.com/minecraft/mc-mods/${slug ?? ""}`;
 
   const clientEnv = envLabel(project?.client_side);
   const serverEnv = envLabel(project?.server_side);
@@ -213,7 +219,7 @@ export function ModDetailDialog({
 
           {/* Links */}
           <div className="flex flex-wrap gap-2 py-3 border-b border-border">
-            <a href={modrinthUrl} target="_blank" rel="noreferrer noopener">
+            <a href={projectUrl} target="_blank" rel="noreferrer noopener">
               <Button size="sm" variant="outline">
                 <ExternalLink className="h-3.5 w-3.5" /> Project page
               </Button>

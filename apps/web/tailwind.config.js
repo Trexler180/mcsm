@@ -3,6 +3,10 @@ export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      screens: {
+        // Touch-screen devices, regardless of viewport width.
+        touch: { raw: '(pointer: coarse)' },
+      },
       colors: {
         background: '#0f0f0f',
         surface: '#1a1a1a',
