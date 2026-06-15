@@ -28,6 +28,12 @@ the local agent. Backend reload is enabled by default: edits to API or agent Go
 sources restart that service without restarting the web dev server. Use
 `.\run.ps1 -NoBackendWatch` to disable it.
 
+The script supervises all three services: any service that exits (crash, port
+conflict, compile error during a reload) is restarted automatically with
+backoff, and changes to `apps/web/package.json` or `pnpm-lock.yaml` trigger a
+`pnpm install` plus web dev-server restart. Updating the manager while it runs
+never requires stopping the script — only Ctrl+C stops it.
+
 ## Production (native, single host)
 
 No containers or VMs required. Build the binaries and the web bundle, then run

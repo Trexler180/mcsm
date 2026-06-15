@@ -13,7 +13,10 @@ The `server_permissions` and `api_keys` tables are reserved for future work.
 ## Tokens
 
 - JWT access tokens authenticate ordinary API requests.
-- Refresh tokens are rotated on use.
+- Refresh tokens are stored only as hashed database rows and rotated on use.
+- Browser refresh tokens are delivered as `HttpOnly`, `SameSite=Strict`
+  cookies scoped to `/api/v1/auth`; frontend code stores only the short-lived
+  access token.
 - Query-string tokens are accepted only for websocket/download endpoints where
   browsers cannot reliably send an Authorization header.
 - Agent calls use bearer tokens stored in the API database and never emitted in

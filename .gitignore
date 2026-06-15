@@ -15,6 +15,9 @@ apps/web/dist/
 apps/web/.vite/
 *.log
 
+# Stray runtime log dumped at repo root (e.g. captured server stdout)
+/log.txt
+
 # Environment
 .env
 .env.local
@@ -43,6 +46,9 @@ redis-data/
 *.db
 *.db-wal
 *.db-shm
+
+# Auto-generated app-secret encryption key (never commit)
+.mcsm-secret-key
 
 # Per-server working dirs (created by agent at runtime).
 # Anchored to repo root so it does NOT match apps/web/src/routes/servers/.

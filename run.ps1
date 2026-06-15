@@ -327,9 +327,12 @@ function Get-DevSourceFingerprint {
 }
 
 function Restart-DevProcess {
-    param([pscustomobject]$DevProcess)
+    param(
+        [pscustomobject]$DevProcess,
+        [string]$Reason = "source changed"
+    )
 
-    Write-Host "[$($DevProcess.Name)] source changed; restarting..."
+    Write-Host "[$($DevProcess.Name)] ${Reason}; restarting..."
     $name = $DevProcess.Name
     $workingDirectory = $DevProcess.WorkingDirectory
     $environment = $DevProcess.Environment
@@ -357,6 +360,26 @@ function Get-StableDevSourceFingerprint {
     }
 
     return $second
+}
+
+# Exponential backoff for crash-looping services: 2s, 4s, 8s, 16s, then 30s.
+function Get-RestartDelaySeconds {
+    param([int]$Failures)
+
+    $exponent = [Math]::Min($Failures, 5)
+    return [int][Math]::Min(30, [Math]::Pow(2, $exponent))
+}
+
+# Dependency manifests only — vite hot-reloads web sources itself, but new or
+# changed packages need a pnpm install plus a dev-server restart.
+function Get-WebDepsFingerprint {
+    param([string]$Path)
+
+    $parts = foreach ($file in @("package.json", "pnpm-lock.yaml")) {
+        $manifest = Join-Path $Path $file
+        if (Test-Path $manifest) { (Get-Item $manifest).LastWriteTimeUtc.Ticks } else { 0 }
+    }
+    return [string]::Join(":", $parts)
 }
 
 function Stop-ProcessTree {
@@ -453,19 +476,37 @@ Write-Host ""
 Write-Host "Press Ctrl+C to stop all services."
 Write-Host ""
 
-$processes = @()
-$apiProcess = $null
-$agentProcess = $null
-$webProcess = $null
-try {
-    $apiProcess = Start-DevProcess -Name "api" -WorkingDirectory $ApiDir -Environment $ApiEnv -Command @("go", "run", "./cmd/server")
-    $agentProcess = Start-DevProcess -Name "agent" -WorkingDirectory $AgentDir -Environment $AgentEnv -Command @("go", "run", "./cmd/agent")
-    $processes = @($apiProcess, $agentProcess)
-    Wait-DevHttp -Name "api" -Url "http://${ApiConnectHost}:$ApiPort/api/v1/health" -Processes $processes
+# Service definitions for the supervisor loop. Any service that exits — crash,
+# port conflict, compile error during a reload — is restarted automatically
+# with backoff, so updating the manager never requires stopping this script.
+$specs = [ordered]@{
+    api   = @{ Dir = $ApiDir;   Env = $ApiEnv;   Command = @("go", "run", "./cmd/server") }
+    agent = @{ Dir = $AgentDir; Env = $AgentEnv; Command = @("go", "run", "./cmd/agent") }
+    web   = @{ Dir = $WebDir;   Env = $WebEnv;   Command = @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort") }
+}
+$running = @{}
+$health = @{}
 
-    # The initial boot resets the dev admin password for convenience. Hot
-    # backend reloads must not repeat that reset, because it deletes refresh
-    # tokens and forces browser sessions to log in again.
+function Start-Spec {
+    param([string]$Name)
+
+    $running[$Name] = Start-DevProcess -Name $Name -WorkingDirectory $specs[$Name].Dir -Environment $specs[$Name].Env -Command $specs[$Name].Command
+    $health[$Name] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+}
+
+try {
+    Start-Spec -Name "api"
+    Start-Spec -Name "agent"
+    try {
+        Wait-DevHttp -Name "api" -Url "http://${ApiConnectHost}:$ApiPort/api/v1/health" -Processes @($running["api"], $running["agent"])
+    }
+    catch {
+        Write-Host "[api] $($_.Exception.Message) Continuing; the supervisor will keep restarting it."
+    }
+
+    # The initial boot resets the dev admin password for convenience. Restarts
+    # must not repeat that reset, because it deletes refresh tokens and forces
+    # browser sessions to log in again.
     $ApiEnv["RESET_ADMIN_PASSWORD"] = "0"
 
     $apiExtensions = @(".go", ".sql")
@@ -474,28 +515,46 @@ try {
     $agentFileNames = @("go.mod", "go.sum")
     $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
     $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
+    $webDepsFingerprint = Get-WebDepsFingerprint -Path $WebDir
     $lastWatchCheck = Get-Date
     $watchReadyAt = (Get-Date).AddSeconds(5)
 
-    $webProcess = Start-DevProcess -Name "web" -WorkingDirectory $WebDir -Environment $WebEnv -Command @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort")
-    $processes = @($apiProcess, $agentProcess, $webProcess)
+    Start-Spec -Name "web"
 
     while ($true) {
         if ($global:ServerManagerStopRequested -or $global:ServerManagerForceStopRequested) {
             break
         }
 
-        $processes = @($apiProcess, $agentProcess, $webProcess) | Where-Object { $_ }
-        foreach ($devProcess in $processes) {
-            Receive-DevOutput -DevProcess $devProcess
+        foreach ($name in @($running.Keys)) {
+            Receive-DevOutput -DevProcess $running[$name]
         }
 
-        $exited = @($processes | Where-Object { $_.Process.HasExited })
-        foreach ($devProcess in $exited) {
-            if (-not $devProcess.ExitReported) {
+        # Detect exits and schedule an automatic restart. A service that ran
+        # for at least a minute resets its failure count, so an old crash does
+        # not inflate the backoff of a fresh one.
+        foreach ($name in @($running.Keys)) {
+            $devProcess = $running[$name]
+            $state = $health[$name]
+            if ($devProcess.Process.HasExited -and -not $devProcess.ExitReported) {
                 Receive-DevOutput -DevProcess $devProcess
-                Write-Host "[$($devProcess.Name)] exited with code $($devProcess.Process.ExitCode)"
+                if (((Get-Date) - $state.StartedAt).TotalSeconds -ge 60) {
+                    $state.Failures = 0
+                }
+                $state.Failures++
+                $delay = Get-RestartDelaySeconds -Failures $state.Failures
+                $state.RestartAt = (Get-Date).AddSeconds($delay)
+                Write-Host "[$name] exited with code $($devProcess.Process.ExitCode); restarting in ${delay}s (Ctrl+C to stop)"
                 $devProcess.ExitReported = $true
+            }
+        }
+
+        foreach ($name in @($running.Keys)) {
+            $state = $health[$name]
+            if ($state.RestartAt -and (Get-Date) -ge $state.RestartAt) {
+                $state.RestartAt = $null
+                $state.StartedAt = Get-Date
+                $running[$name] = Restart-DevProcess -DevProcess $running[$name] -Reason "recovering after exit"
             }
         }
 
@@ -507,29 +566,35 @@ try {
                 $nextApiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
                 if ($nextApiFingerprint -ne $apiFingerprint) {
                     $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
-                    $apiProcess = Restart-DevProcess -DevProcess $apiProcess
-                    Wait-DevHttp -Name "api" -Url "http://${ApiConnectHost}:$ApiPort/api/v1/health" -Processes @($apiProcess) -AllowExited
+                    $running["api"] = Restart-DevProcess -DevProcess $running["api"]
+                    $health["api"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
                 }
 
                 $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                 if ($nextAgentFingerprint -ne $agentFingerprint) {
                     $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
-                    $agentProcess = Restart-DevProcess -DevProcess $agentProcess
+                    $running["agent"] = Restart-DevProcess -DevProcess $running["agent"]
+                    $health["agent"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+                }
+
+                $nextWebDepsFingerprint = Get-WebDepsFingerprint -Path $WebDir
+                if ($nextWebDepsFingerprint -ne $webDepsFingerprint) {
+                    $webDepsFingerprint = $nextWebDepsFingerprint
+                    Write-Host "[web] dependencies changed; running pnpm install..."
+                    Push-Location $WebDir
+                    try {
+                        pnpm install
+                    }
+                    catch {
+                        Write-Host "[web] pnpm install failed: $($_.Exception.Message)"
+                    }
+                    finally {
+                        Pop-Location
+                    }
+                    $running["web"] = Restart-DevProcess -DevProcess $running["web"] -Reason "dependencies changed"
+                    $health["web"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
                 }
             }
-        }
-
-        $processes = @($apiProcess, $agentProcess, $webProcess) | Where-Object { $_ }
-        $exited = @($processes | Where-Object { $_.Process.HasExited })
-        if ($NoBackendWatch) {
-            $blockingExited = $exited
-        }
-        else {
-            $blockingExited = @($exited | Where-Object { $_.Name -notin @("api", "agent") })
-        }
-
-        if ($blockingExited.Count -gt 0) {
-            break
         }
 
         Start-Sleep -Milliseconds 250
@@ -538,7 +603,7 @@ try {
 finally {
     Write-Host ""
     Write-Host "Stopping ServerManager..."
-    Stop-DevProcesses -Processes @($apiProcess, $agentProcess, $webProcess)
+    Stop-DevProcesses -Processes @($running.Values)
     Unregister-Event -SourceIdentifier $cancelEventId -ErrorAction SilentlyContinue
     Remove-Job -Job $cancelSubscriber -Force -ErrorAction SilentlyContinue
 }
