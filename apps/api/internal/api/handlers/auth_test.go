@@ -13,6 +13,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
+	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 	"github.com/mcsm/api/migrations"
 )
@@ -49,7 +50,7 @@ func TestRefreshRotatesRefreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthHandlers(s, "secret")
+	h := NewAuthHandlers(s, "secret", auth.NewTicketStore())
 	body, _ := json.Marshal(map[string]string{"refresh_token": oldToken})
 	rr := httptest.NewRecorder()
 	h.Refresh(rr, httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", bytes.NewReader(body)))
@@ -98,7 +99,7 @@ func TestRefreshAcceptsCookieToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthHandlers(s, "secret")
+	h := NewAuthHandlers(s, "secret", auth.NewTicketStore())
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: oldToken})
 	rr := httptest.NewRecorder()

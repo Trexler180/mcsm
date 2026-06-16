@@ -233,21 +233,22 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center justify-end gap-1">
-                      <a
-                        href={api.files.downloadUrl(
-                          serverId,
-                          currentPath === "/"
-                            ? "/" + entry.name
-                            : currentPath + "/" + entry.name,
-                        )}
-                        download
-                        onClick={(e) => e.stopPropagation()}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void api.files.download(
+                            serverId,
+                            currentPath === "/"
+                              ? "/" + entry.name
+                              : currentPath + "/" + entry.name,
+                          );
+                        }}
                         title={`Download ${entry.name}`}
                         aria-label={`Download ${entry.name}`}
                         className="p-1 hover:text-text-primary text-text-secondary rounded"
                       >
                         <Download className="h-3.5 w-3.5" />
-                      </a>
+                      </button>
                       <button
                         onClick={() =>
                           setDeleteTarget(

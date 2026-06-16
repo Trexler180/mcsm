@@ -67,7 +67,7 @@ func TestRequireServerAccessAllowsAdminAndOwnerOnly(t *testing.T) {
 	s, serverID, ownerID, otherID := accessTestStore(t)
 	secret := "secret"
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
 	r.With(requireServerAccess(s)).Get("/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})

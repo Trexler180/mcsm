@@ -20,7 +20,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 
-	authH := handlers.NewAuthHandlers(s, jwtSecret)
+	tickets := auth.NewTicketStore()
+	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets)
 	nodeH := handlers.NewNodeHandlers(s)
 	serverH := handlers.NewServerHandlers(s, serverRoot)
 	fileH := handlers.NewFileHandlers(s)
@@ -46,10 +47,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(jwtSecret))
+			r.Use(auth.Middleware(jwtSecret, tickets))
 
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/auth/me", authH.Me)
+			// Mint a short-lived ticket for header-less requests (downloads, WS).
+			r.Post("/auth/ticket", authH.Ticket)
 
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)

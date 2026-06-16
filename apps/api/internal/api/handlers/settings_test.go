@@ -44,7 +44,7 @@ func settingsRouter(s *store.Store) http.Handler {
 	h := NewSettingsHandlers(s)
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(auth.Middleware(settingsTestSecret))
+		r.Use(auth.Middleware(settingsTestSecret, auth.NewTicketStore()))
 		r.Route("/settings/integrations", func(r chi.Router) {
 			r.Use(auth.AdminOnly)
 			r.Get("/", h.ListIntegrations)

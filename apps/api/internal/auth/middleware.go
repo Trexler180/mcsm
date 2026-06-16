@@ -10,27 +10,31 @@ type ctxKey int
 
 const claimsKey ctxKey = iota
 
-func Middleware(secret string) func(http.Handler) http.Handler {
+func Middleware(secret string, tickets *TicketStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := bearerFromHeader(r)
-			if token == "" && queryTokenAllowed(r) {
-				// Browsers can't set Authorization on a WebSocket handshake,
-				// and downloads are browser navigations, so accept ?token=…
-				// only for those explicit endpoints.
-				token = r.URL.Query().Get("token")
-			}
-			if token == "" {
-				writeUnauth(w)
+			// Normal API calls carry the JWT in the Authorization header.
+			if token := bearerFromHeader(r); token != "" {
+				claims, err := ParseAccessToken(secret, token)
+				if err != nil {
+					writeUnauth(w)
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsKey, claims)))
 				return
 			}
-			claims, err := ParseAccessToken(secret, token)
-			if err != nil {
-				writeUnauth(w)
-				return
+
+			// Browsers can't set Authorization on a WebSocket handshake, and
+			// downloads are plain navigations, so those endpoints accept a
+			// short-lived, single-use ?ticket=… instead. We never accept a raw
+			// JWT in the query string — that leaks through history and logs.
+			if queryTokenAllowed(r) {
+				if claims, ok := tickets.Consume(r.URL.Query().Get("ticket")); ok {
+					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsKey, claims)))
+					return
+				}
 			}
-			ctx := context.WithValue(r.Context(), claimsKey, claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			writeUnauth(w)
 		})
 	}
 }

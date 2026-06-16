@@ -16,14 +16,20 @@ import (
 type AuthHandlers struct {
 	store     *store.Store
 	jwtSecret string
+	tickets   *auth.TicketStore
 }
 
 const refreshCookieName = "mcsm_refresh_token"
 
 var refreshTokenTTL = 7 * 24 * time.Hour
 
-func NewAuthHandlers(s *store.Store, jwtSecret string) *AuthHandlers {
-	return &AuthHandlers{store: s, jwtSecret: jwtSecret}
+// downloadTicketTTL bounds how long a download/WebSocket ticket is valid. It
+// only needs to survive the round trip from issuing the ticket to starting the
+// request, so a few seconds is plenty.
+const downloadTicketTTL = 30 * time.Second
+
+func NewAuthHandlers(s *store.Store, jwtSecret string, tickets *auth.TicketStore) *AuthHandlers {
+	return &AuthHandlers{store: s, jwtSecret: jwtSecret, tickets: tickets}
 }
 
 func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +146,27 @@ func (h *AuthHandlers) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
+}
+
+// Ticket issues a short-lived, single-use ticket for endpoints that can't carry
+// an Authorization header (file downloads, console/metrics WebSockets). The
+// caller is already authenticated via the Bearer header on this request; the
+// ticket simply stands in for that identity on the follow-up navigation.
+func (h *AuthHandlers) Ticket(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFrom(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	ticket, err := h.tickets.Issue(claims, downloadTicketTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ticket error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ticket":     ticket,
+		"expires_in": int(downloadTicketTTL.Seconds()),
+	})
 }
 
 func generateRefreshToken() (token, hash string, err error) {

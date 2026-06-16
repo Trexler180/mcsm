@@ -240,6 +240,11 @@ export const api = {
       return { access_token: accessToken };
     },
     ensureAccessToken,
+    // Mint a short-lived, single-use ticket for requests that can't send an
+    // Authorization header: file downloads (plain <a> navigations) and the
+    // console/metrics WebSocket handshakes. Replaces putting the raw JWT in the
+    // query string.
+    ticket: () => post<{ ticket: string; expires_in: number }>("/auth/ticket"),
     me: () => get<User>("/auth/me"),
   },
 
@@ -321,18 +326,27 @@ export const api = {
       post(`/servers/${serverId}/files/rename`, { from, to }),
     mkdir: (serverId: string, path: string) =>
       post(`/servers/${serverId}/files/mkdir`, { path }),
-    downloadUrl: (serverId: string, path: string) => {
-      const token = getToken();
-      const params = new URLSearchParams({ path });
-      if (token) params.set("token", token);
-      return `${BASE}/servers/${serverId}/files/download?${params.toString()}`;
+    // Trigger a browser download. A plain <a href> can't carry an auth header,
+    // so we mint a single-use ticket first and append it to the URL, then click
+    // a synthetic link. The ticket is consumed by the request and expires in
+    // seconds, so the URL is inert if it leaks into history/logs.
+    download: async (serverId: string, path: string) => {
+      const { ticket } = await api.auth.ticket();
+      const params = new URLSearchParams({ path, ticket });
+      const url = `${BASE}/servers/${serverId}/files/download?${params.toString()}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = path.split("/").pop() ?? "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     },
     // Fetch the raw, untouched bytes of a file (binary-safe). The download
     // endpoint streams the file verbatim, unlike readContent which forces text.
+    // This goes through fetchWithAuth, so it uses the Authorization header — no
+    // ticket needed.
     readBytes: (serverId: string, path: string) => {
-      const token = getToken();
       const params = new URLSearchParams({ path });
-      if (token) params.set("token", token);
       return fetchWithAuth(
         `${BASE}/servers/${serverId}/files/download?${params.toString()}`,
       ).then(async (r) => {
