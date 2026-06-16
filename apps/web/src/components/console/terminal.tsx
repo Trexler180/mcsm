@@ -49,6 +49,10 @@ export function ServerTerminal({ serverId }: TerminalProps) {
     const sc = new ServerConsole(serverId);
     consoleRef.current = sc;
 
+    // Until the first status frame arrives we don't know if the server is
+    // online, so say so rather than rendering an empty black box.
+    term.writeln("\x1b[2m--- Connecting… ---\x1b[0m");
+
     const unsub = sc.on((msg) => {
       if (msg.type === "line") {
         const d = msg.data as { line: string };
@@ -78,7 +82,7 @@ export function ServerTerminal({ serverId }: TerminalProps) {
 
   const sendCommand = () => {
     const cmd = input.trim();
-    if (!cmd || !consoleRef.current) return;
+    if (!cmd || !connected || !consoleRef.current) return;
     consoleRef.current.send(cmd);
     setInput("");
   };
@@ -102,11 +106,17 @@ export function ServerTerminal({ serverId }: TerminalProps) {
         <input
           ref={inputRef}
           type="text"
-          className="flex-1 bg-transparent text-sm font-mono text-text-primary placeholder:text-text-secondary/40 focus:outline-none"
-          placeholder="Enter command…"
+          className="flex-1 bg-transparent text-sm font-mono text-text-primary placeholder:text-text-secondary/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          placeholder={
+            connected
+              ? "Enter command…"
+              : "Server offline — start it to send commands"
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          disabled={!connected}
+          aria-label="Server console command"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
@@ -114,7 +124,9 @@ export function ServerTerminal({ serverId }: TerminalProps) {
         />
         <button
           onClick={sendCommand}
-          className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded border border-border hover:border-border-hover transition-colors"
+          disabled={!connected}
+          aria-label="Send command to server console"
+          className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded border border-border hover:border-border-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-text-secondary disabled:hover:border-border"
         >
           Send
         </button>
