@@ -200,8 +200,10 @@ function ServerActions({ server }: { server: ServerType }) {
   const busy = start.isPending || stop.isPending || restart.isPending;
 
   const openSettings = () => {
-    sessionStorage.setItem(`server:${server.id}:tab`, "options");
-    navigate({ to: "/servers/$id", params: { id: server.id } });
+    navigate({
+      to: "/servers/$id/$section",
+      params: { id: server.id, section: "options" },
+    });
   };
 
   return (
@@ -210,9 +212,13 @@ function ServerActions({ server }: { server: ServerType }) {
         size="sm"
         variant="ghost"
         onClick={() =>
-          navigate({ to: "/servers/$id", params: { id: server.id } })
+          navigate({
+            to: "/servers/$id/$section",
+            params: { id: server.id, section: "console" },
+          })
         }
         title="Open console"
+        aria-label="Open console"
       >
         <Terminal className="h-3.5 w-3.5" />
       </Button>
@@ -303,7 +309,10 @@ function ServersPage() {
                 key={srv.id}
                 className="rounded-lg border border-border bg-surface p-4 active:bg-surface-2/60"
                 onClick={() =>
-                  navigate({ to: "/servers/$id", params: { id: srv.id } })
+                  navigate({
+                    to: "/servers/$id/$section",
+                    params: { id: srv.id, section: "dashboard" },
+                  })
                 }
               >
                 <div className="flex items-center justify-between gap-3">
@@ -345,7 +354,10 @@ function ServersPage() {
                   key={srv.id}
                   className="cursor-pointer"
                   onClick={() =>
-                    navigate({ to: "/servers/$id", params: { id: srv.id } })
+                    navigate({
+                    to: "/servers/$id/$section",
+                    params: { id: srv.id, section: "dashboard" },
+                  })
                   }
                 >
                   <TableCell className="font-medium">{srv.name}</TableCell>

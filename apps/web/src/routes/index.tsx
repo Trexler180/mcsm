@@ -18,11 +18,12 @@ function DashboardPage() {
     refetchInterval: 10_000,
   });
 
-  // Deep-link into a server, optionally preselecting a tab via the same
-  // sessionStorage handshake the server-detail route reads on mount.
+  // Deep-link straight to a server tab via its own URL.
   const openServer = (id: string, tab?: string) => {
-    if (tab) sessionStorage.setItem(`server:${id}:tab`, tab);
-    navigate({ to: "/servers/$id", params: { id } });
+    navigate({
+      to: "/servers/$id/$section",
+      params: { id, section: tab ?? "dashboard" },
+    });
   };
 
   const counts = overview?.counts;

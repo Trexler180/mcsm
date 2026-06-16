@@ -1,4 +1,9 @@
-import { createRoute, useParams, useNavigate } from "@tanstack/react-router";
+import {
+  createRoute,
+  redirect,
+  useParams,
+  useNavigate,
+} from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -74,17 +79,24 @@ const sectionGroups = serverSections.reduce<
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+const validSections = new Set<string>(serverSections.map((s) => s.value));
+
 function ServerDetailPage() {
-  const { id } = useParams({ from: "/servers/$id" });
+  const { id, section } = useParams({ from: "/servers/$id/$section" });
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { error } = useNotifications();
-  const [tab, setTab] = useState<ServerSection>(() => {
-    const stored = sessionStorage.getItem(`server:${id}:tab`);
-    if (stored) sessionStorage.removeItem(`server:${id}:tab`);
-    if (stored === "software") return "options";
-    return (stored as ServerSection | null) ?? "dashboard";
-  });
+  // The active tab lives in the URL (/servers/:id/:section) so every tab is
+  // linkable and deep-links (e.g. from the dashboard) land on the right tab.
+  // "software" is a legacy alias kept working; anything unknown falls back to
+  // the dashboard.
+  const tab: ServerSection = validSections.has(section)
+    ? (section as ServerSection)
+    : section === "software"
+      ? "options"
+      : "dashboard";
+  const setTab = (next: ServerSection) =>
+    navigate({ to: "/servers/$id/$section", params: { id, section: next } });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
   const { data: server, isLoading } = useQuery({
@@ -421,6 +433,18 @@ function ServerDetailPage() {
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/servers/$id",
+  path: "/servers/$id/$section",
   component: ServerDetailPage,
+});
+
+// Bare /servers/:id lands on the dashboard tab, so existing links keep working.
+export const ServerIndexRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/servers/$id",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/servers/$id/$section",
+      params: { id: params.id, section: "dashboard" },
+    });
+  },
 });
