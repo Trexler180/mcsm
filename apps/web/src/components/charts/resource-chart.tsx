@@ -118,27 +118,20 @@ export function ResourceChart({
       <div className="bg-surface rounded-lg border border-border p-3">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">RAM</span>
-          <span className="text-right font-mono font-medium text-text-primary leading-tight">
-            {latest ? (
-              <>
-                <span className="text-sm">{latest.ram_used_mb} MB</span>
-                <span className="block text-[10px] text-text-secondary">
-                  {ramMaxMb && ramMaxMb > 0
-                    ? `/ ${ramMaxMb} MB heap`
-                    : `/ ${latest.ram_total_mb} MB host`}
-                </span>
-              </>
-            ) : (
-              '—'
-            )}
+          {/* Single line so the box keeps a constant height before/after the
+              first metrics sample arrives. Host total stays in the tooltip. */}
+          <span
+            className="text-sm font-mono font-medium text-text-primary"
+            title={latest ? `Host total: ${latest.ram_total_mb} MB` : undefined}
+          >
+            {latest
+              ? `${latest.ram_used_mb} / ${
+                  ramMaxMb && ramMaxMb > 0 ? ramMaxMb : latest.ram_total_mb
+                } MB`
+              : '—'}
           </span>
         </div>
         <Sparkline data={ramData} color="#3b82f6" />
-        {latest && ramMaxMb && ramMaxMb > 0 ? (
-          <p className="mt-1 text-[10px] text-text-secondary">
-            Host: {latest.ram_total_mb} MB total
-          </p>
-        ) : null}
       </div>
     </div>
   )
