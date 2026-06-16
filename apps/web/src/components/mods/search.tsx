@@ -1341,7 +1341,11 @@ export function ModSearch({
     queryFn: () => api.mods.list(serverId),
   });
 
-  const { data: updates = [], isFetching: refreshingUpdates } = useQuery({
+  const {
+    data: updates = [],
+    isLoading: loadingUpdates,
+    isFetching: refreshingUpdates,
+  } = useQuery({
     queryKey: ["mod-updates", serverId],
     queryFn: () => api.mods.updates(serverId),
     staleTime: 5 * 60_000,
@@ -1696,7 +1700,12 @@ export function ModSearch({
 
   const STATUS_CHIPS: { value: typeof statusFilter; label: string }[] = [
     { value: "all", label: `All (${installed.length})` },
-    { value: "updates", label: `Updates (${updatesCount})` },
+    {
+      value: "updates",
+      // Until the first updates fetch resolves, `updates` is [] — show an
+      // ellipsis instead of a misleading "Updates (0)" that flips to (2).
+      label: loadingUpdates ? "Updates (…)" : `Updates (${updatesCount})`,
+    },
     { value: "enabled", label: `Enabled (${enabledCount})` },
     { value: "disabled", label: `Disabled (${installed.length - enabledCount})` },
   ];
