@@ -771,7 +771,7 @@ function InstalledModRow({
 
   return (
     <div
-      className={`grid grid-cols-[1fr_auto] md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] items-center gap-4 px-4 py-2.5 hover:bg-surface-2/40 border-b border-border/50 ${
+      className={`grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] md:items-center md:gap-4 px-4 py-3 md:py-2.5 hover:bg-surface-2/40 border-b border-border/50 ${
         mod.enabled ? "" : "opacity-60"
       }`}
     >
@@ -861,8 +861,10 @@ function InstalledModRow({
         </div>
       </div>
 
-      {/* Version (hidden on small screens) */}
-      <div className="hidden md:block min-w-0">
+      {/* Version. On phones this stacks under the title as its own line rather
+          than being dropped, so the row reads as a card instead of a cramped
+          strip of controls. */}
+      <div className="min-w-0">
         <p className="text-sm text-text-primary truncate">{mod.version}</p>
         <p className="text-xs text-text-secondary truncate">
           {mod.install_path}/{mod.file_name}
@@ -874,8 +876,9 @@ function InstalledModRow({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-1 flex-shrink-0">
+      {/* Actions. On phones these sit on their own row with a divider and right
+          alignment so the tap targets aren't squeezed against the title. */}
+      <div className="flex items-center gap-1 flex-shrink-0 justify-end border-t border-border/40 pt-2 md:border-t-0 md:pt-0">
         {onSwitchVersion && (
           <Button
             size="sm"
