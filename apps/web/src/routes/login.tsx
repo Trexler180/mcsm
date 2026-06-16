@@ -37,7 +37,9 @@ function LoginPage() {
             <Server className="h-6 w-6 text-black" />
           </div>
           <h1 className="text-2xl font-bold text-text-primary">MCSM</h1>
-          <p className="text-sm text-text-secondary mt-1">Minecraft Server Manager</p>
+          <p className="text-sm text-text-secondary mt-1">
+            Mod-aware operations for Minecraft servers
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

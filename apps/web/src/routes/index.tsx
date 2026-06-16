@@ -53,7 +53,10 @@ function DashboardPage() {
 
   return (
     <div>
-      <Header title="Dashboard" />
+      <Header
+        title="Dashboard"
+        description="Operations across your Minecraft servers — updates, conflicts, crashes, and backups at a glance"
+      />
       <div className="space-y-6 p-4 sm:p-6">
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {stats.map((s) => (
