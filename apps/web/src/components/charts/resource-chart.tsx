@@ -7,12 +7,18 @@ interface Sample {
   ram_total_mb: number
 }
 
+// Shared sparkline dimensions. The placeholder and the rendered <svg> use the
+// same height so the box never changes size between the empty state and the
+// first metrics sample.
+const SPARK_H = 28
+const SPARK_W = 200
+
 function Sparkline({ data, color }: { data: number[]; color: string }) {
+  const h = SPARK_H
+  const w = SPARK_W
   if (data.length < 2) {
-    return <div className="h-10 w-full" />
+    return <div style={{ height: h }} className="w-full" />
   }
-  const h = 40
-  const w = 200
   // Auto-scale to the data's own range so small movements (a few MB of RAM,
   // a few % CPU) are visible instead of pinned flat against a 0-100 axis.
   // Pad by 10% and enforce a minimum span so a steady signal sits mid-height.
@@ -37,7 +43,7 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
       height={h}
       viewBox={`0 0 ${w} ${h}`}
       preserveAspectRatio="none"
-      className="overflow-visible"
+      className="block overflow-visible"
     >
       <polyline
         points={pts}
