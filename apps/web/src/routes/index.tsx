@@ -102,7 +102,7 @@ function DashboardPage() {
 
             <FleetGrid servers={overview.servers} onOpenServer={openServer} />
 
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
               <NodeHealthCard nodes={overview.nodes} />
               <ActivityFeed
                 activity={overview.activity}

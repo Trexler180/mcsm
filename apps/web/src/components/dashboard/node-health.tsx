@@ -22,7 +22,7 @@ export function NodeHealthCard({ nodes }: { nodes: OverviewNode[] }) {
           hint="Register a node to run servers on it."
         />
       ) : (
-        <div className="divide-y divide-border">
+        <div className="max-h-80 divide-y divide-border overflow-y-auto">
           {nodes.map((n) => (
             <div
               key={n.id}

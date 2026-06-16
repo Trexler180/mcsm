@@ -51,7 +51,7 @@ export function ActivityFeed({
           hint="Actions across your servers will show up here."
         />
       ) : (
-        <div className="divide-y divide-border">
+        <div className="max-h-80 divide-y divide-border overflow-y-auto">
           {activity.map((e) => {
             const high = actionSeverity(e.action) === "high";
             return (
