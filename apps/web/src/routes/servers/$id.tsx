@@ -46,20 +46,31 @@ const serverSections: Array<{
   value: ServerSection;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  group: string;
 }> = [
-  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { value: "console", label: "Console", icon: Terminal },
-  { value: "logs", label: "Logs", icon: FileText },
-  { value: "players", label: "Players", icon: Users },
-  { value: "mods", label: "Mods", icon: PackageOpen },
-  { value: "options", label: "Options", icon: SlidersHorizontal },
-  { value: "properties", label: "Properties", icon: FileCog },
-  { value: "configs", label: "Configs", icon: FileCog },
-  { value: "files", label: "Files", icon: FolderTree },
-  { value: "worlds", label: "Worlds", icon: Globe2 },
-  { value: "backups", label: "Backups", icon: HardDrive },
-  { value: "tasks", label: "Tasks", icon: ToggleRight },
+  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Operate" },
+  { value: "console", label: "Console", icon: Terminal, group: "Operate" },
+  { value: "logs", label: "Logs", icon: FileText, group: "Operate" },
+  { value: "players", label: "Players", icon: Users, group: "Operate" },
+  { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage" },
+  { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage" },
+  { value: "properties", label: "Properties", icon: FileCog, group: "Manage" },
+  { value: "configs", label: "Configs", icon: FileCog, group: "Manage" },
+  { value: "files", label: "Files", icon: FolderTree, group: "Storage" },
+  { value: "worlds", label: "Worlds", icon: Globe2, group: "Storage" },
+  { value: "backups", label: "Backups", icon: HardDrive, group: "Storage" },
+  { value: "tasks", label: "Tasks", icon: ToggleRight, group: "Automation" },
 ];
+
+// Group order for the mobile picker, preserving the order above within each.
+const sectionGroups = serverSections.reduce<
+  Array<{ group: string; items: typeof serverSections }>
+>((acc, section) => {
+  const existing = acc.find((g) => g.group === section.group);
+  if (existing) existing.items.push(section);
+  else acc.push({ group: section.group, items: [section] });
+  return acc;
+}, []);
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -250,25 +261,54 @@ function ServerDetailPage() {
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
         <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-56 md:border-b-0 md:border-r md:p-3">
-          <nav className="scrollbar-none flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
-            {serverSections.map((section) => {
-              const Icon = section.icon;
-              const active = tab === section.value;
-              return (
-                <button
-                  key={section.value}
-                  onClick={() => setTab(section.value)}
-                  className={`flex h-9 flex-shrink-0 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors md:w-full ${
-                    active
-                      ? "bg-accent/15 text-text-primary"
-                      : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-                  }`}
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0" />
-                  {section.label}
-                </button>
-              );
-            })}
+          {/* Mobile: a grouped picker so every section is reachable in one tap
+              instead of a long horizontal strip where most tabs scroll off. */}
+          <label className="md:hidden">
+            <span className="sr-only">Section</span>
+            <select
+              value={tab}
+              onChange={(e) => setTab(e.target.value as ServerSection)}
+              className="h-10 w-full rounded-md border border-border bg-surface-2 px-3 text-sm text-text-primary"
+            >
+              {sectionGroups.map((g) => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.items.map((section) => (
+                    <option key={section.value} value={section.value}>
+                      {section.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+
+          {/* Desktop: vertical sidebar nav, grouped with section headings. */}
+          <nav className="hidden md:flex md:flex-col md:gap-1">
+            {sectionGroups.map((g) => (
+              <div key={g.group} className="md:mb-1">
+                <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary/60">
+                  {g.group}
+                </p>
+                {g.items.map((section) => {
+                  const Icon = section.icon;
+                  const active = tab === section.value;
+                  return (
+                    <button
+                      key={section.value}
+                      onClick={() => setTab(section.value)}
+                      className={`flex h-9 w-full items-center gap-2 rounded-md px-3 text-left text-sm transition-colors ${
+                        active
+                          ? "bg-accent/15 text-text-primary"
+                          : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4 flex-shrink-0" />
+                      {section.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
         </aside>
 
