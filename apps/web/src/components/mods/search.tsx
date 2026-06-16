@@ -288,17 +288,20 @@ function Switch({
   onChange,
   disabled,
   title,
+  "aria-label": ariaLabel,
 }: {
   checked: boolean;
   onChange: () => void;
   disabled?: boolean;
   title?: string;
+  "aria-label"?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={onChange}
       title={title}
@@ -879,7 +882,7 @@ function InstalledModRow({
             variant="ghost"
             onClick={onSwitchVersion}
             title="Switch version"
-            aria-label="Switch version"
+            aria-label={`Switch version of ${mod.name}`}
           >
             <ArrowRightLeft className="h-3.5 w-3.5 text-text-secondary" />
           </Button>
@@ -891,7 +894,7 @@ function InstalledModRow({
             onClick={() => updateMutation.mutate()}
             loading={updateMutation.isPending}
             title={`Update to ${update.latest_version}`}
-            aria-label={`Update to ${update.latest_version}`}
+            aria-label={`Update ${mod.name} to ${update.latest_version}`}
           >
             <ArrowUpCircle className="h-3.5 w-3.5" />
           </Button>
@@ -901,6 +904,9 @@ function InstalledModRow({
           onChange={() => enabledMutation.mutate()}
           disabled={enabledMutation.isPending}
           title={mod.enabled ? "Disable (keep file)" : "Enable"}
+          aria-label={
+            mod.enabled ? `Disable ${mod.name}` : `Enable ${mod.name}`
+          }
         />
         {mod.source_id && (
           <Button
@@ -909,7 +915,11 @@ function InstalledModRow({
             onClick={() => pinMutation.mutate()}
             loading={pinMutation.isPending}
             title={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
-            aria-label={mod.pinned ? "Unpin (allow updates)" : "Pin (skip updates)"}
+            aria-label={
+              mod.pinned
+                ? `Unpin ${mod.name} (allow updates)`
+                : `Pin ${mod.name} (skip updates)`
+            }
           >
             {mod.pinned ? (
               <PinOff className="h-3.5 w-3.5 text-amber-400" />
@@ -923,7 +933,7 @@ function InstalledModRow({
           variant="ghost"
           onClick={onUninstall}
           title="Uninstall"
-          aria-label="Uninstall mod"
+          aria-label={`Uninstall ${mod.name}`}
         >
           <Trash2 className="h-3.5 w-3.5 text-red-400" />
         </Button>

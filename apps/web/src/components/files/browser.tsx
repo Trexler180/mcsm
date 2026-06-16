@@ -242,6 +242,8 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
                         )}
                         download
                         onClick={(e) => e.stopPropagation()}
+                        title={`Download ${entry.name}`}
+                        aria-label={`Download ${entry.name}`}
                         className="p-1 hover:text-text-primary text-text-secondary rounded"
                       >
                         <Download className="h-3.5 w-3.5" />
@@ -254,6 +256,8 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
                               : currentPath + "/" + entry.name,
                           )
                         }
+                        title={`Delete ${entry.name}`}
+                        aria-label={`Delete ${entry.name}`}
                         className="p-1 hover:text-red-400 text-text-secondary rounded"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
