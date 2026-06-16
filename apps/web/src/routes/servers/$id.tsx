@@ -1,5 +1,5 @@
 import { createRoute, useParams, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -104,6 +104,24 @@ function ServerDetailPage() {
     : null;
   const showConflict =
     conflict != null && conflict.detected_at !== dismissedConflict;
+
+  // Persist each newly detected conflict to the backend once, so the ops cockpit
+  // can surface unresolved conflicts across servers. The store de-dupes by
+  // (server, summary) while a conflict is open; disabling the jars resolves it.
+  const reportedConflict = useRef<number | null>(null);
+  useEffect(() => {
+    if (!conflict || conflict.detected_at === reportedConflict.current) return;
+    reportedConflict.current = conflict.detected_at;
+    api.mods
+      .recordConflict(id, {
+        kind: conflict.kind ?? "crash",
+        summary: conflict.summary,
+        mods: conflict.suggestions.map((s) => s.mod_name).filter(Boolean),
+      })
+      .catch(() => {
+        // Best-effort: the dialog still works if recording fails.
+      });
+  }, [conflict, id]);
 
   const start = useMutation({
     mutationFn: () => api.servers.start(id),

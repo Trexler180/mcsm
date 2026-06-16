@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { ModDetailDialog } from "@/components/mods/detail";
+import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type {
@@ -1351,6 +1352,7 @@ export function ModSearch({
   // ── Safe auto-update: trigger a run, poll it live, surface the outcome ──
   const [dismissedRunId, setDismissedRunId] = useState<string | null>(null);
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showSafeUpdate, setShowSafeUpdate] = useState(false);
 
   const { data: updateRuns = [] } = useQuery({
     queryKey: ["mod-update-runs", serverId],
@@ -1403,6 +1405,20 @@ export function ModSearch({
     },
     onError: (e: Error) => error("Safe update failed to start", e.message),
   });
+
+  // Guided safe update: optionally take a backup before kicking off the run, so
+  // the operator can roll back the whole server if an update misbehaves beyond
+  // what the engine's own auto-revert handles.
+  const startSafeUpdate = (backupFirst: boolean) => {
+    setShowSafeUpdate(false);
+    if (backupFirst) {
+      api.backups
+        .create(serverId)
+        .then(() => success("Backup started", "Updating once it's queued"))
+        .catch((e: Error) => error("Backup failed to start", e.message));
+    }
+    autoUpdateMutation.mutate();
+  };
 
   const unskipMutation = useMutation({
     mutationFn: (v: { project_id: string; version_id: string }) =>
@@ -1811,9 +1827,13 @@ export function ModSearch({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => autoUpdateMutation.mutate()}
+              onClick={() => setShowSafeUpdate(true)}
               loading={autoUpdateMutation.isPending || !!activeRun}
-              disabled={autoUpdateMutation.isPending || !!activeRun}
+              disabled={
+                autoUpdateMutation.isPending ||
+                !!activeRun ||
+                updates.length === 0
+              }
               title="Update mods, restart the server, and automatically revert + blocklist any update that breaks the boot"
             >
               <ShieldCheck className="h-3.5 w-3.5" />
@@ -2328,6 +2348,13 @@ export function ModSearch({
         // SpigotMC version entries inherit the resource's stale major-only
         // "tested versions", so the MC compat tag would mislead — skip it.
         mcVersion={switchTarget?.source === "spigotmc" ? "" : mcVersion}
+      />
+
+      <SafeUpdateDialog
+        open={showSafeUpdate}
+        updates={updates}
+        onClose={() => setShowSafeUpdate(false)}
+        onConfirm={startSafeUpdate}
       />
 
       <Dialog
