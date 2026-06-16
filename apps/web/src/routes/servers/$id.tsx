@@ -12,17 +12,6 @@ import {
   RotateCcw,
   Skull,
   ArrowLeft,
-  HardDrive,
-  LayoutDashboard,
-  Terminal,
-  FileText,
-  Users,
-  PackageOpen,
-  FolderTree,
-  Globe2,
-  SlidersHorizontal,
-  FileCog,
-  ToggleRight,
 } from "lucide-react";
 import { Route as rootRoute } from "../__root";
 import { Button } from "@/components/ui/button";
@@ -39,7 +28,10 @@ import { ResourceChart } from "@/components/charts/resource-chart";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { ServerStatus } from "@/lib/types";
-import { type ServerSection } from "@/components/servers/shared";
+import {
+  type ServerSection,
+  SERVER_SECTIONS,
+} from "@/components/servers/shared";
 import { BackupsTab } from "@/components/servers/backups-tab";
 import { DashboardTab } from "@/components/servers/dashboard-tab";
 import { TasksTab } from "@/components/servers/tasks-tab";
@@ -47,29 +39,9 @@ import { LogsTab } from "@/components/servers/logs-tab";
 import { WorldsTab } from "@/components/servers/worlds-tab";
 import { OptionsTab, PropertiesTab } from "@/components/servers/options-properties";
 
-const serverSections: Array<{
-  value: ServerSection;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  group: string;
-}> = [
-  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Operate" },
-  { value: "console", label: "Console", icon: Terminal, group: "Operate" },
-  { value: "logs", label: "Logs", icon: FileText, group: "Operate" },
-  { value: "players", label: "Players", icon: Users, group: "Operate" },
-  { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage" },
-  { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage" },
-  { value: "properties", label: "Properties", icon: FileCog, group: "Manage" },
-  { value: "configs", label: "Configs", icon: FileCog, group: "Manage" },
-  { value: "files", label: "Files", icon: FolderTree, group: "Storage" },
-  { value: "worlds", label: "Worlds", icon: Globe2, group: "Storage" },
-  { value: "backups", label: "Backups", icon: HardDrive, group: "Storage" },
-  { value: "tasks", label: "Tasks", icon: ToggleRight, group: "Automation" },
-];
-
 // Group order for the mobile picker, preserving the order above within each.
-const sectionGroups = serverSections.reduce<
-  Array<{ group: string; items: typeof serverSections }>
+const sectionGroups = SERVER_SECTIONS.reduce<
+  Array<{ group: string; items: typeof SERVER_SECTIONS }>
 >((acc, section) => {
   const existing = acc.find((g) => g.group === section.group);
   if (existing) existing.items.push(section);
@@ -79,7 +51,7 @@ const sectionGroups = serverSections.reduce<
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-const validSections = new Set<string>(serverSections.map((s) => s.value));
+const validSections = new Set<string>(SERVER_SECTIONS.map((s) => s.value));
 
 function ServerDetailPage() {
   const { id, section } = useParams({ from: "/servers/$id/$section" });

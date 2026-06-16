@@ -1,6 +1,7 @@
 import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { Sidebar } from '@/components/layout/sidebar'
+import { CommandPalette } from '@/components/layout/command-palette'
 import { Toaster } from '@/components/ui/toast'
 import { useAuthStore } from '@/store/auth'
 
@@ -47,6 +48,7 @@ function RootLayout() {
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <Outlet />
       </main>
+      <CommandPalette />
       <Toaster />
     </div>
   )
