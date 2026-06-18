@@ -79,6 +79,24 @@ func (c *Client) Info(ctx context.Context) (map[string]any, error) {
 	return result, nil
 }
 
+// JavaInstallations returns the agent host's detected Java runtimes and OS,
+// proxied verbatim to the panel ({installations: [...], os: "windows"|...}).
+func (c *Client) JavaInstallations(ctx context.Context) (map[string]any, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/java", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (c *Client) StartServer(ctx context.Context, serverID string, cfg map[string]any) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/start", cfg)
 	if err != nil {

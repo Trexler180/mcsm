@@ -96,6 +96,18 @@ func pollAll(ctx context.Context, s *store.Store) {
 					_ = s.InsertLogEvent(ctx, srv.ID, "error", msg, "poller")
 				}
 			}
+			// Conversely, a server reaching "online" booted cleanly, so any stored
+			// mod conflict is now resolved — whether the operator disabled the
+			// offending jars, changed a mod version, or removed the jar by hand.
+			// Mod conflicts block startup, so the server can't be online with one
+			// live; the detail page goes quiet on its own (it reads the live agent
+			// status), but the cockpit's cross-server feed would keep flagging a
+			// now-healthy server until we clear the record here.
+			if desired == "online" {
+				if err := s.ResolveServerConflicts(ctx, srv.ID); err != nil {
+					log.Printf("poller: resolve conflicts %s: %v", srv.ID, err)
+				}
+			}
 			if err := s.UpdateServerStatus(ctx, srv.ID, desired); err != nil {
 				log.Printf("poller: update status %s -> %s: %v", srv.ID, desired, err)
 			}

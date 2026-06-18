@@ -117,6 +117,23 @@ func (s *Scheduler) refresh(ctx context.Context) {
 			delete(s.entries, tid)
 		}
 	}
+
+	// Keep each enabled task's cached next_run pointing at its true next
+	// occurrence. Without this it's only written after a task fires, so a new
+	// task (or one whose stored time went stale across an API restart) shows a
+	// past time — rendered in the UI as "in now".
+	now := time.Now()
+	for _, t := range tasks {
+		next := store.NextRunForCron(t.CronExpr, now)
+		if next == nil {
+			continue
+		}
+		if t.NextRun == nil || !t.NextRun.Equal(*next) {
+			if err := s.store.SetTaskNextRun(ctx, t.ID, next); err != nil {
+				log.Printf("scheduler: set next_run for %s: %v", t.ID, err)
+			}
+		}
+	}
 }
 
 func (s *Scheduler) runTask(task *store.ScheduledTask) {

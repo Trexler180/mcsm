@@ -7,10 +7,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 )
+
+// NextRunForCron returns the next time a 5-field cron expression fires after
+// `from`, or nil when the expression can't be parsed. Uses the same standard
+// parser the scheduler runs on, so the stored next_run matches reality.
+func NextRunForCron(expr string, from time.Time) *time.Time {
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return nil
+	}
+	n := sched.Next(from)
+	return &n
+}
 
 type Store struct {
 	db        *sql.DB
@@ -38,6 +53,206 @@ type User struct {
 	Role        string     `json:"role"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastLogin   *time.Time `json:"last_login"`
+}
+
+type ServerPermission string
+
+const (
+	// Group permissions. Holding a group grants every leaf beneath it.
+	ServerPermissionView     ServerPermission = "view"
+	ServerPermissionPower    ServerPermission = "power"
+	ServerPermissionConsole  ServerPermission = "console"
+	ServerPermissionPlayers  ServerPermission = "players"
+	ServerPermissionFiles    ServerPermission = "files"
+	ServerPermissionMods     ServerPermission = "mods"
+	ServerPermissionBackups  ServerPermission = "backups"
+	ServerPermissionTasks    ServerPermission = "tasks"
+	ServerPermissionSettings ServerPermission = "settings"
+	ServerPermissionAdmin    ServerPermission = "admin"
+
+	// Leaf permissions. Each is "<group>.<action>" and is satisfied by holding
+	// either the leaf itself, its parent group, or admin.
+	ServerPermissionPowerStart   ServerPermission = "power.start"
+	ServerPermissionPowerStop    ServerPermission = "power.stop"
+	ServerPermissionPowerRestart ServerPermission = "power.restart"
+	ServerPermissionPowerKill    ServerPermission = "power.kill"
+
+	ServerPermissionPlayersWhitelist ServerPermission = "players.whitelist"
+	ServerPermissionPlayersKick      ServerPermission = "players.kick"
+	ServerPermissionPlayersBan       ServerPermission = "players.ban"
+	ServerPermissionPlayersOp        ServerPermission = "players.op"
+
+	ServerPermissionFilesRead   ServerPermission = "files.read"
+	ServerPermissionFilesWrite  ServerPermission = "files.write"
+	ServerPermissionFilesDelete ServerPermission = "files.delete"
+
+	ServerPermissionModsInstall ServerPermission = "mods.install"
+	ServerPermissionModsUpdate  ServerPermission = "mods.update"
+	ServerPermissionModsRemove  ServerPermission = "mods.remove"
+
+	ServerPermissionBackupsCreate  ServerPermission = "backups.create"
+	ServerPermissionBackupsRestore ServerPermission = "backups.restore"
+	ServerPermissionBackupsDelete  ServerPermission = "backups.delete"
+)
+
+var (
+	ErrInvalidServerPermission = errors.New("invalid server permission")
+	ErrServerMemberNotFound    = errors.New("server member not found")
+	ErrServerPermissionsStale  = errors.New("server permissions changed")
+	ErrAmbiguousUserEmail      = errors.New("multiple users match email")
+)
+
+// allServerPermissions is the set of grantable group permissions. Owners and
+// global admins are reported as holding all of these; leaves are implied.
+var allServerPermissions = []string{
+	string(ServerPermissionView),
+	string(ServerPermissionPower),
+	string(ServerPermissionConsole),
+	string(ServerPermissionPlayers),
+	string(ServerPermissionFiles),
+	string(ServerPermissionMods),
+	string(ServerPermissionBackups),
+	string(ServerPermissionTasks),
+	string(ServerPermissionSettings),
+	string(ServerPermissionAdmin),
+}
+
+// serverPermissionLeaves maps each group to its fine-grained leaves. Groups not
+// listed here (view, console, tasks, settings, admin) are atomic.
+var serverPermissionLeaves = map[string][]string{
+	string(ServerPermissionPower): {
+		string(ServerPermissionPowerStart), string(ServerPermissionPowerStop),
+		string(ServerPermissionPowerRestart), string(ServerPermissionPowerKill),
+	},
+	string(ServerPermissionPlayers): {
+		string(ServerPermissionPlayersWhitelist), string(ServerPermissionPlayersKick),
+		string(ServerPermissionPlayersBan), string(ServerPermissionPlayersOp),
+	},
+	string(ServerPermissionFiles): {
+		string(ServerPermissionFilesRead), string(ServerPermissionFilesWrite),
+		string(ServerPermissionFilesDelete),
+	},
+	string(ServerPermissionMods): {
+		string(ServerPermissionModsInstall), string(ServerPermissionModsUpdate),
+		string(ServerPermissionModsRemove),
+	},
+	string(ServerPermissionBackups): {
+		string(ServerPermissionBackupsCreate), string(ServerPermissionBackupsRestore),
+		string(ServerPermissionBackupsDelete),
+	},
+}
+
+// validServerPermissions accepts every group plus every leaf.
+var validServerPermissions = func() map[string]bool {
+	m := make(map[string]bool, len(allServerPermissions))
+	for _, p := range allServerPermissions {
+		m[p] = true
+	}
+	for _, leaves := range serverPermissionLeaves {
+		for _, leaf := range leaves {
+			m[leaf] = true
+		}
+	}
+	return m
+}()
+
+type ServerMember struct {
+	ServerID    string   `json:"server_id"`
+	UserID      string   `json:"user_id"`
+	Email       string   `json:"email"`
+	DisplayName *string  `json:"display_name"`
+	Role        string   `json:"role"`
+	Owner       bool     `json:"owner"`
+	Permissions []string `json:"permissions"`
+}
+
+func AllServerPermissions() []string {
+	out := make([]string, len(allServerPermissions))
+	copy(out, allServerPermissions)
+	return out
+}
+
+// permissionParent returns the group of a leaf permission ("power.start" ->
+// "power"), or "" for a group/atomic permission.
+func permissionParent(p string) string {
+	if i := strings.IndexByte(p, '.'); i >= 0 {
+		return p[:i]
+	}
+	return ""
+}
+
+// NormalizeServerPermissions validates, de-dupes, and sorts a permission set.
+// Leaves whose parent group is also present are dropped, since the group
+// already grants them — this keeps stored sets minimal and comparisons stable.
+func NormalizeServerPermissions(perms []string) ([]string, error) {
+	seen := map[string]bool{}
+	for _, perm := range perms {
+		p := strings.ToLower(strings.TrimSpace(perm))
+		if p == "" {
+			continue
+		}
+		if !validServerPermissions[p] {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidServerPermission, perm)
+		}
+		seen[p] = true
+	}
+	out := make([]string, 0, len(seen))
+	for perm := range seen {
+		if parent := permissionParent(perm); parent != "" && seen[parent] {
+			continue // implied by the group; don't store redundantly
+		}
+		out = append(out, perm)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// HasServerPermission reports whether perms satisfies a specific permission.
+// A leaf is satisfied by the leaf itself, its parent group, or admin; a group
+// is satisfied by the group or admin.
+func HasServerPermission(perms []string, needed ServerPermission) bool {
+	need := string(needed)
+	// Any granted permission implies the ability to view the server: if you can
+	// act on it at all, you can open its dashboard. This avoids a half-state
+	// where e.g. power.start is granted but the dashboard itself 403s.
+	if need == string(ServerPermissionView) && len(perms) > 0 {
+		return true
+	}
+	parent := permissionParent(need)
+	for _, perm := range perms {
+		if perm == string(ServerPermissionAdmin) || perm == need {
+			return true
+		}
+		if parent != "" && perm == parent {
+			return true
+		}
+	}
+	return false
+}
+
+// HasServerGroupAccess reports whether perms grants any access within a group —
+// used to gate read/list endpoints that any holder of the group (or any of its
+// leaves) should be able to reach.
+func HasServerGroupAccess(perms []string, group ServerPermission) bool {
+	g := string(group)
+	for _, perm := range perms {
+		if perm == string(ServerPermissionAdmin) || perm == g || permissionParent(perm) == g {
+			return true
+		}
+	}
+	return false
+}
+
+func samePermissionSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type Node struct {
@@ -253,6 +468,42 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
 		return nil, fmt.Errorf("user not found")
 	}
 	return &u, err
+}
+
+func (s *Store) GetUserByEmailInsensitive(ctx context.Context, email string) (*User, error) {
+	needle := strings.ToLower(strings.TrimSpace(email))
+	if needle == "" {
+		return nil, fmt.Errorf("user not found")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, email, display_name, role, created_at, last_login
+		 FROM users WHERE lower(email) = ? ORDER BY created_at DESC`,
+		needle,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []*User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.CreatedAt, &u.LastLogin); err != nil {
+			return nil, err
+		}
+		matches = append(matches, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("user not found")
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, ErrAmbiguousUserEmail
+	}
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
@@ -530,7 +781,13 @@ func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Serve
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
 		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at
-		 FROM servers WHERE owner_id = ? ORDER BY name`, userID)
+		 FROM servers
+		 WHERE owner_id = ?
+		    OR id IN (
+		        SELECT sp.server_id FROM server_permissions sp
+		        WHERE sp.user_id = ? AND json_array_length(sp.permissions) > 0
+		    )
+		 ORDER BY name`, userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -549,15 +806,185 @@ func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Serve
 }
 
 func (s *Store) UserCanAccessServer(ctx context.Context, userID, serverID string) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM servers WHERE id = ? AND owner_id = ?`,
-		serverID, userID,
-	).Scan(&n)
+	return s.UserHasServerPermission(ctx, userID, serverID, ServerPermissionView)
+}
+
+func (s *Store) UserHasServerPermission(ctx context.Context, userID, serverID string, needed ServerPermission) (bool, error) {
+	var ownerID string
+	err := s.db.QueryRowContext(ctx, `SELECT owner_id FROM servers WHERE id = ?`, serverID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	if ownerID == userID {
+		return true, nil
+	}
+	perms, ok, err := s.GetServerPermissions(ctx, serverID, userID)
+	if err != nil || !ok {
+		return false, err
+	}
+	return HasServerPermission(perms, needed), nil
+}
+
+// UserHasServerGroupAccess reports whether a user can reach a group's
+// read-level endpoints: true for the owner, and for any collaborator holding
+// the group or any of its leaves.
+func (s *Store) UserHasServerGroupAccess(ctx context.Context, userID, serverID string, group ServerPermission) (bool, error) {
+	var ownerID string
+	err := s.db.QueryRowContext(ctx, `SELECT owner_id FROM servers WHERE id = ?`, serverID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if ownerID == userID {
+		return true, nil
+	}
+	perms, ok, err := s.GetServerPermissions(ctx, serverID, userID)
+	if err != nil || !ok {
+		return false, err
+	}
+	return HasServerGroupAccess(perms, group), nil
+}
+
+func (s *Store) ListServerMembers(ctx context.Context, serverID string) ([]*ServerMember, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT sp.server_id, sp.user_id, u.email, u.display_name, u.role, sp.permissions
+		 FROM server_permissions sp
+		 JOIN users u ON u.id = sp.user_id
+		 WHERE sp.server_id = ?
+		 ORDER BY lower(u.email)`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []*ServerMember
+	for rows.Next() {
+		var m ServerMember
+		var perms strArray
+		if err := rows.Scan(&m.ServerID, &m.UserID, &m.Email, &m.DisplayName, &m.Role, &perms); err != nil {
+			return nil, err
+		}
+		normalized, err := NormalizeServerPermissions([]string(perms))
+		if err != nil {
+			return nil, err
+		}
+		m.Permissions = normalized
+		members = append(members, &m)
+	}
+	return members, rows.Err()
+}
+
+func (s *Store) GetServerMember(ctx context.Context, serverID, userID string) (*ServerMember, error) {
+	var m ServerMember
+	var perms strArray
+	err := s.db.QueryRowContext(ctx,
+		`SELECT sp.server_id, sp.user_id, u.email, u.display_name, u.role, sp.permissions
+		 FROM server_permissions sp
+		 JOIN users u ON u.id = sp.user_id
+		 WHERE sp.server_id = ? AND sp.user_id = ?`,
+		serverID, userID,
+	).Scan(&m.ServerID, &m.UserID, &m.Email, &m.DisplayName, &m.Role, &perms)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrServerMemberNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	normalized, err := NormalizeServerPermissions([]string(perms))
+	if err != nil {
+		return nil, err
+	}
+	m.Permissions = normalized
+	return &m, nil
+}
+
+func (s *Store) SetServerPermissions(ctx context.Context, serverID, userID string, perms []string) error {
+	normalized, err := NormalizeServerPermissions(perms)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO server_permissions (server_id, user_id, permissions)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(server_id, user_id) DO UPDATE SET permissions=excluded.permissions`,
+		serverID, userID, strArray(normalized),
+	)
+	return err
+}
+
+func (s *Store) SetServerPermissionsIfCurrent(ctx context.Context, serverID, userID string, perms, expected []string) error {
+	normalized, err := NormalizeServerPermissions(perms)
+	if err != nil {
+		return err
+	}
+	expectedNormalized, err := NormalizeServerPermissions(expected)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var current strArray
+	err = tx.QueryRowContext(ctx,
+		`SELECT permissions FROM server_permissions WHERE server_id = ? AND user_id = ?`,
+		serverID, userID,
+	).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrServerMemberNotFound
+	}
+	if err != nil {
+		return err
+	}
+	currentNormalized, err := NormalizeServerPermissions([]string(current))
+	if err != nil {
+		return err
+	}
+	if !samePermissionSet(currentNormalized, expectedNormalized) {
+		return ErrServerPermissionsStale
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE server_permissions SET permissions = ? WHERE server_id = ? AND user_id = ?`,
+		strArray(normalized), serverID, userID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteServerPermissions(ctx context.Context, serverID, userID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM server_permissions WHERE server_id = ? AND user_id = ?`,
+		serverID, userID,
+	)
+	return err
+}
+
+func (s *Store) GetServerPermissions(ctx context.Context, serverID, userID string) ([]string, bool, error) {
+	var perms strArray
+	err := s.db.QueryRowContext(ctx,
+		`SELECT permissions FROM server_permissions WHERE server_id = ? AND user_id = ?`,
+		serverID, userID,
+	).Scan(&perms)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	normalized, err := NormalizeServerPermissions([]string(perms))
+	if err != nil {
+		return nil, true, err
+	}
+	return normalized, true, nil
 }
 
 func (s *Store) UpdateServer(ctx context.Context, id string, srv *Server) error {
@@ -915,10 +1342,16 @@ func (s *Store) GetTask(ctx context.Context, id string) (*ScheduledTask, error) 
 
 func (s *Store) CreateTask(ctx context.Context, t *ScheduledTask) (*ScheduledTask, error) {
 	id := uuid.NewString()
+	// Populate next_run up front so the UI shows an accurate countdown before the
+	// task has ever fired. Disabled tasks have no upcoming run.
+	var next *time.Time
+	if t.Enabled {
+		next = NextRunForCron(t.CronExpr, time.Now())
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO scheduled_tasks (id, server_id, name, cron_expr, action, payload, enabled)
-		 VALUES (?,?,?,?,?,?,?)`,
-		id, t.ServerID, t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled,
+		`INSERT INTO scheduled_tasks (id, server_id, name, cron_expr, action, payload, enabled, next_run)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		id, t.ServerID, t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next,
 	)
 	if err != nil {
 		return nil, err
@@ -927,10 +1360,24 @@ func (s *Store) CreateTask(ctx context.Context, t *ScheduledTask) (*ScheduledTas
 }
 
 func (s *Store) UpdateTask(ctx context.Context, id string, t *ScheduledTask) error {
+	// Recompute next_run: the cron expr or enabled flag may have changed. Clears
+	// it (NULL) when the task is disabled.
+	var next *time.Time
+	if t.Enabled {
+		next = NextRunForCron(t.CronExpr, time.Now())
+	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE scheduled_tasks SET name=?, cron_expr=?, action=?, payload=?, enabled=? WHERE id=?`,
-		t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, id,
+		`UPDATE scheduled_tasks SET name=?, cron_expr=?, action=?, payload=?, enabled=?, next_run=? WHERE id=?`,
+		t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next, id,
 	)
+	return err
+}
+
+// SetTaskNextRun updates only the cached next_run, used by the scheduler to keep
+// the stored countdown fresh (e.g. after an API restart left it stale/past).
+func (s *Store) SetTaskNextRun(ctx context.Context, id string, next *time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE scheduled_tasks SET next_run=? WHERE id=?`, next, id)
 	return err
 }
 

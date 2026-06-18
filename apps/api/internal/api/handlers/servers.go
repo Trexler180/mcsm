@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -192,19 +194,39 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record a before/after diff of the fields the request actually changes, so
+	// the audit log can show operators "what changed" rather than a bare event.
+	changes := map[string]map[string]any{}
+	record := func(field string, from, to any) {
+		if from != to {
+			changes[field] = map[string]any{"from": from, "to": to}
+		}
+	}
+	deref := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
+
 	if body.Name != nil {
+		record("name", existing.Name, *body.Name)
 		existing.Name = *body.Name
 	}
 	if body.Description != nil {
+		record("description", deref(existing.Description), *body.Description)
 		existing.Description = body.Description
 	}
 	if body.Platform != nil {
+		record("platform", existing.Platform, *body.Platform)
 		existing.Platform = *body.Platform
 	}
 	if body.MCVersion != nil {
+		record("mc_version", existing.MCVersion, *body.MCVersion)
 		existing.MCVersion = *body.MCVersion
 	}
 	if body.LoaderVersion != nil {
+		record("loader_version", deref(existing.LoaderVersion), *body.LoaderVersion)
 		existing.LoaderVersion = body.LoaderVersion
 	}
 	if body.DirectoryPath != nil {
@@ -213,36 +235,51 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		record("directory_path", existing.DirectoryPath, dir)
 		existing.DirectoryPath = dir
 	}
 	if body.JavaBinary != nil {
+		record("java_binary", existing.JavaBinary, *body.JavaBinary)
 		existing.JavaBinary = *body.JavaBinary
 	}
 	if body.JVMArgs != nil {
+		record("jvm_args", strings.Join(existing.JVMArgs, " "), strings.Join(body.JVMArgs, " "))
 		existing.JVMArgs = body.JVMArgs
 	}
 	if body.Port != nil {
+		record("port", existing.Port, *body.Port)
 		existing.Port = *body.Port
 	}
 	if body.RAMMbMin != nil {
+		record("ram_mb_min", existing.RAMMbMin, *body.RAMMbMin)
 		existing.RAMMbMin = *body.RAMMbMin
 	}
 	if body.RAMMbMax != nil {
+		record("ram_mb_max", existing.RAMMbMax, *body.RAMMbMax)
 		existing.RAMMbMax = *body.RAMMbMax
 	}
 	if body.AutoStart != nil {
+		record("auto_start", existing.AutoStart, *body.AutoStart)
 		existing.AutoStart = *body.AutoStart
 	}
 	if body.Tags != nil {
+		record("tags", strings.Join(existing.Tags, ", "), strings.Join(body.Tags, ", "))
 		existing.Tags = body.Tags
 	}
 	if body.Settings != nil {
+		if !bytes.Equal(existing.Settings, body.Settings) {
+			// Avoid dumping the whole config blob; just flag that it changed.
+			changes["settings"] = map[string]any{"from": "previous config", "to": "updated config"}
+		}
 		existing.Settings = body.Settings
 	}
 
 	if err := h.store.UpdateServer(r.Context(), id, existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if len(changes) > 0 {
+		audit(h.store, r, id, "server.update", map[string]any{"changes": changes})
 	}
 	writeJSON(w, http.StatusOK, existing)
 }
@@ -339,6 +376,29 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	setStatus("starting")
 	audit(h.store, r, id, "server.start", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
+}
+
+// JavaInstallations proxies the server's node agent for the Java runtimes
+// installed on that host, so the panel can offer to switch a server to a
+// compatible version (or suggest installing one) after a Java-version crash.
+func (h *ServerHandlers) JavaInstallations(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	srv, err := h.store.GetServer(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "node not found")
+		return
+	}
+	info, err := c.JavaInstallations(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // Reinstall stops the server and re-fetches its runtime jar for the currently
