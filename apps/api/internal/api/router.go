@@ -9,6 +9,7 @@ import (
 	apimw "github.com/mcsm/api/internal/api/middleware"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/migrate"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -28,6 +29,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s, updater)
+	migrateH := handlers.NewMigrationHandlers(s, migrate.New(s))
 	backupH := handlers.NewBackupHandlers(s)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
@@ -113,6 +115,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 					r.With(startAccess).Post("/start", serverH.Start)
 					r.With(settingsAccess).Post("/reinstall", serverH.Reinstall)
+					r.With(settingsAccess).Post("/migrate", migrateH.Migrate)
+					r.With(viewAccess).Get("/migrations", migrateH.List)
+					r.With(viewAccess).Get("/migrations/{runId}", migrateH.Get)
 					r.With(stopAccess).Post("/stop", serverH.Stop)
 					r.With(restartAccess).Post("/restart", serverH.Restart)
 					r.With(killAccess).Post("/kill", serverH.Kill)

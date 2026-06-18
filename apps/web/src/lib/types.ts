@@ -312,6 +312,48 @@ export interface VersionCheckResult {
   mods: ModCompat[];
 }
 
+/** Per-mod action inside a server version migration. */
+export type MigrationAction =
+  | "update"
+  | "disable"
+  | "unchanged"
+  | "unmanaged"
+  | "unknown";
+
+export interface MigrationModStep {
+  mod_id: string;
+  name: string;
+  source: string;
+  action: MigrationAction;
+  from_version?: string;
+  to_version?: string;
+  status: "planned" | "done" | "failed" | "skipped";
+  error?: string;
+}
+
+export interface VersionMigrationDetail {
+  phase: "checking" | "backup" | "applying" | "verifying" | "restoring" | "done";
+  message?: string;
+  from_mc: string;
+  to_mc: string;
+  was_running: boolean;
+  backup_id?: string;
+  mods: MigrationModStep[];
+}
+
+/** One server Minecraft-version migration attempt. */
+export interface VersionMigration {
+  id: string;
+  server_id: string;
+  from_mc_version: string;
+  to_mc_version: string;
+  backup_id: string | null;
+  status: "running" | "success" | "partial" | "reverted" | "failed";
+  detail: VersionMigrationDetail | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
 /** A version the auto-updater blocklisted after it broke the server boot. */
 export interface SkippedModVersion {
   server_id: string;

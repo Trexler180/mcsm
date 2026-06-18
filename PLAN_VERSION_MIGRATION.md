@@ -116,28 +116,30 @@ Decisions made during build:
 Not yet wired: the engine has no HTTP surface yet — that's **Phase 4** (trigger +
 history/poll endpoints, construct the engine in `main.go`/`NewRouter`).
 
-## Phase 4 — API surface
+## Phase 4 — API surface  ✅ DONE
 
-- [ ] `POST /servers/{id}/migrate` (body `{mc_version}`) → engine `Trigger`. Gate with
-      `settingsAccess` — same leaf as `Reinstall` (`router.go:115`) since it rewrites
-      server config. (Implicitly needs mods + backup rights; document the assumption.)
-- [ ] `GET /servers/{id}/migrations` and `GET /servers/{id}/migrations/{runId}` for
-      history + live polling (mirror `ListUpdateRuns`/`GetUpdateRun`, `router.go:162-163`),
-      gated `viewAccess`.
-- [ ] Wire the engine into `NewRouter`/`NewModHandlers` construction like `autoupdate.Engine`.
+- [x] `POST /servers/{id}/migrate` (body `{mc_version}`) → engine `Trigger`, gated
+      `settingsAccess` (same leaf as `Reinstall`). Soft-validates the target and rejects a
+      no-op (target == current). Returns 202 with the run row.
+- [x] `GET /servers/{id}/migrations` + `GET /servers/{id}/migrations/{runId}` for history
+      and live polling, gated `viewAccess`.
+- [x] `handlers/migrations.go` (`MigrationHandlers`); engine constructed inside `NewRouter`
+      via `migrate.New(s)` (router-only dependency, so no `main.go` signature change).
 
-## Phase 5 — Web UI
+## Phase 5 — Web UI  ✅ DONE
 
-- [ ] `lib/api.ts`: `versionCheck(serverId, mcVersion)`, `migrate(serverId, mcVersion)`,
-      `listMigrations` / `getMigration`. Types in `lib/types.ts`.
-- [ ] New "Change version" view under the server's Mods area (sibling to the existing
-      update/safe-update UI, `components/mods/safe-update-dialog.tsx`):
-      - target-version picker (`mc.GameVersions`), upgrade/downgrade indicator.
-      - **ratio summary** (compatible / total) + per-bucket lists, with the unmanaged
-        bucket clearly flagged "review manually".
-      - confirm dialog stating it will back up first and disable N mods.
-      - live run progress by polling `getMigration` (reuse the update-run polling pattern).
-- [ ] `pnpm lint && pnpm build` clean.
+- [x] `lib/api.ts`: `servers.migrate` / `servers.migrations` / `servers.migration`
+      (`versionCheck` already existed). Types `VersionMigration` + `VersionMigrationDetail`
+      + `MigrationModStep` in `lib/types.ts`.
+- [x] `VersionCheckDialog` extended from a preview into the full flow:
+      - target picker + upgrade/downgrade indicator + ratio bar + grouped per-bucket lists
+        (from Phase 1).
+      - inline confirm step spelling out the backup, N updated / M disabled, and the
+        "K items can't be checked — review manually" warning.
+      - applies via `servers.migrate`, then polls `servers.migration` (1.5s while running)
+        and renders live phase/message + per-mod step rows; "Run in background" lets the
+        operator close without aborting; terminal state invalidates mods/server/backups.
+- [x] `pnpm lint` (0 errors) + `pnpm build` clean.
 
 ## Phase 6 — Docs
 

@@ -21,6 +21,7 @@ import type {
   ModUpdateRun,
   ModVersion,
   VersionCheckResult,
+  VersionMigration,
   SkippedModVersion,
   ModrinthProject,
   Node,
@@ -273,6 +274,14 @@ export const api = {
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),
     restart: (id: string) => post(`/servers/${id}/restart`),
     reinstall: (id: string) => post(`/servers/${id}/reinstall`),
+    // Change the server's Minecraft version (upgrade or downgrade), moving mods
+    // and disabling incompatible ones behind a backup. Async; poll migration().
+    migrate: (id: string, mcVersion: string) =>
+      post<VersionMigration>(`/servers/${id}/migrate`, { mc_version: mcVersion }),
+    migrations: (id: string, limit = 20) =>
+      get<VersionMigration[]>(`/servers/${id}/migrations?limit=${limit}`),
+    migration: (id: string, runId: string) =>
+      get<VersionMigration>(`/servers/${id}/migrations/${runId}`),
     kill: (id: string) => post(`/servers/${id}/kill`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),

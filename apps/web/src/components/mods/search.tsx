@@ -1867,7 +1867,7 @@ export function ModSearch({
               size="sm"
               variant="ghost"
               onClick={() => setShowVersionCheck(true)}
-              title="Check which installed content has a build for another Minecraft version (upgrade or downgrade)"
+              title="Preview and change the server's Minecraft version (upgrade or downgrade), moving mods and disabling incompatible ones behind a backup"
             >
               <ArrowRightLeft className="h-3.5 w-3.5" />
               Change version
