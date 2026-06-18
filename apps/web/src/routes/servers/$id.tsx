@@ -38,6 +38,7 @@ import { TasksTab } from "@/components/servers/tasks-tab";
 import { LogsTab } from "@/components/servers/logs-tab";
 import { WorldsTab } from "@/components/servers/worlds-tab";
 import { OptionsTab, PropertiesTab } from "@/components/servers/options-properties";
+import { VersionTab } from "@/components/servers/version-migration";
 import { AccessTab } from "@/components/servers/access-tab";
 import type { ServerPermission } from "@/lib/types";
 import { can as hasPermission } from "@/lib/permissions";
@@ -355,6 +356,11 @@ function ServerDetailPage() {
               serverId={id}
               status={server.status as ServerStatus}
             />
+          )}
+          {tab === "version" && can("settings") && (
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
+              <VersionTab server={server} />
+            </div>
           )}
           {tab === "options" && can("settings") && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">

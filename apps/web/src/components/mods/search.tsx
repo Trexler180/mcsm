@@ -34,7 +34,6 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { ModDetailDialog } from "@/components/mods/detail";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
-import { VersionCheckDialog } from "@/components/mods/version-check-dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type {
@@ -1371,7 +1370,6 @@ export function ModSearch({
   const [dismissedRunId, setDismissedRunId] = useState<string | null>(null);
   const [showSkipped, setShowSkipped] = useState(false);
   const [showSafeUpdate, setShowSafeUpdate] = useState(false);
-  const [showVersionCheck, setShowVersionCheck] = useState(false);
 
   const { data: updateRuns = [] } = useQuery({
     queryKey: ["mod-update-runs", serverId],
@@ -1862,15 +1860,6 @@ export function ModSearch({
             >
               <ShieldCheck className="h-3.5 w-3.5" />
               {activeRun ? "Safe update running…" : "Safe update"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowVersionCheck(true)}
-              title="Preview and change the server's Minecraft version (upgrade or downgrade), moving mods and disabling incompatible ones behind a backup"
-            >
-              <ArrowRightLeft className="h-3.5 w-3.5" />
-              Change version
             </Button>
             {skippedVersions.length > 0 && (
               <button
@@ -2388,14 +2377,6 @@ export function ModSearch({
         updates={updates}
         onClose={() => setShowSafeUpdate(false)}
         onConfirm={startSafeUpdate}
-      />
-
-      <VersionCheckDialog
-        open={showVersionCheck}
-        onClose={() => setShowVersionCheck(false)}
-        serverId={serverId}
-        platform={platform}
-        currentMcVersion={mcVersion}
       />
 
       <Dialog

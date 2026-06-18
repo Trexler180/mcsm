@@ -7,6 +7,7 @@ import {
   HardDrive,
   LayoutDashboard,
   PackageOpen,
+  Rocket,
   ShieldCheck,
   SlidersHorizontal,
   Terminal,
@@ -21,6 +22,7 @@ export type ServerSection =
   | "logs"
   | "players"
   | "mods"
+  | "version"
   | "options"
   | "properties"
   | "configs"
@@ -44,6 +46,7 @@ export const SERVER_SECTIONS: Array<{
   { value: "logs", label: "Logs", icon: FileText, group: "Operate", permission: "files" },
   { value: "players", label: "Players", icon: Users, group: "Operate", permission: "players" },
   { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage", permission: "mods" },
+  { value: "version", label: "Version", icon: Rocket, group: "Manage", permission: "settings" },
   { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage", permission: "settings" },
   { value: "properties", label: "Properties", icon: FileCog, group: "Manage", permission: "settings" },
   { value: "configs", label: "Configs", icon: FileCog, group: "Manage", permission: "files" },

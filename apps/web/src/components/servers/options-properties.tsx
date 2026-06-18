@@ -1020,7 +1020,7 @@ function VersionSelect({
   );
 }
 
-function SoftwareOptionsPanel({ server }: { server: Server }) {
+export function SoftwareOptionsPanel({ server }: { server: Server }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [snapshots, setSnapshots] = useState(false);
@@ -1811,7 +1811,6 @@ function PanelOptionsPanel({ server }: { server: Server }) {
 export function OptionsTab({ server }: { server: Server }) {
   return (
     <div className="max-w-3xl space-y-5">
-      <SoftwareOptionsPanel server={server} />
       <ResourcePackOptionsPanel server={server} />
       <PanelOptionsPanel server={server} />
     </div>

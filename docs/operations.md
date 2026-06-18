@@ -21,7 +21,10 @@ For disaster recovery, back up the SQLite volume and server volume together.
 ## Version Migration
 
 The panel can move a server to a different Minecraft version — upgrade or
-downgrade — from **Mods → Installed → Change version**.
+downgrade — from the server's **Version** tab. The tab shows the smart,
+mod-aware migration plus the raw runtime controls (platform, loader, Java
+binary, JVM args) for manual changes and platform switches the migration flow
+doesn't cover.
 
 Preview first (`GET /servers/{id}/mods/version-check?mc_version=X`): for the
 chosen target, every installed mod is bucketed as
