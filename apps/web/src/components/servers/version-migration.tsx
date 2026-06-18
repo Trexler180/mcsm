@@ -244,6 +244,9 @@ export function VersionMigrationPanel({ server }: { server: Server }) {
   const toDisable = result?.counts.incompatible ?? 0;
   const needsReview =
     (result?.counts.unmanaged ?? 0) + (result?.counts.unknown ?? 0);
+  const depBroken = (result?.mods ?? []).filter(
+    (m) => m.dep_warnings && m.dep_warnings.length > 0,
+  ).length;
 
   const dismissRun = () => {
     setRunId(null);
@@ -419,19 +422,30 @@ export function VersionMigrationPanel({ server }: { server: Server }) {
                                 className="flex items-center gap-2 px-3 py-2 text-sm"
                               >
                                 <StatusIcon status={m.status} />
-                                <span className="min-w-0 flex-1 truncate text-text-primary">
-                                  {m.name}
-                                  {!m.enabled && (
-                                    <span className="ml-2 text-xs text-text-secondary">
-                                      (disabled)
-                                    </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-text-primary">
+                                    {m.name}
+                                    {!m.enabled && (
+                                      <span className="ml-2 text-xs text-text-secondary">
+                                        (disabled)
+                                      </span>
+                                    )}
+                                    {m.pinned && (
+                                      <span className="ml-2 text-xs text-text-secondary">
+                                        (pinned)
+                                      </span>
+                                    )}
+                                  </div>
+                                  {m.dep_warnings && m.dep_warnings.length > 0 && (
+                                    <div className="mt-0.5 flex items-center gap-1 text-xs text-amber-400">
+                                      <TriangleAlert className="h-3 w-3 flex-shrink-0" />
+                                      <span className="truncate">
+                                        Needs {m.dep_warnings.join(", ")}, which
+                                        will be disabled
+                                      </span>
+                                    </div>
                                   )}
-                                  {m.pinned && (
-                                    <span className="ml-2 text-xs text-text-secondary">
-                                      (pinned)
-                                    </span>
-                                  )}
-                                </span>
+                                </div>
                                 <span className="flex items-center gap-1.5 font-mono text-xs text-text-secondary">
                                   <span className="truncate">
                                     {m.current_version}
@@ -473,6 +487,14 @@ export function VersionMigrationPanel({ server }: { server: Server }) {
                           {needsReview > 0 &&
                             ` ${needsReview} item${needsReview === 1 ? "" : "s"} can't be checked and won't be touched — review ${needsReview === 1 ? "it" : "them"} manually.`}
                         </p>
+                        {depBroken > 0 && (
+                          <p className="mt-2 flex items-start gap-1.5 text-amber-400">
+                            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                            {depBroken} mod{depBroken === 1 ? "" : "s"} will be
+                            missing a required dependency that's getting disabled
+                            and may not load.
+                          </p>
+                        )}
                       </div>
                       <div className="flex justify-end gap-3">
                         <Button

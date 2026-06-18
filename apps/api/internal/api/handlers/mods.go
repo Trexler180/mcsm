@@ -888,6 +888,11 @@ type modCompat struct {
 	TargetVersionID string `json:"target_version_id,omitempty"`
 	Pinned          bool   `json:"pinned"`
 	Enabled         bool   `json:"enabled"`
+	// DepWarnings names this mod's required dependencies that the migration would
+	// disable (they have no build for the target), so a mod that itself migrates
+	// fine may still not load. Advisory only — populated from the panel's
+	// dependency graph, so it covers panel-installed deps, not custom jars.
+	DepWarnings []string `json:"dep_warnings,omitempty"`
 }
 
 type versionCheckResult struct {
@@ -980,6 +985,8 @@ func (h *ModHandlers) VersionCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
+	annotateDepWarnings(r.Context(), h.store, serverID, mods, results)
+
 	counts := map[string]int{}
 	for _, m := range results {
 		counts[m.Status]++
@@ -991,6 +998,51 @@ func (h *ModHandlers) VersionCheck(w http.ResponseWriter, r *http.Request) {
 		Counts:    counts,
 		Mods:      results,
 	})
+}
+
+// annotateDepWarnings flags mods that would migrate fine on their own but whose
+// required dependency the migration would disable (the dep has no build for the
+// target), so the operator sees the broken link before applying. It uses the
+// panel's dependency graph, so it only knows about panel-installed dependencies;
+// custom jars contribute no edges and simply produce no warning. Best-effort:
+// graph lookup failures leave the warnings empty rather than failing the preview.
+func annotateDepWarnings(ctx context.Context, s *store.Store, serverID string, mods []*store.InstalledMod, results []modCompat) {
+	// Dependencies that will be disabled (no build for the target): project id -> name.
+	disabled := map[string]string{}
+	for i := range results {
+		if results[i].Status == compatIncompatible && mods[i].SourceID != nil {
+			disabled[*mods[i].SourceID] = mods[i].Name
+		}
+	}
+	if len(disabled) == 0 {
+		return
+	}
+
+	edges, err := s.ListModDependencies(ctx, serverID)
+	if err != nil {
+		return
+	}
+	depsOf := map[string][]string{} // dependent project id -> its dependency project ids
+	for _, e := range edges {
+		depsOf[e.DependentProjectID] = append(depsOf[e.DependentProjectID], e.DependencyProjectID)
+	}
+
+	for i := range results {
+		// Only mods that stay loaded can be broken by a missing dependency.
+		if results[i].Status != compatCompatible && results[i].Status != compatSupported {
+			continue
+		}
+		if mods[i].SourceID == nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, dep := range depsOf[*mods[i].SourceID] {
+			if name, ok := disabled[dep]; ok && !seen[dep] {
+				seen[dep] = true
+				results[i].DepWarnings = append(results[i].DepWarnings, name)
+			}
+		}
+	}
 }
 
 // classifyForTarget asks the source which builds of a mod exist for the target MC

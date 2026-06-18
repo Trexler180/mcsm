@@ -2,10 +2,16 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
+	"github.com/pressly/goose/v3"
+	_ "modernc.org/sqlite"
+
 	"github.com/mcsm/api/internal/mods/modrinth"
+	"github.com/mcsm/api/internal/store"
+	"github.com/mcsm/api/migrations"
 )
 
 // fakeSource implements sourceClient for classifyForTarget tests. Only
@@ -86,5 +92,76 @@ func TestClassifyForTarget(t *testing.T) {
 				t.Fatalf("target version id = %q, want %q", out.TargetVersionID, tc.wantTarget)
 			}
 		})
+	}
+}
+
+func depTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatal(err)
+	}
+	return store.New(db)
+}
+
+// A mod that migrates fine but whose required dependency will be disabled gets a
+// DepWarning; the disabled dependency and unrelated mods do not.
+func TestAnnotateDepWarnings(t *testing.T) {
+	ctx := context.Background()
+	s := depTestStore(t)
+
+	node, err := s.CreateNode(ctx, &store.Node{Name: "local", FQDN: "localhost", Port: 8090, Scheme: "http"}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := s.CreateUser(ctx, "o@e.com", "h", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := s.CreateServer(ctx, &store.Server{NodeID: node.ID, OwnerID: user.ID, Name: "smp", Platform: "fabric", MCVersion: "1.21.4", DirectoryPath: "servers/smp", JavaBinary: "java", Port: 25565})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(pid, name string) *store.InstalledMod {
+		p, v := pid, pid+"-v1"
+		m, err := s.CreateMod(ctx, &store.InstalledMod{ServerID: srv.ID, Source: "modrinth", SourceID: &p, VersionID: &v, Name: name, Version: "1.0", FileName: name + ".jar", Enabled: true, InstallPath: "/mods"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	dependent := mk("pidA", "Cool Mod")   // compatible, requires the lib
+	lib := mk("pidB", "Some Library")     // incompatible → will be disabled
+	loner := mk("pidC", "Standalone Mod") // compatible, no deps
+	if err := s.AddModDependency(ctx, srv.ID, "pidA", "pidB"); err != nil {
+		t.Fatal(err)
+	}
+
+	mods := []*store.InstalledMod{dependent, lib, loner}
+	results := []modCompat{
+		{ModID: dependent.ID, Status: compatCompatible},
+		{ModID: lib.ID, Status: compatIncompatible},
+		{ModID: loner.ID, Status: compatCompatible},
+	}
+
+	annotateDepWarnings(ctx, s, srv.ID, mods, results)
+
+	if len(results[0].DepWarnings) != 1 || results[0].DepWarnings[0] != "Some Library" {
+		t.Fatalf("dependent should warn about Some Library, got %v", results[0].DepWarnings)
+	}
+	if len(results[1].DepWarnings) != 0 {
+		t.Fatalf("the disabled dependency should not warn, got %v", results[1].DepWarnings)
+	}
+	if len(results[2].DepWarnings) != 0 {
+		t.Fatalf("the standalone mod should not warn, got %v", results[2].DepWarnings)
 	}
 }

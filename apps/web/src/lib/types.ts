@@ -301,6 +301,9 @@ export interface ModCompat {
   target_version_id?: string;
   pinned: boolean;
   enabled: boolean;
+  /** Required dependencies that the migration would disable (no target build),
+   *  so this mod may not load even though it migrates fine on its own. */
+  dep_warnings?: string[];
 }
 
 /** Preview of how installed mods would fare moving to a target MC version. */
