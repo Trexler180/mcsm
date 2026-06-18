@@ -20,6 +20,7 @@ import type {
   ModUpdate,
   ModUpdateRun,
   ModVersion,
+  VersionCheckResult,
   SkippedModVersion,
   ModrinthProject,
   Node,
@@ -524,6 +525,12 @@ export const api = {
     },
     updates: (serverId: string) =>
       get<ModUpdate[]>(`/servers/${serverId}/mods/updates`),
+    // Preview how installed mods would fare moving to a target MC version
+    // (upgrade or downgrade). Read-only.
+    versionCheck: (serverId: string, mcVersion: string) =>
+      get<VersionCheckResult>(
+        `/servers/${serverId}/mods/version-check?mc_version=${encodeURIComponent(mcVersion)}`,
+      ),
     // Safe auto-update: apply updates, restart, watch boot health, revert and
     // blocklist anything that breaks the boot. Async; poll updateRun().
     autoUpdate: (serverId: string) =>

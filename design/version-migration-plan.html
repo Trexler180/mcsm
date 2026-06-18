@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Version Migration — Visual Plan</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3340;
+    --ink:#e6edf3; --muted:#8b98a8; --accent:#4f9dff; --accent2:#7c5cff;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --gray:#6e7681;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:radial-gradient(1200px 600px at 70% -10%, #1a2233 0%, var(--bg) 55%);
+    color:var(--ink); font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 24px 80px}
+  header.top{margin-bottom:32px}
+  .kicker{color:var(--accent);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:12px}
+  h1{font-size:34px;margin:8px 0 6px;line-height:1.15}
+  .lead{color:var(--muted);font-size:17px;max-width:70ch;margin:0}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:46px 0 16px;font-weight:700}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:780px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+  .muted{color:var(--muted)}
+  code{background:#0b0e14;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px;color:#cbd5e1}
+  .decision h3{margin:0 0 6px;font-size:15px}
+  .decision .pill{font-size:11px;color:var(--green);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.08)}
+
+  /* ratio bar */
+  .ratiobar{display:flex;height:34px;border-radius:10px;overflow:hidden;border:1px solid var(--line);margin:6px 0 14px}
+  .ratiobar div{display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#06101a}
+  .seg-green{background:var(--green)} .seg-blue{background:var(--accent)} .seg-red{background:var(--red);color:#fff} .seg-gray{background:var(--gray);color:#fff}
+
+  .bucket{border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:14px;background:var(--panel2)}
+  .bucket.b-green{border-left-color:var(--green)} .bucket.b-blue{border-left-color:var(--accent)}
+  .bucket.b-red{border-left-color:var(--red)} .bucket.b-gray{border-left-color:var(--gray)}
+  .bucket h4{margin:0 0 4px;font-size:14px} .bucket p{margin:0;color:var(--muted);font-size:13px}
+  .bucket .act{margin-top:8px;font-size:12px;font-weight:600}
+
+  /* flow */
+  .flow{counter-reset:step;display:grid;gap:0}
+  .step{position:relative;display:grid;grid-template-columns:40px 1fr;gap:14px;padding:0 0 22px}
+  .step:not(:last-child)::before{content:"";position:absolute;left:19px;top:32px;bottom:-2px;width:2px;background:var(--line)}
+  .step .num{counter-increment:step;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:var(--panel2);border:1px solid var(--line);font-weight:700;color:var(--accent);z-index:1}
+  .step .num::before{content:counter(step)}
+  .step .body h4{margin:2px 0 3px;font-size:15px}
+  .step .body p{margin:0;color:var(--muted);font-size:13.5px}
+  .step.guard .num{color:var(--amber);border-color:rgba(210,153,34,.5)}
+  .branch{display:grid;gap:12px;margin-left:54px;margin-top:-8px;margin-bottom:22px}
+  @media(max-width:780px){.branch{grid-template-columns:1fr}}
+  .branch>div{border-radius:10px;padding:12px 14px;border:1px solid var(--line)}
+  .ok{background:rgba(63,185,80,.07);border-color:rgba(63,185,80,.35)}
+  .bad{background:rgba(248,81,73,.07);border-color:rgba(248,81,73,.35)}
+  .branch h5{margin:0 0 4px;font-size:13px} .branch p{margin:0;font-size:13px;color:var(--muted)}
+
+  /* phases */
+  .phase{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;padding:14px 0;border-top:1px solid var(--line)}
+  .phase:first-of-type{border-top:none}
+  .pnum{font-size:12px;font-weight:700;color:var(--accent2);background:rgba(124,92,255,.1);border:1px solid rgba(124,92,255,.35);
+    border-radius:8px;padding:6px 10px;white-space:nowrap}
+  .phase h3{margin:0 0 4px;font-size:15.5px} .phase ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:13.5px}
+  .phase li{margin:2px 0}
+  .ship{font-size:11px;color:var(--green);border:1px solid rgba(63,185,80,.4);background:rgba(63,185,80,.08);border-radius:999px;padding:1px 8px;margin-left:8px}
+
+  footer{margin-top:50px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padding-top:18px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="kicker">ServerManager · Feature Plan</div>
+    <h1>Server Version Migration</h1>
+    <p class="lead">Pick a target Minecraft version, see the ratio of mods that do and don't have a compatible build, then change the server version + move all mods + auto-disable the stragglers — in one reversible action. Works to upgrade <em>or</em> downgrade.</p>
+  </header>
+
+  <h2>Locked decisions</h2>
+  <div class="grid g4">
+    <div class="card decision">
+      <span class="tag pill">chosen</span>
+      <h3>Rollback</h3>
+      <p class="muted">Back up first; on an unhealthy boot, restore the backup <strong>and</strong> rewrite the snapshotted DB rows. Whole move is atomic.</p>
+    </div>
+    <div class="card decision">
+      <span class="tag pill">chosen</span>
+      <h3>Scope (v1)</h3>
+      <p class="muted">Change <code>mc_version</code> only; auto-bump fabric/quilt loader. Same platform.</p>
+    </div>
+    <div class="card decision">
+      <span class="tag pill">chosen</span>
+      <h3>Pinned mods</h3>
+      <p class="muted">Moved too — pin means update <em>cadence</em>, not a version lock.</p>
+    </div>
+    <div class="card decision">
+      <span class="tag pill">chosen</span>
+      <h3>Incompatible</h3>
+      <p class="muted">Disabled via <code>.disabled</code> rename (reversible), never uninstalled.</p>
+    </div>
+  </div>
+
+  <h2>The preview — compatibility ratio</h2>
+  <div class="card">
+    <p class="muted" style="margin-top:0">Example: checking a 24-mod server against a new target version. Each installed mod is queried with <code>GetVersions(projectID, loader, targetMC)</code> and dropped into one bucket.</p>
+    <div class="ratiobar">
+      <div class="seg-green" style="width:58%">14 compatible</div>
+      <div class="seg-blue" style="width:17%">4 already</div>
+      <div class="seg-red" style="width:17%">4 disable</div>
+      <div class="seg-gray" style="width:8%">2 review</div>
+    </div>
+    <div class="grid g4">
+      <div class="bucket b-green"><h4>Compatible</h4><p>Has a downloadable build for the target.</p><div class="act" style="color:var(--green)">→ swap to that build</div></div>
+      <div class="bucket b-blue"><h4>Already supports</h4><p>Current build's game_versions already lists the target.</p><div class="act" style="color:var(--accent)">→ leave as-is</div></div>
+      <div class="bucket b-red"><h4>Incompatible</h4><p>No build exists for the target version yet.</p><div class="act" style="color:var(--red)">→ auto-disable</div></div>
+      <div class="bucket b-gray"><h4>Unmanaged</h4><p>Custom jars + CurseForge (no reliable listing).</p><div class="act" style="color:var(--gray)">→ flag, never touch</div></div>
+    </div>
+  </div>
+
+  <h2>The apply — atomic migration</h2>
+  <div class="card">
+    <div class="flow">
+      <div class="step"><div class="num"></div><div class="body"><h4>Snapshot rollback state</h4><p>Capture <code>mc_version</code>/loader + every affected <code>installed_mods</code> row in memory — the restore target the filesystem backup can't reconstruct.</p></div></div>
+      <div class="step"><div class="num"></div><div class="body"><h4>Stop server</h4><p>Record prior power state so it can be restored at the end.</p></div></div>
+      <div class="step guard"><div class="num"></div><div class="body"><h4>Back up (safety net)</h4><p>Full backup via the existing C2 path; keep the <code>backup_id</code>. If the backup fails, abort — no net, no migration.</p></div></div>
+      <div class="step"><div class="num"></div><div class="body"><h4>Re-check compatibility</h4><p>Recompute server-side; don't trust the client's preview payload (builds drift).</p></div></div>
+      <div class="step"><div class="num"></div><div class="body"><h4>Bump version + reinstall jar</h4><p>Set <code>mc_version</code> (+ loader), reinstall the runtime jar via the agent.</p></div></div>
+      <div class="step"><div class="num"></div><div class="body"><h4>Move mods</h4><p>Compatible (incl. pinned) → swap to target build. Incompatible → rename to <code>.disabled</code>.</p></div></div>
+      <div class="step"><div class="num"></div><div class="body"><h4>Boot &amp; watch health</h4><p>Start and watch until stable, reusing the auto-update boot watcher.</p></div></div>
+    </div>
+    <div class="branch">
+      <div class="ok"><h5>✓ Healthy</h5><p>Restore prior power state. Status <strong>success</strong> (partial if some swaps failed).</p></div>
+      <div class="bad"><h5>✕ Unhealthy</h5><p>Restore the backup, rewrite the snapshot rows + <code>mc_version</code>. Status <strong>failed</strong> with the boot reason.</p></div>
+    </div>
+  </div>
+
+  <h2>Phased roadmap</h2>
+  <div class="card">
+    <div class="phase"><div class="pnum">Phase 1</div><div><h3>Compatibility preview <span class="ship">ships alone</span></h3><p class="muted" style="margin:0">Read-only endpoint + the ratio view. Useful before the apply button even exists.</p><ul><li><code>GET /servers/{id}/mods/version-check?mc_version=X</code> — bucket every mod, parallelized</li><li>loader-bump helper for fabric/quilt; validate target against <code>mc.GameVersions</code></li><li>tests: bucketing, loader bump, validation</li></ul></div></div>
+    <div class="phase"><div class="pnum">Phase 2</div><div><h3>Store + run model</h3><ul><li>migration <code>010_server_version_migrations.sql</code></li><li>create/update/get/list methods mirroring <code>ModUpdateRun</code></li></ul></div></div>
+    <div class="phase"><div class="pnum">Phase 3</div><div><h3>Migration engine</h3><ul><li>detached run w/ in-flight guard + progress doc</li><li>the 7-step apply flow + healthy/unhealthy branches above</li><li>tests: healthy, unhealthy→restore, backup-fail abort, mixed sets</li></ul></div></div>
+    <div class="phase"><div class="pnum">Phase 4</div><div><h3>API surface</h3><ul><li><code>POST /servers/{id}/migrate</code> (settings permission)</li><li><code>GET …/migrations</code> + <code>…/migrations/{runId}</code> for history/polling</li></ul></div></div>
+    <div class="phase"><div class="pnum">Phase 5</div><div><h3>Web UI</h3><ul><li>target picker + upgrade/downgrade indicator</li><li>ratio summary + per-bucket lists + confirm dialog</li><li>live run progress via polling</li></ul></div></div>
+    <div class="phase"><div class="pnum">Phase 6</div><div><h3>Docs</h3><ul><li>document the backup-restore rollback contract</li></ul></div></div>
+  </div>
+
+  <h2>What this reuses (not rebuilt)</h2>
+  <div class="grid g2">
+    <div class="card muted"><strong style="color:var(--ink)">Compatibility primitive</strong><br><code>GetVersions(projectID, loader, mcVersion)</code> — the preview is the existing <code>Updates</code> handler aimed at an arbitrary target.</div>
+    <div class="card muted"><strong style="color:var(--ink)">Boot watch + jar swap + snapshot pattern</strong><br>The <code>autoupdate.Engine</code> already does <code>swapFile</code>, <code>startAndWatch</code>, run-progress docs, and before-mutate row snapshots.</div>
+    <div class="card muted"><strong style="color:var(--ink)">Runtime jar reinstall</strong><br><code>ServerHandlers.Reinstall</code> already stops + re-fetches the jar for the configured version.</div>
+    <div class="card muted"><strong style="color:var(--ink)">Backup / restore + .disabled rename</strong><br>The C2 backup path and the <code>.disabled</code> convention from <code>SetEnabled</code> provide the rollback + disable mechanics.</div>
+  </div>
+
+  <footer>
+    Companion to <code>PLAN_VERSION_MIGRATION.md</code>. Open this file in a browser. Buckets/ratios shown are illustrative.
+  </footer>
+
+</div>
+</body>
+</html>

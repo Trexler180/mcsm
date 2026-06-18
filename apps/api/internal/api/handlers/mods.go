@@ -19,9 +19,12 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/mc"
 	"github.com/mcsm/api/internal/mods/curseforge"
 	"github.com/mcsm/api/internal/mods/hangar"
 	"github.com/mcsm/api/internal/mods/modrinth"
@@ -35,6 +38,7 @@ type ModHandlers struct {
 	curseforge *curseforge.Client
 	hangar     *hangar.Client
 	spigotmc   *spigotmc.Client
+	mc         *mc.Client
 	updater    *autoupdate.Engine
 }
 
@@ -53,6 +57,7 @@ func NewModHandlers(s *store.Store, updater *autoupdate.Engine) *ModHandlers {
 		}),
 		hangar:   hangar.New(),
 		spigotmc: spigotmc.New(),
+		mc:       mc.New(),
 		updater:  updater,
 	}
 }
@@ -862,6 +867,161 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// Compatibility buckets returned by VersionCheck.
+const (
+	compatCompatible   = "compatible"   // a newer/other build exists for the target → would be swapped in
+	compatSupported    = "supported"    // the installed build already lists the target version → no change
+	compatIncompatible = "incompatible" // no build for the target → would be auto-disabled
+	compatUnmanaged    = "unmanaged"    // custom jar or a source we can't reliably check → left untouched
+	compatUnknown      = "unknown"      // the upstream lookup failed this run → review manually
+)
+
+type modCompat struct {
+	ModID           string `json:"mod_id"`
+	Name            string `json:"name"`
+	Source          string `json:"source"`
+	CurrentVersion  string `json:"current_version"`
+	Status          string `json:"status"`
+	TargetVersion   string `json:"target_version,omitempty"`
+	TargetVersionID string `json:"target_version_id,omitempty"`
+	Pinned          bool   `json:"pinned"`
+	Enabled         bool   `json:"enabled"`
+}
+
+type versionCheckResult struct {
+	MCVersion string         `json:"mc_version"`
+	Loader    string         `json:"loader"`
+	Total     int            `json:"total"`
+	Counts    map[string]int `json:"counts"`
+	Mods      []modCompat    `json:"mods"`
+}
+
+// versionCheckConcurrency bounds the per-mod upstream calls so a large modpack
+// doesn't open one connection per mod at once.
+const versionCheckConcurrency = 8
+
+// VersionCheck previews how the installed mods would fare if the server moved to
+// a different Minecraft version (upgrade or downgrade): for the target version it
+// buckets each mod into compatible / already-supported / incompatible / unmanaged.
+// Read-only — it changes nothing. GET /servers/{id}/mods/version-check?mc_version=X
+func (h *ModHandlers) VersionCheck(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	target := strings.TrimSpace(r.URL.Query().Get("mc_version"))
+	if target == "" {
+		writeError(w, http.StatusBadRequest, "mc_version required")
+		return
+	}
+
+	srv, err := h.store.GetServer(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	mods, err := h.store.ListMods(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	// Soft-validate the target against the platform's known versions: reject an
+	// obvious typo, but if the upstream list is unavailable, proceed anyway
+	// rather than block the preview on a metadata hiccup.
+	if known, err := h.mc.GameVersions(ctx, srv.Platform, true); err == nil {
+		valid := false
+		for _, v := range known {
+			if v.Version == target {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			writeError(w, http.StatusBadRequest, "unknown Minecraft version for this platform: "+target)
+			return
+		}
+	}
+
+	loader := modrinth.LoaderForPlatform(srv.Platform)
+	// Sources whose version listing is reliable enough to classify against; this
+	// mirrors the update checker (mods.go Updates): CurseForge and custom jars are
+	// surfaced as unmanaged so the operator reviews them by hand.
+	checkable := map[string]bool{"modrinth": true, "hangar": true, "spigotmc": true}
+
+	results := make([]modCompat, len(mods))
+	sem := make(chan struct{}, versionCheckConcurrency)
+	var wg sync.WaitGroup
+	for i, m := range mods {
+		base := modCompat{
+			ModID:          m.ID,
+			Name:           m.Name,
+			Source:         m.Source,
+			CurrentVersion: m.Version,
+			Pinned:         m.Pinned,
+			Enabled:        m.Enabled,
+		}
+		if !checkable[m.Source] || m.SourceID == nil || m.VersionID == nil {
+			base.Status = compatUnmanaged
+			results[i] = base
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, m *store.InstalledMod, base modCompat) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			base.Status = classifyForTarget(ctx, h.sourceFor(m.Source), *m.SourceID, *m.VersionID, loader, target, &base)
+			results[i] = base
+		}(i, m, base)
+	}
+	wg.Wait()
+
+	counts := map[string]int{}
+	for _, m := range results {
+		counts[m.Status]++
+	}
+	writeJSON(w, http.StatusOK, versionCheckResult{
+		MCVersion: target,
+		Loader:    loader,
+		Total:     len(results),
+		Counts:    counts,
+		Mods:      results,
+	})
+}
+
+// classifyForTarget asks the source which builds of a mod exist for the target MC
+// version and decides the mod's bucket, filling Target* on a compatible move.
+func classifyForTarget(ctx context.Context, src sourceClient, projectID, currentVersionID, loader, target string, out *modCompat) string {
+	versions, err := src.GetVersions(ctx, projectID, loader, target)
+	if err != nil {
+		return compatUnknown
+	}
+	if len(versions) == 0 {
+		return compatIncompatible
+	}
+	// If the build that's already installed is among the target-compatible ones,
+	// nothing needs to change for this mod.
+	for i := range versions {
+		if versions[i].ID == currentVersionID {
+			return compatSupported
+		}
+	}
+	// Otherwise pick the newest build (API order is newest-first) that actually
+	// has a downloadable file to move to.
+	for i := range versions {
+		if f := primaryFile(&versions[i]); f != nil && f.URL != "" {
+			out.TargetVersion = versions[i].VersionNumber
+			out.TargetVersionID = versions[i].ID
+			return compatCompatible
+		}
+	}
+	// Builds exist for the target but none are downloadable (author-disabled): we
+	// can't move it, so it would be disabled like an incompatible mod.
+	return compatIncompatible
 }
 
 // AutoUpdate kicks off an asynchronous safe-update run: apply available

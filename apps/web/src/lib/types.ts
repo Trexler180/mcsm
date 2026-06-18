@@ -283,6 +283,35 @@ export interface ModUpdateRun {
   finished_at: string | null;
 }
 
+/** Compatibility verdict for one installed mod against a candidate MC version. */
+export type ModCompatStatus =
+  | "compatible"
+  | "supported"
+  | "incompatible"
+  | "unmanaged"
+  | "unknown";
+
+export interface ModCompat {
+  mod_id: string;
+  name: string;
+  source: string;
+  current_version: string;
+  status: ModCompatStatus;
+  target_version?: string;
+  target_version_id?: string;
+  pinned: boolean;
+  enabled: boolean;
+}
+
+/** Preview of how installed mods would fare moving to a target MC version. */
+export interface VersionCheckResult {
+  mc_version: string;
+  loader: string;
+  total: number;
+  counts: Partial<Record<ModCompatStatus, number>>;
+  mods: ModCompat[];
+}
+
 /** A version the auto-updater blocklisted after it broke the server boot. */
 export interface SkippedModVersion {
   server_id: string;

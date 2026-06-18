@@ -158,6 +158,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(modsUpdate).Post("/mods/conflicts", modH.RecordConflict)
 					r.With(modsInstall).Post("/mods/install-modpack", modH.InstallModpack)
 					r.With(modsRead).Get("/mods/updates", modH.Updates)
+					r.With(modsRead).Get("/mods/version-check", modH.VersionCheck)
 					r.With(modsUpdate).Post("/mods/auto-update", modH.AutoUpdate)
 					r.With(modsRead).Get("/mods/update-runs", modH.ListUpdateRuns)
 					r.With(modsRead).Get("/mods/update-runs/{runId}", modH.GetUpdateRun)
