@@ -1,14 +1,21 @@
 import { useMemo, useState } from "react";
 import { createRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { Route as rootRoute } from "./__root";
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ScrollText } from "lucide-react";
-import { actionCategory, actionLabel, actionSeverity } from "@/lib/audit";
+import {
+  actionCategory,
+  actionLabel,
+  actionSeverity,
+  groupConsecutive,
+  type AuditGroup,
+  type AuditSeverity,
+} from "@/lib/audit";
 import { relativeTime } from "@/lib/time";
 import { api } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
@@ -27,6 +34,12 @@ const CATEGORY_FILTERS = [
   { value: "backup", label: "Backups" },
   { value: "auth", label: "Auth" },
 ];
+
+const SEVERITY_DOT: Record<AuditSeverity, string> = {
+  high: "bg-red-500",
+  notice: "bg-amber-500",
+  info: "bg-text-secondary/40",
+};
 
 function categoryBadge(action: string) {
   const cat = actionCategory(action);
@@ -54,6 +67,66 @@ function parseDetail(detail: string | null): Record<string, unknown> | null {
   return null;
 }
 
+type FieldChange = { from: unknown; to: unknown };
+
+// Detect the { changes: { field: { from, to } } } shape produced by config
+// edits so we can render a real before/after diff.
+function parseChanges(
+  detail: Record<string, unknown> | null,
+): Record<string, FieldChange> | null {
+  const c = detail?.changes;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return null;
+  const out: Record<string, FieldChange> = {};
+  for (const [k, v] of Object.entries(c as Record<string, unknown>)) {
+    if (v && typeof v === "object" && "from" in v && "to" in v) {
+      out[k] = v as FieldChange;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function fieldLabel(key: string): string {
+  return key.replace(/_/g, " ");
+}
+
+function fmtVal(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function ChangeDiff({ changes }: { changes: Record<string, FieldChange> }) {
+  return (
+    <div className="space-y-1.5 rounded-md border border-border bg-surface-2 p-3 text-xs">
+      {Object.entries(changes).map(([field, { from, to }]) => (
+        <div key={field} className="flex flex-wrap items-center gap-2">
+          <span className="min-w-[7rem] text-text-secondary">{fieldLabel(field)}</span>
+          <span className="rounded bg-red-500/10 px-1.5 py-0.5 font-mono text-red-400 line-through decoration-red-400/50">
+            {fmtVal(from)}
+          </span>
+          <ArrowRight className="h-3 w-3 text-text-secondary" />
+          <span className="rounded bg-green-500/10 px-1.5 py-0.5 font-mono text-green-400">
+            {fmtVal(to)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KeyValues({ detail }: { detail: Record<string, unknown> }) {
+  return (
+    <dl className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-x-3 gap-y-1 rounded-md border border-border bg-surface-2 p-3 text-xs">
+      {Object.entries(detail).map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-text-secondary">{k}</dt>
+          <dd className="break-words font-mono text-text-primary">{fmtVal(v)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function AuditRow({
   entry,
   actorName,
@@ -64,10 +137,10 @@ function AuditRow({
   serverName: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const high = actionSeverity(entry.action) === "high";
+  const severity = actionSeverity(entry.action);
   const detail = parseDetail(entry.detail);
-  const rawDetail = entry.detail && entry.detail !== "null" ? entry.detail : null;
-  const expandable = detail !== null || rawDetail !== null;
+  const changes = parseChanges(detail);
+  const expandable = changes !== null || detail !== null;
 
   return (
     <div className="px-4 py-2.5 sm:px-5">
@@ -76,15 +149,19 @@ function AuditRow({
         onClick={() => expandable && setOpen((v) => !v)}
         className={`flex w-full items-center gap-3 text-left ${expandable ? "cursor-pointer" : "cursor-default"}`}
       >
-        <span
-          className={`h-2 w-2 flex-shrink-0 rounded-full ${high ? "bg-red-500" : "bg-text-secondary/40"}`}
-        />
+        <span className={`h-2 w-2 flex-shrink-0 rounded-full ${SEVERITY_DOT[severity]}`} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-text-primary">
               {actionLabel(entry.action)}
             </span>
             {categoryBadge(entry.action)}
+            {changes && (
+              <span className="text-[10px] text-text-secondary">
+                {Object.keys(changes).length} change
+                {Object.keys(changes).length !== 1 ? "s" : ""}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 truncate text-xs text-text-secondary">
             {actorName}
@@ -108,18 +185,7 @@ function AuditRow({
 
       {open && expandable && (
         <div className="mt-2 ml-5 space-y-2">
-          {detail && (
-            <dl className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-x-3 gap-y-1 rounded-md border border-border bg-surface-2 p-3 text-xs">
-              {Object.entries(detail).map(([k, v]) => (
-                <div key={k} className="contents">
-                  <dt className="text-text-secondary">{k}</dt>
-                  <dd className="break-words font-mono text-text-primary">
-                    {typeof v === "object" ? JSON.stringify(v) : String(v)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
+          {changes ? <ChangeDiff changes={changes} /> : detail && <KeyValues detail={detail} />}
           <p className="font-mono text-[11px] text-text-secondary/70">
             {new Date(entry.created_at).toLocaleString()}
           </p>
@@ -127,6 +193,86 @@ function AuditRow({
       )}
     </div>
   );
+}
+
+// A collapsed run of repeated low-signal events (e.g. sign-ins) by one actor.
+function CollapsedRow({
+  group,
+  actorName,
+}: {
+  group: AuditGroup;
+  actorName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const count = group.entries.length;
+  const newest = group.entries[0];
+  const oldest = group.entries[count - 1];
+
+  return (
+    <div className="px-4 py-2.5 sm:px-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 text-left"
+      >
+        <span className={`h-2 w-2 flex-shrink-0 rounded-full ${SEVERITY_DOT[actionSeverity(group.action)]}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-text-primary">
+              {actionLabel(group.action)}
+            </span>
+            <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
+              {count}×
+            </span>
+            {categoryBadge(group.action)}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-text-secondary">
+            {actorName} · {count} times
+          </p>
+        </div>
+        <span className="flex-shrink-0 text-xs text-text-secondary">
+          {relativeTime(newest.created_at)}
+        </span>
+        {open ? (
+          <ChevronDown className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+        ) : (
+          <ChevronRight className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+        )}
+      </button>
+
+      {open && (
+        <ul className="mt-2 ml-5 space-y-1 border-l border-border pl-3">
+          {group.entries.map((e) => (
+            <li key={e.id} className="flex items-center justify-between gap-3 text-xs text-text-secondary">
+              <span className="font-mono">{new Date(e.created_at).toLocaleString()}</span>
+              {e.ip_address && <span className="font-mono">{e.ip_address}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!open && oldest.id !== newest.id && (
+        <p className="ml-5 mt-1 text-[11px] text-text-secondary/60">
+          {relativeTime(oldest.created_at)} – {relativeTime(newest.created_at)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Bucket entries into day sections, newest first, with a friendly label.
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
 }
 
 function AuditPage() {
@@ -163,8 +309,7 @@ function AuditPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
-      if (category !== "all" && actionCategory(e.action) !== category)
-        return false;
+      if (category !== "all" && actionCategory(e.action) !== category) return false;
       if (issuesOnly && actionSeverity(e.action) !== "high") return false;
       if (q) {
         const hay = [
@@ -181,6 +326,21 @@ function AuditPage() {
       return true;
     });
   }, [entries, query, category, issuesOnly, actorName, serverName]);
+
+  // Group by day, then collapse repetitive runs within each day.
+  const days = useMemo(() => {
+    const buckets: { label: string; entries: AuditEntry[] }[] = [];
+    for (const e of filtered) {
+      const label = dayLabel(e.created_at);
+      const last = buckets[buckets.length - 1];
+      if (last && last.label === label) last.entries.push(e);
+      else buckets.push({ label, entries: [e] });
+    }
+    return buckets.map((b) => ({
+      label: b.label,
+      groups: groupConsecutive(b.entries),
+    }));
+  }, [filtered]);
 
   return (
     <div>
@@ -243,16 +403,38 @@ function AuditPage() {
             />
           </Card>
         ) : (
-          <Card className="divide-y divide-border">
-            {filtered.map((e) => (
-              <AuditRow
-                key={e.id}
-                entry={e}
-                actorName={actorName(e.user_id)}
-                serverName={serverName(e.server_id)}
-              />
+          <div className="space-y-4">
+            {days.map((day) => (
+              <div key={day.label}>
+                <div className="mb-1.5 flex items-center gap-2 px-1">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                    {day.label}
+                  </h2>
+                  <span className="text-[11px] text-text-secondary/60">
+                    {day.groups.reduce((n, g) => n + g.entries.length, 0)}
+                  </span>
+                </div>
+                <Card className="divide-y divide-border">
+                  {day.groups.map((g) =>
+                    g.collapsed ? (
+                      <CollapsedRow
+                        key={g.key}
+                        group={g}
+                        actorName={actorName(g.entries[0].user_id)}
+                      />
+                    ) : (
+                      <AuditRow
+                        key={g.key}
+                        entry={g.entries[0]}
+                        actorName={actorName(g.entries[0].user_id)}
+                        serverName={serverName(g.entries[0].server_id)}
+                      />
+                    ),
+                  )}
+                </Card>
+              </div>
             ))}
-          </Card>
+          </div>
         )}
       </div>
     </div>

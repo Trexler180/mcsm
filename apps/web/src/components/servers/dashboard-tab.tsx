@@ -52,7 +52,11 @@ export function DashboardTab({
           title="Resources"
           description="Live agent metrics for this server."
         >
-          <ResourceChart serverId={server.id} ramMaxMb={server.ram_mb_max} />
+          <ResourceChart
+            serverId={server.id}
+            ramMaxMb={server.ram_mb_max}
+            status={server.status}
+          />
         </Panel>
         <Panel title="Quick Actions">
           <div className="grid grid-cols-2 gap-2">

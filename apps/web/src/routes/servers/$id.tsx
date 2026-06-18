@@ -4,7 +4,7 @@ import {
   useParams,
   useNavigate,
 } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -38,16 +38,9 @@ import { TasksTab } from "@/components/servers/tasks-tab";
 import { LogsTab } from "@/components/servers/logs-tab";
 import { WorldsTab } from "@/components/servers/worlds-tab";
 import { OptionsTab, PropertiesTab } from "@/components/servers/options-properties";
-
-// Group order for the mobile picker, preserving the order above within each.
-const sectionGroups = SERVER_SECTIONS.reduce<
-  Array<{ group: string; items: typeof SERVER_SECTIONS }>
->((acc, section) => {
-  const existing = acc.find((g) => g.group === section.group);
-  if (existing) existing.items.push(section);
-  else acc.push({ group: section.group, items: [section] });
-  return acc;
-}, []);
+import { AccessTab } from "@/components/servers/access-tab";
+import type { ServerPermission } from "@/lib/types";
+import { can as hasPermission } from "@/lib/permissions";
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +64,33 @@ function ServerDetailPage() {
     navigate({ to: "/servers/$id/$section", params: { id, section: next } });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
+  const { data: permissions } = useQuery({
+    queryKey: ["server-permissions", id],
+    queryFn: () => api.servers.myPermissions(id),
+  });
+  const can = (permission: ServerPermission) => hasPermission(permissions, permission);
+  const allowedSections = useMemo(
+    () => SERVER_SECTIONS.filter((section) => hasPermission(permissions, section.permission)),
+    [permissions],
+  );
+  const allowedSectionValues = useMemo(
+    () => new Set(allowedSections.map((section) => section.value)),
+    [allowedSections],
+  );
+  const sectionGroups = useMemo(
+    () =>
+      allowedSections.reduce<Array<{ group: string; items: typeof SERVER_SECTIONS }>>(
+        (acc, section) => {
+          const existing = acc.find((g) => g.group === section.group);
+          if (existing) existing.items.push(section);
+          else acc.push({ group: section.group, items: [section] });
+          return acc;
+        },
+        [],
+      ),
+    [allowedSections],
+  );
+
   const { data: server, isLoading } = useQuery({
     queryKey: ["server", id],
     queryFn: () => api.servers.get(id),
@@ -81,6 +101,7 @@ function ServerDetailPage() {
     queryKey: ["backups", id],
     queryFn: () => api.backups.list(id),
     refetchInterval: 10_000,
+    enabled: can("backups"),
   });
 
   // Live agent status carries the parsed Fabric mod-conflict (if any), which the
@@ -105,7 +126,15 @@ function ServerDetailPage() {
   // (server, summary) while a conflict is open; disabling the jars resolves it.
   const reportedConflict = useRef<number | null>(null);
   useEffect(() => {
+    if (!permissions) return;
+    if (!allowedSectionValues.has(tab)) {
+      setTab("dashboard");
+    }
+  }, [allowedSectionValues, permissions, tab]);
+
+  useEffect(() => {
     if (!conflict || conflict.detected_at === reportedConflict.current) return;
+    if (!can("mods")) return;
     reportedConflict.current = conflict.detected_at;
     api.mods
       .recordConflict(id, {
@@ -116,7 +145,7 @@ function ServerDetailPage() {
       .catch(() => {
         // Best-effort: the dialog still works if recording fails.
       });
-  }, [conflict, id]);
+  }, [conflict, id, permissions]);
 
   const start = useMutation({
     mutationFn: () => api.servers.start(id),
@@ -161,6 +190,9 @@ function ServerDetailPage() {
   const isOnline = server.status === "online" || server.status === "starting";
   const busy =
     start.isPending || stop.isPending || restart.isPending || kill.isPending;
+  const goSection = (next: ServerSection) => {
+    if (allowedSectionValues.has(next)) setTab(next);
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -190,57 +222,63 @@ function ServerDetailPage() {
 
         {/* Resource metrics */}
         <div className="hidden lg:block w-64">
-          <ResourceChart serverId={id} ramMaxMb={server.ram_mb_max} />
+          <ResourceChart
+            serverId={id}
+            ramMaxMb={server.ram_mb_max}
+            status={server.status}
+          />
         </div>
 
         {/* Controls */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {!isOnline ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => start.mutate()}
-              loading={busy}
-              title="Start"
-              aria-label="Start server"
-            >
-              <Play className="h-4 w-4 text-green-400" />
-            </Button>
-          ) : (
-            <>
+        {can("power") && (
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {!isOnline ? (
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => restart.mutate()}
+                onClick={() => start.mutate()}
                 loading={busy}
-                title="Restart"
-                aria-label="Restart server"
+                title="Start"
+                aria-label="Start server"
               >
-                <RotateCcw className="h-4 w-4 text-yellow-400" />
+                <Play className="h-4 w-4 text-green-400" />
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => stop.mutate()}
-                loading={busy}
-                title="Stop"
-                aria-label="Stop server"
-              >
-                <Square className="h-4 w-4 text-red-400" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => kill.mutate()}
-                loading={busy}
-                title="Kill"
-                aria-label="Kill server"
-              >
-                <Skull className="h-4 w-4 text-red-600" />
-              </Button>
-            </>
-          )}
-        </div>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => restart.mutate()}
+                  loading={busy}
+                  title="Restart"
+                  aria-label="Restart server"
+                >
+                  <RotateCcw className="h-4 w-4 text-yellow-400" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => stop.mutate()}
+                  loading={busy}
+                  title="Stop"
+                  aria-label="Stop server"
+                >
+                  <Square className="h-4 w-4 text-red-400" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => kill.mutate()}
+                  loading={busy}
+                  title="Kill"
+                  aria-label="Kill server"
+                >
+                  <Skull className="h-4 w-4 text-red-600" />
+                </Button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
@@ -250,7 +288,7 @@ function ServerDetailPage() {
           <label className="md:hidden">
             <span className="sr-only">Section</span>
             <select
-              value={tab}
+              value={allowedSectionValues.has(tab) ? tab : "dashboard"}
               onChange={(e) => setTab(e.target.value as ServerSection)}
               className="h-10 w-full rounded-md border border-border bg-surface-2 px-3 text-sm text-text-primary"
             >
@@ -302,28 +340,28 @@ function ServerDetailPage() {
               <DashboardTab
                 server={server}
                 backups={backups}
-                onSection={setTab}
+                onSection={goSection}
               />
             </div>
           )}
-          {tab === "console" && (
+          {tab === "console" && can("console") && (
             <div className="h-full min-h-0 p-4 pb-6">
               <ServerTerminal serverId={id} />
             </div>
           )}
-          {tab === "logs" && <LogsTab serverId={id} />}
-          {tab === "players" && (
+          {tab === "logs" && can("files") && <LogsTab serverId={id} />}
+          {tab === "players" && can("players") && (
             <PlayersPanel
               serverId={id}
               status={server.status as ServerStatus}
             />
           )}
-          {tab === "options" && (
+          {tab === "options" && can("settings") && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">
               <OptionsTab server={server} />
             </div>
           )}
-          {tab === "properties" && (
+          {tab === "properties" && can("settings") && (
             <div
               className="h-full overflow-y-auto px-4 pb-4 pt-0 sm:px-6 sm:pb-6 sm:pt-0"
               data-server-scroll
@@ -331,8 +369,8 @@ function ServerDetailPage() {
               <PropertiesTab serverId={id} />
             </div>
           )}
-          {tab === "configs" && <ConfigsTab serverId={id} />}
-          {tab === "files" && (
+          {tab === "configs" && can("files") && <ConfigsTab serverId={id} />}
+          {tab === "files" && can("files") && (
             <div className="flex h-full min-w-0">
               {/* On mobile, show the browser OR the editor (not both); on md+ show both side by side. */}
               <div
@@ -370,8 +408,8 @@ function ServerDetailPage() {
               </div>
             </div>
           )}
-          {tab === "worlds" && <WorldsTab serverId={id} />}
-          {tab === "mods" && (
+          {tab === "worlds" && can("files") && <WorldsTab serverId={id} />}
+          {tab === "mods" && can("mods") && (
             <ModSearch
               serverId={id}
               loader={server.platform}
@@ -379,14 +417,19 @@ function ServerDetailPage() {
               platform={server.platform}
             />
           )}
-          {tab === "backups" && (
+          {tab === "backups" && can("backups") && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">
               <BackupsTab serverId={id} />
             </div>
           )}
-          {tab === "tasks" && (
+          {tab === "tasks" && can("tasks") && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">
               <TasksTab serverId={id} />
+            </div>
+          )}
+          {tab === "access" && can("admin") && (
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
+              <AccessTab serverId={id} />
             </div>
           )}
         </main>

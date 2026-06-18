@@ -7,11 +7,13 @@ import {
   HardDrive,
   LayoutDashboard,
   PackageOpen,
+  ShieldCheck,
   SlidersHorizontal,
   Terminal,
   ToggleRight,
   Users,
 } from "lucide-react";
+import type { ServerPermission } from "@/lib/types";
 
 export type ServerSection =
   | "dashboard"
@@ -25,7 +27,8 @@ export type ServerSection =
   | "files"
   | "worlds"
   | "backups"
-  | "tasks";
+  | "tasks"
+  | "access";
 
 // Canonical list of the sections within a server, shared by the server-detail
 // sidebar/picker and the command palette so they never drift apart.
@@ -34,19 +37,21 @@ export const SERVER_SECTIONS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   group: string;
+  permission: ServerPermission;
 }> = [
-  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Operate" },
-  { value: "console", label: "Console", icon: Terminal, group: "Operate" },
-  { value: "logs", label: "Logs", icon: FileText, group: "Operate" },
-  { value: "players", label: "Players", icon: Users, group: "Operate" },
-  { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage" },
-  { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage" },
-  { value: "properties", label: "Properties", icon: FileCog, group: "Manage" },
-  { value: "configs", label: "Configs", icon: FileCog, group: "Manage" },
-  { value: "files", label: "Files", icon: FolderTree, group: "Storage" },
-  { value: "worlds", label: "Worlds", icon: Globe2, group: "Storage" },
-  { value: "backups", label: "Backups", icon: HardDrive, group: "Storage" },
-  { value: "tasks", label: "Tasks", icon: ToggleRight, group: "Automation" },
+  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Operate", permission: "view" },
+  { value: "console", label: "Console", icon: Terminal, group: "Operate", permission: "console" },
+  { value: "logs", label: "Logs", icon: FileText, group: "Operate", permission: "files" },
+  { value: "players", label: "Players", icon: Users, group: "Operate", permission: "players" },
+  { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage", permission: "mods" },
+  { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage", permission: "settings" },
+  { value: "properties", label: "Properties", icon: FileCog, group: "Manage", permission: "settings" },
+  { value: "configs", label: "Configs", icon: FileCog, group: "Manage", permission: "files" },
+  { value: "access", label: "Access", icon: ShieldCheck, group: "Manage", permission: "admin" },
+  { value: "files", label: "Files", icon: FolderTree, group: "Storage", permission: "files" },
+  { value: "worlds", label: "Worlds", icon: Globe2, group: "Storage", permission: "files" },
+  { value: "backups", label: "Backups", icon: HardDrive, group: "Storage", permission: "backups" },
+  { value: "tasks", label: "Tasks", icon: ToggleRight, group: "Automation", permission: "tasks" },
 ];
 
 export function Panel({

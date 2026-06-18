@@ -9,6 +9,7 @@ import type {
   GeyserInfo,
   InstalledMod,
   IntegrationMeta,
+  JavaInfo,
   LoginResponse,
   LogEvent,
   ModCategory,
@@ -27,6 +28,11 @@ import type {
   PlayerDetail,
   ScheduledTask,
   Server,
+  ServerBans,
+  ServerMember,
+  ServerMembersResponse,
+  ServerPermission,
+  MyServerPermissions,
   TokenResponse,
   User,
 } from "./types";
@@ -268,6 +274,7 @@ export const api = {
     reinstall: (id: string) => post(`/servers/${id}/reinstall`),
     kill: (id: string) => post(`/servers/${id}/kill`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
+    javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),
     logEvents: (id: string, opts?: { level?: string; limit?: number }) => {
@@ -277,6 +284,26 @@ export const api = {
       const qs = q.toString();
       return get<LogEvent[]>(`/servers/${id}/log-events${qs ? `?${qs}` : ""}`);
     },
+    members: (id: string) =>
+      get<ServerMembersResponse>(`/servers/${id}/members`),
+    myPermissions: (id: string) =>
+      get<MyServerPermissions>(`/servers/${id}/members/me`),
+    addMember: (
+      id: string,
+      data: { user_id?: string; email?: string; permissions: ServerPermission[] },
+    ) => post<ServerMember>(`/servers/${id}/members`, data),
+    updateMember: (
+      id: string,
+      userId: string,
+      permissions: ServerPermission[],
+      expectedPermissions: ServerPermission[],
+    ) =>
+      put<ServerMember>(`/servers/${id}/members/${userId}`, {
+        permissions,
+        expected_permissions: expectedPermissions,
+      }),
+    removeMember: (id: string, userId: string) =>
+      del(`/servers/${id}/members/${userId}`),
   },
 
   overview: {
@@ -391,15 +418,22 @@ export const api = {
     list: (serverId: string) => get<Player[]>(`/servers/${serverId}/players`),
     meta: (serverId: string) =>
       get<GeyserInfo>(`/servers/${serverId}/players/meta`),
+    bans: (serverId: string) =>
+      get<ServerBans>(`/servers/${serverId}/players/bans`),
     get: (serverId: string, uuid: string) =>
       get<PlayerDetail>(`/servers/${serverId}/players/${uuid}`),
     action: (
       serverId: string,
       body: {
         action: PlayerActionKind;
-        name: string;
+        name?: string;
         uuid?: string;
         reason?: string;
+        /** Target address for the `ban_ip` / `pardon_ip` actions. */
+        ip?: string;
+        /** Operator permission level (1–4) for the `op` action; applied to
+         *  offline ops.json edits. Omit to use the server default. */
+        level?: number;
       },
     ) => post(`/servers/${serverId}/players/action`, body),
   },

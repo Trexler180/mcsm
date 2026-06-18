@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
@@ -9,14 +9,177 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
+import {
+  buildCron,
+  describeAction,
+  describeCron,
+  DEFAULT_SCHEDULE,
+  parseCron,
+  TASK_ACTIONS,
+  WEEKDAY_OPTIONS,
+  type ScheduleKind,
+  type ScheduleState,
+} from "@/lib/cron";
 import type { ScheduledTask } from "@/lib/types";
 
 const EMPTY_TASK_FORM = {
   name: "",
-  cron_expr: "0 4 * * *",
   action: "command",
   command: "",
 };
+
+const FREQUENCIES: { value: ScheduleKind; label: string }[] = [
+  { value: "hourly", label: "Hourly" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "custom", label: "Custom (cron)" },
+];
+
+const selectClass =
+  "flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent";
+
+// Build a "HH:MM" value for the native time input and back, in local terms of
+// the schedule's hour/minute fields.
+function toTimeValue(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function ScheduleBuilder({
+  value,
+  onChange,
+}: {
+  value: ScheduleState;
+  onChange: (next: ScheduleState) => void;
+}) {
+  const [advanced, setAdvanced] = useState(value.kind === "custom");
+  const set = (patch: Partial<ScheduleState>) => {
+    const next = { ...value, ...patch };
+    // Keep raw in sync with the builder so the advanced field always mirrors.
+    onChange(
+      next.kind === "custom" ? next : { ...next, raw: buildCron(next) },
+    );
+  };
+
+  const onTime = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [h, m] = e.target.value.split(":").map(Number);
+    set({ hour: h || 0, minute: m || 0 });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label>Frequency</Label>
+        <select
+          className={selectClass}
+          value={value.kind}
+          onChange={(e) => {
+            const kind = e.target.value as ScheduleKind;
+            setAdvanced(kind === "custom");
+            set({ kind });
+          }}
+        >
+          {FREQUENCIES.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {value.kind === "hourly" && (
+        <div className="space-y-1.5">
+          <Label>At minute</Label>
+          <Input
+            type="number"
+            min={0}
+            max={59}
+            value={value.minute}
+            onChange={(e) => set({ minute: Number(e.target.value) })}
+          />
+        </div>
+      )}
+
+      {value.kind === "weekly" && (
+        <div className="space-y-1.5">
+          <Label>Day of week</Label>
+          <select
+            className={selectClass}
+            value={value.weekday}
+            onChange={(e) => set({ weekday: Number(e.target.value) })}
+          >
+            {WEEKDAY_OPTIONS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {value.kind === "monthly" && (
+        <div className="space-y-1.5">
+          <Label>Day of month</Label>
+          <Input
+            type="number"
+            min={1}
+            max={31}
+            value={value.day}
+            onChange={(e) => set({ day: Number(e.target.value) })}
+          />
+        </div>
+      )}
+
+      {(value.kind === "daily" ||
+        value.kind === "weekly" ||
+        value.kind === "monthly") && (
+        <div className="space-y-1.5">
+          <Label>Time of day</Label>
+          <Input
+            type="time"
+            value={toTimeValue(value.hour, value.minute)}
+            onChange={onTime}
+          />
+        </div>
+      )}
+
+      {value.kind !== "custom" && (
+        <button
+          type="button"
+          onClick={() => setAdvanced((v) => !v)}
+          className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
+        >
+          <ChevronDown
+            className={`h-3.5 w-3.5 transition-transform ${advanced ? "" : "-rotate-90"}`}
+          />
+          Advanced (raw cron)
+        </button>
+      )}
+
+      {(advanced || value.kind === "custom") && (
+        <div className="space-y-1.5">
+          {value.kind !== "custom" && <Label>Cron expression</Label>}
+          <Input
+            value={value.raw}
+            onChange={(e) =>
+              onChange({ ...parseCron(e.target.value), raw: e.target.value })
+            }
+            className="font-mono"
+            placeholder="0 4 * * *"
+          />
+          <p className="text-xs text-text-secondary">
+            Format: minute hour day month weekday
+          </p>
+        </div>
+      )}
+
+      <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-secondary">
+        Runs{" "}
+        <span className="text-text-primary">{describeCron(value.raw)}</span>
+      </p>
+    </div>
+  );
+}
 
 function TaskDialog({
   serverId,
@@ -33,6 +196,7 @@ function TaskDialog({
   const { success, error } = useNotifications();
   const isEdit = !!task;
   const [form, setForm] = useState(EMPTY_TASK_FORM);
+  const [schedule, setSchedule] = useState<ScheduleState>(DEFAULT_SCHEDULE);
 
   // Load the task being edited (or reset) whenever the dialog opens.
   useEffect(() => {
@@ -41,19 +205,19 @@ function TaskDialog({
       task
         ? {
             name: task.name,
-            cron_expr: task.cron_expr,
             action: task.action,
             command: (task.payload?.command as string) ?? "",
           }
         : EMPTY_TASK_FORM,
     );
+    setSchedule(task ? parseCron(task.cron_expr) : DEFAULT_SCHEDULE);
   }, [open, task]);
 
   const mutation = useMutation({
     mutationFn: () => {
       const data = {
         name: form.name,
-        cron_expr: form.cron_expr,
+        cron_expr: buildCron(schedule),
         action: form.action,
         payload: form.action === "command" ? { command: form.command } : {},
       };
@@ -91,30 +255,15 @@ function TaskDialog({
             onChange={f("name")}
           />
         </div>
-        <div className="space-y-1.5">
-          <Label>Cron expression</Label>
-          <Input
-            placeholder="0 4 * * *"
-            value={form.cron_expr}
-            onChange={f("cron_expr")}
-            className="font-mono"
-          />
-          <p className="text-xs text-text-secondary">
-            Format: minute hour day month weekday
-          </p>
-        </div>
+        <ScheduleBuilder value={schedule} onChange={setSchedule} />
         <div className="space-y-1.5">
           <Label>Action</Label>
-          <select
-            className="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
-            value={form.action}
-            onChange={f("action")}
-          >
-            <option value="command">Run command</option>
-            <option value="restart">Restart server</option>
-            <option value="stop">Stop server</option>
-            <option value="backup">Create backup</option>
-            <option value="mod_update">Auto-update mods (safe)</option>
+          <select className={selectClass} value={form.action} onChange={f("action")}>
+            {TASK_ACTIONS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
           </select>
         </div>
         {form.action === "mod_update" && (
@@ -188,7 +337,7 @@ function TaskDetailsDialog({
             </Badge>
           </dd>
           <dt className="text-text-secondary">Action</dt>
-          <dd className="text-text-primary">{task.action}</dd>
+          <dd className="text-text-primary">{describeAction(task.action)}</dd>
           {command && (
             <>
               <dt className="text-text-secondary">Command</dt>
@@ -198,7 +347,12 @@ function TaskDetailsDialog({
             </>
           )}
           <dt className="text-text-secondary">Schedule</dt>
-          <dd className="font-mono text-text-primary">{task.cron_expr}</dd>
+          <dd className="text-text-primary">
+            {describeCron(task.cron_expr)}
+            <span className="ml-2 font-mono text-xs text-text-secondary">
+              {task.cron_expr}
+            </span>
+          </dd>
           <dt className="text-text-secondary">Next run</dt>
           <dd className="text-text-primary">
             {task.next_run
@@ -331,11 +485,9 @@ export function TasksTab({ serverId }: { serverId: string }) {
                 <p className="text-sm font-medium text-text-primary hover:text-accent">
                   {task.name}
                 </p>
-                <p className="text-xs text-text-secondary font-mono mt-0.5">
-                  {task.cron_expr} · {task.action}
-                  {task.payload?.command
-                    ? `: ${task.payload.command as string}`
-                    : ""}
+                <p className="text-xs text-text-secondary mt-0.5">
+                  {describeCron(task.cron_expr)} ·{" "}
+                  {describeAction(task.action, task.payload)}
                 </p>
               </button>
               <div className="text-right text-xs text-text-secondary flex-shrink-0">

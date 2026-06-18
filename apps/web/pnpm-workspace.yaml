@@ -1,0 +1,7 @@
+# pnpm v10+ reads settings from here instead of .npmrc / the package.json "pnpm" field.
+# The repo lives on an exFAT drive, which can't do symlinks, so use the hoisted linker.
+nodeLinker: hoisted
+# esbuild ships a postinstall that fetches its platform binary; pnpm blocks build
+# scripts by default, so it must be approved explicitly.
+allowBuilds:
+  esbuild: true

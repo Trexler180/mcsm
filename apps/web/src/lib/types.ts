@@ -7,6 +7,62 @@ export interface User {
   last_login: string | null;
 }
 
+// Group permissions grant everything beneath them; leaves ("<group>.<action>")
+// grant a single action and are implied by holding the parent group.
+export type ServerPermissionGroup =
+  | "view"
+  | "power"
+  | "console"
+  | "players"
+  | "files"
+  | "mods"
+  | "backups"
+  | "tasks"
+  | "settings"
+  | "admin";
+
+export type ServerPermissionLeaf =
+  | "power.start"
+  | "power.stop"
+  | "power.restart"
+  | "power.kill"
+  | "players.whitelist"
+  | "players.kick"
+  | "players.ban"
+  | "players.op"
+  | "files.read"
+  | "files.write"
+  | "files.delete"
+  | "mods.install"
+  | "mods.update"
+  | "mods.remove"
+  | "backups.create"
+  | "backups.restore"
+  | "backups.delete";
+
+export type ServerPermission = ServerPermissionGroup | ServerPermissionLeaf;
+
+export interface ServerMember {
+  server_id: string;
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: User["role"];
+  owner: boolean;
+  permissions: ServerPermission[];
+}
+
+export interface ServerMembersResponse {
+  owner: ServerMember;
+  members: ServerMember[];
+}
+
+export interface MyServerPermissions {
+  owner: boolean;
+  global_admin: boolean;
+  permissions: ServerPermission[];
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -42,13 +98,29 @@ export interface ConflictSuggestion {
 export interface ModConflict {
   detected: boolean;
   // "incompatible" = Fabric incompatible-mods block; "crash" = a mod (e.g. a
-  // broken mixin) crashed the server on startup. Both are fixed by disabling
-  // the named mod(s), so they share one dialog.
-  kind?: "incompatible" | "crash";
+  // broken mixin) crashed the server on startup (both fixed by disabling the
+  // named mod(s)); "java_version" = the jar needs a newer Java than the runtime
+  // that launched it (fixed by switching Java, not by disabling mods).
+  kind?: "incompatible" | "crash" | "java_version";
   summary: string;
   suggestions: ConflictSuggestion[];
+  // The Java feature release the server needs (set only for kind
+  // "java_version"); lets the dialog match installed runtimes or suggest one.
+  required_java?: number;
   raw: string[];
   detected_at: number;
+}
+
+export interface JavaInstallation {
+  path: string;
+  version: string;
+  major: number;
+}
+
+export interface JavaInfo {
+  installations: JavaInstallation[];
+  // Host OS reported by the agent: "windows" | "darwin" | "linux" | …
+  os: string;
 }
 
 export interface AgentStatus {
@@ -431,9 +503,36 @@ export type PlayerActionKind =
   | "deop"
   | "ban"
   | "pardon"
+  | "ban_ip"
+  | "pardon_ip"
   | "kick"
   | "whitelist_add"
   | "whitelist_remove";
+
+/** A player ban entry from banned-players.json. */
+export interface BannedPlayer {
+  uuid: string;
+  name: string;
+  created?: string;
+  source?: string;
+  expires?: string;
+  reason?: string;
+}
+
+/** An IP ban entry from banned-ips.json. Keyed by address, not a player. */
+export interface BannedIP {
+  ip: string;
+  created?: string;
+  source?: string;
+  expires?: string;
+  reason?: string;
+}
+
+/** A server's consolidated ban state (player bans + IP bans). */
+export interface ServerBans {
+  players: BannedPlayer[];
+  ips: BannedIP[];
+}
 
 export interface Enchant {
   id: string; // e.g. "minecraft:sharpness"

@@ -2,7 +2,9 @@
 // and the audit log page. Keeps the "names not IDs / severity / readable label"
 // logic in one place.
 
-export type AuditSeverity = "high" | "info";
+import type { AuditEntry } from "@/lib/types";
+
+export type AuditSeverity = "high" | "notice" | "info";
 
 const LABELS: Record<string, string> = {
   "server.start": "Started server",
@@ -36,19 +38,74 @@ export function actionLabel(action: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : action;
 }
 
-/** Severity used to color-code an action (crashes/failures stand out). */
+// Failures/crashes — the things an operator needs to notice and act on.
+const HIGH_ACTIONS = new Set([
+  "server.crash",
+  "server.start_failed",
+  "mod.autoupdate_failed",
+  "mod.disable_conflict",
+]);
+
+// Successful but sensitive — destructive or security-relevant changes worth a
+// second glance, but not an alarm.
+const NOTICE_ACTIONS = new Set([
+  "mod.uninstall",
+  "mod.autoupdate_reverted",
+  "server.reinstall",
+  "node.delete",
+  "user.delete",
+]);
+
+/** Severity used to color-code an action (high → red, notice → amber). */
 export function actionSeverity(action: string): AuditSeverity {
-  if (
-    action === "server.crash" ||
-    action === "server.start_failed" ||
-    action.startsWith("mod.disable_conflict")
-  ) {
-    return "high";
-  }
+  if (HIGH_ACTIONS.has(action)) return "high";
+  if (NOTICE_ACTIONS.has(action) || action.endsWith(".delete")) return "notice";
   return "info";
 }
 
 /** The category prefix of an action, e.g. "server.start" -> "server". */
 export function actionCategory(action: string): string {
   return action.includes(".") ? action.split(".")[0] : action;
+}
+
+// Low-signal actions that pile up (sign-ins/outs). Consecutive runs of these by
+// the same actor are collapsed into a single summarized row in the audit log.
+const COLLAPSIBLE = new Set(["auth.login", "auth.logout"]);
+
+export function isCollapsible(action: string): boolean {
+  return COLLAPSIBLE.has(action);
+}
+
+/** A single audit row or a collapsed run of repeated low-signal events. */
+export interface AuditGroup {
+  key: string;
+  /** The representative action (all entries share it when collapsed). */
+  action: string;
+  /** Newest-first entries; length > 1 only for collapsed runs. */
+  entries: AuditEntry[];
+  collapsed: boolean;
+}
+
+/**
+ * Collapse consecutive runs of the same collapsible action by the same actor
+ * into one group. Input is assumed newest-first (as the API returns it); order
+ * is preserved. Non-collapsible entries pass through as singleton groups.
+ */
+export function groupConsecutive(entries: AuditEntry[]): AuditGroup[] {
+  const groups: AuditGroup[] = [];
+  for (const e of entries) {
+    const prev = groups[groups.length - 1];
+    if (
+      prev &&
+      isCollapsible(e.action) &&
+      prev.action === e.action &&
+      prev.entries[0].user_id === e.user_id
+    ) {
+      prev.entries.push(e);
+      prev.collapsed = true;
+      continue;
+    }
+    groups.push({ key: String(e.id), action: e.action, entries: [e], collapsed: false });
+  }
+  return groups;
 }

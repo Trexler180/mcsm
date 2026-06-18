@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Gamepad2,
 } from 'lucide-react'
+import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,7 @@ import { useNotifications } from '@/store/notifications'
 import type { Player, PlayerActionKind, ServerStatus } from '@/lib/types'
 import { PlayerDetailDialog } from './detail'
 import { PlayerActionsMenu } from './actions-menu'
+import { BansView } from './bans'
 
 interface PlayersPanelProps {
   serverId: string
@@ -32,6 +34,37 @@ const OFFLINE_PAGE = 50
 
 type FilterKey = 'all' | 'online' | 'ops' | 'whitelisted' | 'banned' | 'bedrock'
 type SortKey = 'recent' | 'name' | 'status'
+type PanelView = 'roster' | 'bans'
+
+// Segmented toggle between the live roster and the ban-management view. Shared
+// by both views so it stays put when switching.
+function ViewToggle({ view, onChange }: { view: PanelView; onChange: (v: PanelView) => void }) {
+  const tabs: { key: PanelView; label: string }[] = [
+    { key: 'roster', label: 'Roster' },
+    { key: 'bans', label: 'Bans' },
+  ]
+  return (
+    <div className="flex-shrink-0 flex gap-1 px-4 pt-3 bg-surface" role="tablist">
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          role="tab"
+          aria-selected={view === t.key}
+          onClick={() => onChange(t.key)}
+          className={clsx(
+            'rounded-md px-3 py-1 text-sm font-medium transition-colors',
+            view === t.key
+              ? 'bg-surface-2 text-text-primary'
+              : 'text-text-secondary hover:text-text-primary',
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 // A name is acceptable if it is a plain Java name, or (when the server runs
 // Floodgate) its Bedrock username prefix followed by a Java-shaped core. The
@@ -106,6 +139,8 @@ const ACTION_VERB: Record<PlayerActionKind, string> = {
   deop: 'Removed operator',
   ban: 'Banned',
   pardon: 'Pardoned',
+  ban_ip: 'IP banned',
+  pardon_ip: 'IP pardoned',
   kick: 'Kicked',
   whitelist_add: 'Whitelisted',
   whitelist_remove: 'Removed from whitelist',
@@ -233,81 +268,193 @@ function FilterChip({
   )
 }
 
-// A name + optional reason capture used by the "Add by name" dialog and by the
-// destructive confirm dialog.
+// The three intents the Add-player dialog supports, each a distinct tab.
+type AddTab = 'whitelist_add' | 'op' | 'ban'
+
+const ADD_TABS: { key: AddTab; label: string; icon: React.ReactNode }[] = [
+  { key: 'whitelist_add', label: 'Whitelist', icon: <Shield className="h-3.5 w-3.5" /> },
+  { key: 'op', label: 'Operator', icon: <Crown className="h-3.5 w-3.5" /> },
+  { key: 'ban', label: 'Ban', icon: <Ban className="h-3.5 w-3.5" /> },
+]
+
+// Minecraft operator permission levels (server.properties op-permission-level),
+// summarised for the level picker.
+const OP_LEVELS: { level: number; desc: string }[] = [
+  { level: 1, desc: 'Bypass spawn protection.' },
+  { level: 2, desc: 'Cheats: /gamemode, /give, /tp, edit command blocks.' },
+  { level: 3, desc: 'Player management: /kick, /ban, /op.' },
+  { level: 4, desc: 'Full control: /stop, /save-all, server config.' },
+]
+
+const ADD_SUBMIT: Record<AddTab, { label: string; verb: string }> = {
+  whitelist_add: { label: 'Add to whitelist', verb: 'whitelisted' },
+  op: { label: 'Make operator', verb: 'opped' },
+  ban: { label: 'Ban player', verb: 'banned' },
+}
+
+// A focused, tabbed capture for adding a player by name to the whitelist, the
+// operator list, or the ban list — each tab shows only the fields that intent
+// needs (a level picker for op, a reason for ban). Works online (live command)
+// or offline (edits the JSON files directly).
 function AddPlayerDialog({
   open,
   onClose,
   onSubmit,
   busy,
   bedrockPrefix,
+  serverOnline,
 }: {
   open: boolean
   onClose: () => void
-  onSubmit: (kind: PlayerActionKind, name: string, reason: string) => void
+  onSubmit: (
+    kind: PlayerActionKind,
+    name: string,
+    opts: { reason?: string; level?: number },
+  ) => void
   busy: boolean
   bedrockPrefix?: string
+  serverOnline: boolean
 }) {
+  const [tab, setTab] = useState<AddTab>('whitelist_add')
   const [name, setName] = useState('')
   const [reason, setReason] = useState('')
+  const [level, setLevel] = useState(4)
   const trimmed = name.trim()
   const valid = isValidName(trimmed, bedrockPrefix)
 
   useEffect(() => {
     if (open) {
+      setTab('whitelist_add')
       setName('')
       setReason('')
+      setLevel(4)
     }
   }, [open])
 
-  const fire = (kind: PlayerActionKind) => {
+  const submit = () => {
     if (!valid) return
-    onSubmit(kind, trimmed, reason.trim())
+    if (tab === 'ban') onSubmit('ban', trimmed, { reason: reason.trim() || undefined })
+    else if (tab === 'op')
+      // A specific level only sticks via the offline ops.json edit; a live
+      // server's /op always grants its default level, so don't send one.
+      onSubmit('op', trimmed, serverOnline ? {} : { level })
+    else onSubmit('whitelist_add', trimmed, {})
   }
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title="Add player by name"
-      description="Works whether the server is online (live command) or offline (edits the JSON files directly)."
+      title="Add player"
+      description="Add by name — applied live when the server is online, or written to the JSON files when it's offline."
     >
-      <div className="space-y-3">
+      {/* Intent tabs */}
+      <div role="tablist" className="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1">
+        {ADD_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={clsx(
+              'flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              tab === t.key
+                ? 'bg-surface text-text-primary shadow-sm'
+                : 'text-text-secondary hover:text-text-primary',
+            )}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-4">
         <div>
+          <label className="mb-1 block text-xs font-medium text-text-secondary">
+            Player name
+          </label>
           <Input
-            placeholder="Player name"
+            placeholder="e.g. Notch"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
             autoFocus
           />
           {trimmed && !valid && (
             <p className="mt-1 text-xs text-red-400">
               Names are 1–16 characters: letters, digits, underscore.
-              {bedrockPrefix
-                ? ` Bedrock players use the "${bedrockPrefix}" prefix.`
-                : ''}
+              {bedrockPrefix ? ` Bedrock players use the "${bedrockPrefix}" prefix.` : ''}
             </p>
           )}
         </div>
-        <Input
-          placeholder="Ban reason (optional)"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-        />
-        <div className="flex flex-wrap justify-end gap-2 pt-1">
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="outline" disabled={!valid || busy} onClick={() => fire('op')}>
-            <Crown className="h-3.5 w-3.5 text-yellow-400" /> Op
-          </Button>
-          <Button variant="outline" disabled={!valid || busy} onClick={() => fire('whitelist_add')}>
-            <Shield className="h-3.5 w-3.5 text-blue-400" /> Whitelist
-          </Button>
-          <Button variant="destructive" disabled={!valid || busy} onClick={() => fire('ban')}>
-            <Ban className="h-3.5 w-3.5" /> Ban
-          </Button>
-        </div>
+
+        {tab === 'op' &&
+          (serverOnline ? (
+            <p className="rounded-md border border-border bg-surface-2/50 px-3 py-2 text-xs text-text-secondary">
+              The server is online, so the player is opped at its default permission
+              level. Stop the server to assign a specific level.
+            </p>
+          ) : (
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-text-secondary">
+                Permission level
+              </span>
+              <div className="grid grid-cols-4 gap-1.5">
+                {OP_LEVELS.map((l) => (
+                  <button
+                    key={l.level}
+                    type="button"
+                    onClick={() => setLevel(l.level)}
+                    className={clsx(
+                      'rounded-md border py-1.5 text-sm font-medium transition-colors',
+                      level === l.level
+                        ? 'border-accent bg-accent/15 text-text-primary'
+                        : 'border-border text-text-secondary hover:text-text-primary',
+                    )}
+                  >
+                    {l.level}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-text-secondary">
+                {OP_LEVELS.find((l) => l.level === level)?.desc}
+              </p>
+            </div>
+          ))}
+
+        {tab === 'ban' && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-text-secondary">
+              Reason <span className="text-text-secondary/60">(optional)</span>
+            </label>
+            <Input
+              placeholder="Shown to the player when they're refused"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit()
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <Button variant="outline" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button
+          variant={tab === 'ban' ? 'destructive' : 'default'}
+          disabled={!valid || busy}
+          loading={busy}
+          onClick={submit}
+        >
+          {ADD_TABS.find((t) => t.key === tab)?.icon}
+          {ADD_SUBMIT[tab].label}
+        </Button>
       </div>
     </Dialog>
   )
@@ -317,6 +464,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
   const { success, error } = useNotifications()
   const qc = useQueryClient()
 
+  const [view, setView] = useState<PanelView>('roster')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
   const [sort, setSort] = useState<SortKey>('recent')
@@ -420,6 +568,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
       name: string
       uuid?: string
       reason?: string
+      level?: number
     }) => api.players.action(serverId, vars),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['players', serverId] })
@@ -434,8 +583,18 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
     onError: (e: Error) => error('Action failed', e.message),
   })
 
-  const applyAction = (kind: PlayerActionKind, player: Player, reason?: string) => {
-    action.mutate({ action: kind, name: player.name, uuid: player.uuid, reason })
+  const applyAction = (
+    kind: PlayerActionKind,
+    player: Player,
+    opts: { reason?: string; level?: number } = {},
+  ) => {
+    action.mutate({
+      action: kind,
+      name: player.name,
+      uuid: player.uuid,
+      reason: opts.reason,
+      level: opts.level,
+    })
   }
 
   const requestAction = (kind: PlayerActionKind, player: Player) => {
@@ -477,8 +636,18 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
       : []),
   ]
 
+  if (view === 'bans') {
+    return (
+      <div className="flex flex-col h-full">
+        <ViewToggle view={view} onChange={setView} />
+        <BansView serverId={serverId} status={status} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full">
+      <ViewToggle view={view} onChange={setView} />
       {/* Header */}
       <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-surface">
         <div className="min-w-0">
@@ -507,7 +676,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
           </p>
         </div>
         <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
-          <UserPlus className="h-3.5 w-3.5" /> Add by name
+          <UserPlus className="h-3.5 w-3.5" /> Add player
         </Button>
       </div>
 
@@ -635,14 +804,15 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
         )}
       </div>
 
-      {/* Add-by-name */}
+      {/* Add player (whitelist / operator / ban) */}
       <AddPlayerDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
         busy={action.isPending}
         bedrockPrefix={bedrockPrefix}
-        onSubmit={(kind, name, reason) => {
-          applyAction(kind, { name, online: false }, reason || undefined)
+        serverOnline={isOnline}
+        onSubmit={(kind, name, opts) => {
+          applyAction(kind, { name, online: false }, opts)
           setAddOpen(false)
         }}
       />
@@ -652,7 +822,10 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
         open={confirm !== null}
         onClose={() => setConfirm(null)}
         onConfirm={() => {
-          if (confirm) applyAction(confirm.kind, confirm.player, confirmReason.trim() || undefined)
+          if (confirm)
+            applyAction(confirm.kind, confirm.player, {
+              reason: confirmReason.trim() || undefined,
+            })
           setConfirm(null)
         }}
         title={

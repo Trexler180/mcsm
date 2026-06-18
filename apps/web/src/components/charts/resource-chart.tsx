@@ -61,14 +61,37 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
 export function ResourceChart({
   serverId,
   ramMaxMb,
+  status,
 }: {
   serverId: string
   // The server's configured max heap, so we can graph process RAM against the
   // limit it actually competes for rather than the (much larger) host total.
   ramMaxMb?: number
+  // Live server status. When the server isn't running there's no process to
+  // sample, so the agent stops emitting metrics — we must drop the accumulated
+  // history rather than leave the last reading frozen on screen.
+  status?: string
 }) {
   const [samples, setSamples] = useState<Sample[]>([])
   const wsRef = useRef<ServerMetrics | null>(null)
+
+  // A process only exists (and thus only produces metrics) while starting or
+  // online. Suppress stale data only when we positively know the server is in a
+  // non-running state; an unknown/undefined status falls back to showing live
+  // samples so a caller that omits the prop never blanks the graph.
+  const running =
+    status === undefined ||
+    status === 'online' ||
+    status === 'starting' ||
+    status === 'restarting'
+  const runningRef = useRef(running)
+  runningRef.current = running
+
+  // Clear history the moment the server stops, so CPU/RAM fall back to "—"
+  // instead of showing the last sample from when it was alive.
+  useEffect(() => {
+    if (!running) setSamples([])
+  }, [running])
 
   useEffect(() => {
     const ws = new ServerMetrics(serverId)
@@ -76,6 +99,8 @@ export function ResourceChart({
 
     const unsub = ws.on((msg: WsMessage) => {
       if (msg.type === 'metrics') {
+        // Ignore any straggler sample that arrives after the server stopped.
+        if (!runningRef.current) return
         const d = msg.data as {
           cpu_percent?: number
           ram_used_mb?: number
