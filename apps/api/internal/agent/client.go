@@ -358,6 +358,19 @@ func (c *Client) DeleteFile(ctx context.Context, serverID, path string) error {
 	return nil
 }
 
+// RenameFile moves a file within the server directory on the agent (used to
+// toggle the .disabled suffix). from/to are server-relative paths like
+// "/mods/foo.jar".
+func (c *Client) RenameFile(ctx context.Context, serverID, from, to string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/files/rename",
+		map[string]string{"from": from, "to": to})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkError(resp)
+}
+
 // StartConfig builds the /start payload for a server. When no explicit -Xmx is
 // present in jvmArgs, the panel's RAM settings are translated to -Xms/-Xmx.
 func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVersion string, ramMbMin, ramMbMax int) map[string]any {

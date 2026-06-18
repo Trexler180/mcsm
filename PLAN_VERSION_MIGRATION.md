@@ -64,39 +64,57 @@ Notes for later phases:
 - Loader-version bump for fabric/quilt is deferred to Phase 3 (the preview only needs the
   loader *name*, which `LoaderForPlatform` already gives).
 
-## Phase 2 — Migration store + run model
+## Phase 2 — Migration store + run model  ✅ DONE
 
-- [ ] Migration `apps/api/internal/migrations/010_server_version_migrations.sql`:
+- [x] Migration `apps/api/migrations/010_version_migrations.sql`:
       `server_version_migrations(id, server_id, from_mc_version, to_mc_version,
-      backup_id, status, detail JSON, created_at, finished_at)` + index on `server_id`.
-- [ ] `store/migration.go`: `CreateVersionMigration`, `UpdateVersionMigration`,
-      `GetVersionMigration`, `ListVersionMigrations` — mirror `store/autoupdate.go:84+`.
-- [ ] `migrations_test.go`: assert the new migration applies cleanly.
+      backup_id, status, detail JSON, started_at, finished_at)` + `server_id` index.
+      (Path note: migrations live at `apps/api/migrations/`, not `internal/migrations/`.)
+- [x] `store/migration.go`: `CreateVersionMigration`, `UpdateVersionMigration` (also
+      records `backup_id` via COALESCE), `GetVersionMigration`, `ListVersionMigrations` —
+      mirrors `store/autoupdate.go`.
+- [x] Covered by `migrations_test.go` (applies cleanly in the suite).
 
-## Phase 3 — Migration engine (apply, atomic via backup)
+## Phase 3 — Migration engine (apply, atomic via backup)  ✅ DONE
 
-- [ ] New `internal/migrate` package (or extend `autoupdate`) with an engine that owns
-      a per-server in-flight guard (`ErrAlreadyRunning`, like `autoupdate.Engine.active`).
-- [ ] `Trigger(ctx, serverID, targetMC)` → creates the run row, returns it `202`, runs
-      the rest in a **detached** goroutine with a hard timeout (browser close must not
-      abort a mid-restore run). Mirror `autoupdate.Trigger` (`engine.go:125`).
-- [ ] `execute` flow, writing phase/message to the run detail throughout:
+- [x] New `internal/migrate` package with a per-server in-flight guard
+      (`ErrAlreadyRunning`).
+- [x] `Trigger(ctx, serverID, targetMC)` → creates the run row, returns it, runs the
+      rest in a **detached** goroutine with a hard timeout.
+- [x] `execute` flow, writing phase/message to the run detail throughout:
       1. **snapshot** rollback state in memory: `srv.MCVersion`/`LoaderVersion` + every
-         affected `installed_mods` row (version, file_name, enabled) — the restore target.
-      2. record prior power state (`isRunning`); stop the server (`stopServer`).
-      3. **backup**: `CreateBackup` row + `agent.Backup`; keep `backup_id`. Abort the run
-         if the backup fails (no safety net = don't proceed).
-      4. **re-check** compatibility server-side (don't trust the client's preview payload).
-      5. set `srv.MCVersion` (+ loader bump) and persist; `agent.Reinstall` the runtime jar.
-      6. compatible mods (incl. pinned) → `swapFile` to target build, `UpdateMod`.
-      7. incompatible mods → rename to `.disabled` on the agent, `SetModEnabled(false)`.
-      8. start + `startAndWatch`.
-      9. **healthy** → restore prior power state, status `success` (+ partial if some
-         swaps failed). **unhealthy** → `agent.Restore(backup_id)`, rewrite the snapshot
-         rows + `mc_version`, status `failed` with the boot reason.
-- [ ] Audit actions: `server.migrate`, `server.migrate_reverted`, `server.migrate_failed`.
-- [ ] Tests: fake agent + fake mod source covering healthy apply, unhealthy→restore,
-      backup-failure abort, mixed compatible/incompatible/unmanaged sets.
+         `installed_mods` row.
+      2. `buildPlan` **re-checks** compatibility server-side (not the client payload);
+         classifies into update / disable / unchanged / unmanaged / unknown.
+      3. record prior power state; stop the server.
+      4. **backup**: `CreateBackup` row + `agent.Backup`; abort if it fails (best-effort
+         restart if it was running).
+      5. set `srv.MCVersion` + persist; `agent.Reinstall` the runtime jar.
+      6. update mods → `swapFile`; incompatible enabled mods → `RenameFile` `.disabled` +
+         `SetModEnabled(false)`.
+      7. start + `startAndWatch`.
+      8. **healthy** → restore prior power state, status `success` (`partial` if some mod
+         steps failed). **unhealthy / apply error** → `rollback`: `agent.Restore(backup)` +
+         rewrite snapshot rows + `mc_version`/loader, status `reverted` (`failed` only if
+         the restore itself fails).
+- [x] Added `agent.Client.RenameFile` (the engine needs a rename to disable jars).
+- [x] Audit actions: `server.migrate`, `server.migrate_reverted`, `server.migrate_failed`.
+- [x] Tests (`engine_test.go`): healthy migrate (update + disable), unhealthy→restore,
+      backup-failure abort, concurrent-run guard. Fake agent models backup/restore
+      snapshots so the rollback path is exercised end to end.
+
+Decisions made during build:
+- **Loader bump deferred**: the agent's reinstall derives the loader itself (its
+  `install.Reinstall` takes no loader version), so the engine passes the same cfg as the
+  existing `ServerHandlers.Reinstall` and does not set `loader_version`. Revisit only if
+  the agent ever needs it explicitly.
+- **`unmanaged`/`unknown` mods are left fully untouched** during apply (not disabled),
+  matching the preview's "review manually" contract.
+- Pinned mods *are* moved (a version change is deliberate), consistent with the locked
+  decision.
+
+Not yet wired: the engine has no HTTP surface yet — that's **Phase 4** (trigger +
+history/poll endpoints, construct the engine in `main.go`/`NewRouter`).
 
 ## Phase 4 — API surface
 
