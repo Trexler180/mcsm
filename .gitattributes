@@ -1,0 +1,18 @@
+# Normalize line endings: store text files with LF in the repository,
+# regardless of the contributor's OS.
+* text=auto eol=lf
+
+# Windows-only scripts are checked out with CRLF in the working tree.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Treat common binary types as binary (no EOL conversion, no diff).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.zip binary
+*.jar binary
