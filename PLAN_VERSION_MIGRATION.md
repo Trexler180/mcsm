@@ -141,14 +141,31 @@ history/poll endpoints, construct the engine in `main.go`/`NewRouter`).
         operator close without aborting; terminal state invalidates mods/server/backups.
 - [x] `pnpm lint` (0 errors) + `pnpm build` clean.
 
-## Phase 6 — Docs
+## Phase 6 — Docs  ✅ DONE
 
-- [ ] Note the feature + the backup-restore rollback contract in `docs/` and this file's
-      Notes section.
+- [x] Added a "Version Migration" section to `docs/operations.md` covering the preview
+      buckets, the atomic apply flow, and the backup-restore rollback contract.
 
 ---
 
-## Notes / limitations (to fill in as built)
+## Status: COMPLETE
+
+All six phases shipped (commits `559cb06`, `44d0bb6`, `b7921b9`, + docs). The feature is
+usable end to end: preview → confirm → apply → live progress → auto-rollback.
+
+Decisions locked during build (differing from / refining the original plan):
+- **Permission**: single `settingsAccess` gate (same as Reinstall), not a settings+mods+
+  backups combination. Tighten later if desired.
+- **`unknown` mods** (transient lookup failure): surfaced as an informational warning in
+  the confirm step, not a hard block; left untouched on apply and caught by rollback if
+  one turns out incompatible.
+- **Loader bump dropped**: the agent's reinstall derives the loader itself.
+
+Possible follow-ups (not built): refresh the preview against live state after an apply;
+expose migration history in the UI (the endpoint exists); a pre-apply hard gate on
+`unknown` mods; platform switching (Paper↔Purpur, Fabric↔Quilt).
+
+## Notes / limitations
 
 - CurseForge and custom jars can't be auto-checked (no reliable version listing /
   no source project), so they're surfaced as "unmanaged" and left untouched — the
