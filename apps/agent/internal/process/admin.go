@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,7 @@ var validName = regexp.MustCompile(`^[A-Za-z0-9_]{1,16}$`)
 var knownActions = map[string]bool{
 	"op": true, "deop": true,
 	"ban": true, "pardon": true, "kick": true,
+	"ban_ip": true, "pardon_ip": true,
 	"whitelist_add": true, "whitelist_remove": true,
 }
 
@@ -31,8 +33,9 @@ var knownActions = map[string]bool{
 // config file (ops.json / whitelist.json / banned-players.json) is edited
 // directly so the change still takes effect on next boot. kick is the one
 // online-only action.
-func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason string) error {
+func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason, ip string, level int) error {
 	name = strings.TrimSpace(name)
+	ip = strings.TrimSpace(ip)
 	if !knownActions[action] {
 		return fmt.Errorf("unknown action %q", action)
 	}
@@ -42,6 +45,13 @@ func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason string) error
 	if !ok {
 		return fmt.Errorf("server directory not registered")
 	}
+
+	// IP bans operate on an address rather than a player, so they take a separate
+	// path that validates the IP (which also reaches stdin) instead of a name.
+	if action == "ban_ip" || action == "pardon_ip" {
+		return m.applyIPAction(id, dir, action, name, ip, reason)
+	}
+
 	// validName covers Java accounts; validPlayerName also accepts a Bedrock
 	// player's Floodgate-prefixed name while still rejecting anything that could
 	// inject a second console command.
@@ -57,15 +67,96 @@ func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason string) error
 		}
 		return m.SendCommand(id, cmd)
 	default:
-		if err := applyOfflineAction(dir, action, name, uuid, reason); err != nil {
+		if err := applyOfflineAction(dir, action, name, uuid, reason, level); err != nil {
 			return err
 		}
-		// Drop the cached roster so the new status is reflected immediately.
-		m.rosterMu.Lock()
-		delete(m.roster, id)
-		m.rosterMu.Unlock()
+		m.dropRosterCache(id)
 		return nil
 	}
+}
+
+// applyIPAction adds or removes a banned-ips.json entry. Online it runs the
+// server's ban-ip/pardon-ip console commands; offline it edits the file. ban-ip
+// may target a raw address or an online player's name (the server resolves the
+// name to its current IP); pardon-ip and every offline edit require an explicit,
+// validated IP since no live session exists to resolve a name against.
+func (m *Manager) applyIPAction(id, dir, action, name, ip, reason string) error {
+	online := false
+	switch m.Status(id).Status {
+	case StatusOnline, StatusStarting:
+		online = true
+	}
+
+	if action == "pardon_ip" {
+		if !validIP(ip) {
+			return fmt.Errorf("invalid ip address")
+		}
+		if online {
+			return m.SendCommand(id, "pardon-ip "+ip)
+		}
+		ips := without(readBannedIPs(dir), func(e bannedIPEntry) bool { return !strings.EqualFold(e.IP, ip) })
+		if err := writeJSONList(filepath.Join(dir, "banned-ips.json"), ips); err != nil {
+			return err
+		}
+		m.dropRosterCache(id)
+		return nil
+	}
+
+	// ban_ip
+	if online {
+		target := ip
+		if target == "" {
+			// No address given: ban the named online player's current IP.
+			if !validPlayerName(dir, name) {
+				return fmt.Errorf("invalid player name")
+			}
+			target = name
+		} else if !validIP(target) {
+			return fmt.Errorf("invalid ip address")
+		}
+		cmd := "ban-ip " + target
+		if reason != "" {
+			cmd += " " + reason
+		}
+		return m.SendCommand(id, cmd)
+	}
+
+	// Offline we can only write a concrete address — there's no session to map a
+	// name to a last-known IP.
+	if !validIP(ip) {
+		return fmt.Errorf("an ip address is required to ban while the server is offline")
+	}
+	if reason == "" {
+		reason = "Banned by an operator."
+	}
+	// Replace any existing entry so a re-ban can update the reason.
+	ips := without(readBannedIPs(dir), func(e bannedIPEntry) bool { return !strings.EqualFold(e.IP, ip) })
+	ips = append(ips, bannedIPEntry{
+		IP:      ip,
+		Created: time.Now().Format("2006-01-02 15:04:05 -0700"),
+		Source:  "Console",
+		Expires: "forever",
+		Reason:  reason,
+	})
+	if err := writeJSONList(filepath.Join(dir, "banned-ips.json"), ips); err != nil {
+		return err
+	}
+	m.dropRosterCache(id)
+	return nil
+}
+
+// validIP reports whether s is a parseable IPv4/IPv6 literal. Rejecting anything
+// else keeps a crafted "address" from injecting a second console command.
+func validIP(s string) bool {
+	return s != "" && net.ParseIP(s) != nil
+}
+
+// dropRosterCache evicts the memoised offline roster for a server so the next
+// read reflects a config change applied while it was stopped.
+func (m *Manager) dropRosterCache(id string) {
+	m.rosterMu.Lock()
+	delete(m.roster, id)
+	m.rosterMu.Unlock()
 }
 
 // sanitizeReason strips newlines (which would break out of a console command)
@@ -110,7 +201,7 @@ func onlineCommand(action, name, reason string) (string, error) {
 // applyOfflineAction edits the relevant config file directly. Each edit is
 // idempotent (adding an existing entry is a no-op; removing a missing one
 // succeeds), matching how the running server treats these commands.
-func applyOfflineAction(dir, action, name, uuid, reason string) error {
+func applyOfflineAction(dir, action, name, uuid, reason string, level int) error {
 	switch action {
 	case "kick":
 		return fmt.Errorf("server must be online to kick players")
@@ -120,7 +211,7 @@ func applyOfflineAction(dir, action, name, uuid, reason string) error {
 		if hasName(ops, func(e opEntry) string { return e.Name }, name) {
 			return nil
 		}
-		ops = append(ops, opEntry{UUID: ensureUUID(dir, name, uuid), Name: name, Level: 4})
+		ops = append(ops, opEntry{UUID: ensureUUID(dir, name, uuid), Name: name, Level: normalizeOpLevel(level)})
 		return writeJSONList(filepath.Join(dir, "ops.json"), ops)
 
 	case "deop":
@@ -160,6 +251,15 @@ func applyOfflineAction(dir, action, name, uuid, reason string) error {
 		return writeJSONList(filepath.Join(dir, "banned-players.json"), bans)
 	}
 	return fmt.Errorf("unknown action %q", action)
+}
+
+// normalizeOpLevel clamps a requested operator permission level to Minecraft's
+// 1–4 range, defaulting to 4 (full operator) when unset or out of range.
+func normalizeOpLevel(level int) int {
+	if level < 1 || level > 4 {
+		return 4
+	}
+	return level
 }
 
 // without returns the items for which keep returns true (a filtered copy).

@@ -15,3 +15,15 @@ func commonPaths() []string {
 		"/opt/java/17/bin/java",
 	}
 }
+
+// commonGlobs matches the standard distro and tarball JVM layouts so any
+// installed version is found without enumerating exact directory names.
+func commonGlobs() []string {
+	return []string{
+		"/usr/lib/jvm/*/bin/java",
+		"/usr/lib/jvm/*/jre/bin/java",
+		"/opt/java/*/bin/java",
+		"/opt/*/bin/java",
+		"/usr/lib64/jvm/*/bin/java",
+	}
+}

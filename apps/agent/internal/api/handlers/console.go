@@ -52,6 +52,13 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unsub()
 
+	writeStatus := func(s process.Status) error {
+		return wsjson.Write(ctx, conn, map[string]any{
+			"type": "status",
+			"data": map[string]string{"status": string(s)},
+		})
+	}
+
 	// reader: commands from client
 	go func() {
 		for {
@@ -70,16 +77,27 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Tell the client the current status immediately, so a connection (or a
+	// reconnect after a restart spawned a fresh instance) learns the server is
+	// starting/online without waiting for a log line. The agent's console events
+	// are log lines only, so a status change — most importantly the flip to
+	// "online" once the server finishes booting — is surfaced by polling.
+	lastStatus := h.mgr.Status(id).Status
+	if err := writeStatus(lastStatus); err != nil {
+		return
+	}
+	statusTicker := time.NewTicker(time.Second)
+	defer statusTicker.Stop()
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
 	// writer: events to client
 	for {
 		select {
 		case event, ok := <-ch:
 			if !ok {
 				// process exited
-				_ = wsjson.Write(ctx, conn, map[string]any{
-					"type": "status",
-					"data": map[string]string{"status": string(h.mgr.Status(id).Status)},
-				})
+				_ = writeStatus(h.mgr.Status(id).Status)
 				conn.Close(websocket.StatusNormalClosure, "server stopped")
 				return
 			}
@@ -89,9 +107,16 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 			}); err != nil {
 				return
 			}
+		case <-statusTicker.C:
+			if s := h.mgr.Status(id).Status; s != lastStatus {
+				lastStatus = s
+				if err := writeStatus(s); err != nil {
+					return
+				}
+			}
 		case <-ctx.Done():
 			return
-		case <-time.After(30 * time.Second):
+		case <-pingTicker.C:
 			// keepalive ping
 			if err := conn.Ping(ctx); err != nil {
 				return

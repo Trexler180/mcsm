@@ -32,6 +32,17 @@ type bannedEntry struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// bannedIPEntry mirrors a banned-ips.json record. Unlike a player ban it is
+// keyed by IP address and carries no UUID/name, so it lives outside the player
+// roster.
+type bannedIPEntry struct {
+	IP      string `json:"ip"`
+	Created string `json:"created,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Expires string `json:"expires,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // readJSONList parses a JSON array file into a slice. A missing or corrupt file
 // yields nil (never an error) so callers can treat "no file" as "empty" — the
 // same tolerance OfflinePlayers/usercache already rely on.
@@ -53,6 +64,9 @@ func readWhitelist(dir string) []whitelistEntry {
 }
 func readBannedPlayers(dir string) []bannedEntry {
 	return readJSONList[bannedEntry](filepath.Join(dir, "banned-players.json"))
+}
+func readBannedIPs(dir string) []bannedIPEntry {
+	return readJSONList[bannedIPEntry](filepath.Join(dir, "banned-ips.json"))
 }
 
 // onlineMode reports the server's online-mode setting (default true when the

@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+// findOp returns the ops.json entry with the given name (case-insensitive), or
+// nil when absent.
+func findOp(ops []opEntry, name string) *opEntry {
+	for i := range ops {
+		if strings.EqualFold(ops[i].Name, name) {
+			return &ops[i]
+		}
+	}
+	return nil
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -91,16 +102,24 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	wlPath := filepath.Join(dir, "whitelist.json")
 	banPath := filepath.Join(dir, "banned-players.json")
 
-	// op — and idempotent re-op.
-	if err := applyOfflineAction(dir, "op", "Steve", "uuid-steve", ""); err != nil {
+	// op — level 0 defaults to full operator (4) — and idempotent re-op.
+	if err := applyOfflineAction(dir, "op", "Steve", "uuid-steve", "", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyOfflineAction(dir, "op", "Steve", "uuid-steve", ""); err != nil {
+	if err := applyOfflineAction(dir, "op", "Steve", "uuid-steve", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	ops := readOps(dir)
 	if len(ops) != 1 || ops[0].Name != "Steve" || ops[0].Level != 4 || ops[0].UUID != "uuid-steve" {
 		t.Fatalf("ops after double op = %#v", ops)
+	}
+
+	// op with an explicit level writes that level into ops.json.
+	if err := applyOfflineAction(dir, "op", "Alex", "uuid-alex", "", 2); err != nil {
+		t.Fatal(err)
+	}
+	if alex := findOp(readOps(dir), "Alex"); alex == nil || alex.Level != 2 {
+		t.Fatalf("Alex op entry = %#v, want level 2", alex)
 	}
 	// The file must be valid, pretty-printed, newline-terminated JSON.
 	raw, err := os.ReadFile(opsPath)
@@ -115,13 +134,13 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	}
 
 	// whitelist add/remove.
-	if err := applyOfflineAction(dir, "whitelist_add", "Steve", "uuid-steve", ""); err != nil {
+	if err := applyOfflineAction(dir, "whitelist_add", "Steve", "uuid-steve", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if wl := readWhitelist(dir); len(wl) != 1 || wl[0].Name != "Steve" {
 		t.Fatalf("whitelist = %#v", wl)
 	}
-	if err := applyOfflineAction(dir, "whitelist_remove", "steve", "", ""); err != nil {
+	if err := applyOfflineAction(dir, "whitelist_remove", "steve", "", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if wl := readWhitelist(dir); len(wl) != 0 {
@@ -129,10 +148,10 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	}
 
 	// ban with a reason, then re-ban replaces the reason (no duplicate).
-	if err := applyOfflineAction(dir, "ban", "Steve", "uuid-steve", "spam"); err != nil {
+	if err := applyOfflineAction(dir, "ban", "Steve", "uuid-steve", "spam", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyOfflineAction(dir, "ban", "Steve", "uuid-steve", "spam again"); err != nil {
+	if err := applyOfflineAction(dir, "ban", "Steve", "uuid-steve", "spam again", 0); err != nil {
 		t.Fatal(err)
 	}
 	bans := readBannedPlayers(dir)
@@ -141,15 +160,18 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	}
 
 	// pardon clears the ban.
-	if err := applyOfflineAction(dir, "pardon", "STEVE", "", ""); err != nil {
+	if err := applyOfflineAction(dir, "pardon", "STEVE", "", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if bans := readBannedPlayers(dir); len(bans) != 0 {
 		t.Fatalf("bans after pardon = %#v", bans)
 	}
 
-	// deop clears the op entry.
-	if err := applyOfflineAction(dir, "deop", "steve", "", ""); err != nil {
+	// deop clears the op entries.
+	if err := applyOfflineAction(dir, "deop", "steve", "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOfflineAction(dir, "deop", "alex", "", "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if ops := readOps(dir); len(ops) != 0 {
@@ -157,7 +179,7 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	}
 
 	// kick is online-only.
-	if err := applyOfflineAction(dir, "kick", "Steve", "", ""); err == nil {
+	if err := applyOfflineAction(dir, "kick", "Steve", "", "", 0); err == nil {
 		t.Fatal("kick offline should return an error")
 	}
 

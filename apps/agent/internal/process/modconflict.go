@@ -30,11 +30,15 @@ type ConflictSuggestion struct {
 // named mod(s)", so they share the same downstream UI and disable flow.
 type ModConflict struct {
 	Detected    bool                 `json:"detected"`
-	Kind        string               `json:"kind"` // "incompatible" | "crash"
+	Kind        string               `json:"kind"` // "incompatible" | "crash" | "java_version"
 	Summary     string               `json:"summary"`
 	Suggestions []ConflictSuggestion `json:"suggestions"`
-	Raw         []string             `json:"raw"`
-	DetectedAt  int64                `json:"detected_at"`
+	// RequiredJava is the Java feature release the server needs, set only for
+	// kind "java_version" so the panel can match installed runtimes / suggest an
+	// install. 0 when unknown or not applicable.
+	RequiredJava int      `json:"required_java,omitempty"`
+	Raw          []string `json:"raw"`
+	DetectedAt   int64    `json:"detected_at"`
 }
 
 const conflictRawCap = 200

@@ -120,6 +120,7 @@ type Instance struct {
 	conflictMu    sync.Mutex
 	detector      conflictDetector
 	crashDetector mixinCrashDetector
+	javaDetector  javaVersionDetector
 	conflict      *ModConflict
 
 	done chan struct{}
@@ -148,6 +149,13 @@ func (inst *Instance) start() error {
 
 	args := make([]string, 0, len(cfg.JVMArgs)+8+len(cfg.StartArgs))
 	args = append(args, cfg.JVMArgs...)
+
+	// The manager owns the server lifecycle headlessly, so no launcher should
+	// ever open a window. Force AWT headless mode: this both suppresses Fabric's
+	// Swing "A mod crashed" error GUI (it falls back to console logging when
+	// GraphicsEnvironment.isHeadless()) and the vanilla server's Swing GUI.
+	// Appended after cfg.JVMArgs so it wins over any user-supplied value.
+	args = append(args, "-Djava.awt.headless=true")
 
 	// If install produced a runtime hint (Forge/NeoForge use this for their
 	// @args.txt classpath dance), use those args instead of `-jar server.jar`.
@@ -230,6 +238,9 @@ func (inst *Instance) pipeStream(r io.Reader, stream string) {
 		mc := inst.detector.feed(line)
 		if mc == nil {
 			mc = inst.crashDetector.feed(line)
+		}
+		if mc == nil {
+			mc = inst.javaDetector.feed(line)
 		}
 		if mc != nil && inst.conflict == nil {
 			inst.conflict = mc
@@ -534,5 +545,6 @@ func (inst *Instance) ClearConflict() {
 	inst.conflict = nil
 	inst.detector = conflictDetector{}
 	inst.crashDetector = mixinCrashDetector{}
+	inst.javaDetector = javaVersionDetector{}
 	inst.conflictMu.Unlock()
 }
