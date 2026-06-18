@@ -1,0 +1,66 @@
+<!-- @dsCard group="Components" -->
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Card — ServerManager Design System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Mirrors apps/web/tailwind.config.js so previews match the live app.
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              background: '#0f0f0f',
+              surface: '#1a1a1a',
+              'surface-2': '#242424',
+              border: '#2a2a2a',
+              'border-hover': '#3a3a3a',
+              accent: { DEFAULT: '#22c55e', hover: '#16a34a', muted: '#14532d' },
+              muted: '#6b7280',
+              'text-primary': '#f9fafb',
+              'text-secondary': '#9ca3af',
+            },
+          },
+        },
+      }
+    </script>
+  </head>
+  <body class="bg-background text-text-primary font-sans antialiased p-10">
+    <div class="max-w-3xl mx-auto space-y-10">
+      <header>
+        <h1 class="text-xl font-semibold">Card</h1>
+        <p class="text-sm text-text-secondary mt-1">
+          Source: <code class="text-accent">apps/web/src/components/ui/card.tsx</code>
+        </p>
+      </header>
+
+      <!-- Full composition: Card + Header/Title + Content + Footer -->
+      <section class="space-y-3">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Composition</h2>
+        <div class="rounded-lg border border-border bg-surface max-w-md">
+          <div class="flex flex-col space-y-1.5 p-5 border-b border-border">
+            <h3 class="text-base font-semibold text-text-primary">survival-01</h3>
+            <p class="text-sm text-text-secondary">Minecraft 1.21.4 · Fabric</p>
+          </div>
+          <div class="p-5 text-sm text-text-secondary">
+            Card body content. Holds whatever the screen needs — stats, forms, lists.
+          </div>
+          <div class="flex items-center p-5 pt-0 gap-3">
+            <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-9 px-4 text-sm rounded-md">Start</button>
+            <button class="inline-flex items-center justify-center gap-2 transition-colors border border-border text-text-primary hover:bg-surface-2 h-9 px-4 text-sm rounded-md">Details</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bare card -->
+      <section class="space-y-3">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Bare (content only)</h2>
+        <div class="rounded-lg border border-border bg-surface max-w-md">
+          <div class="p-5 text-sm text-text-secondary">A card with just padded content — no header or footer.</div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

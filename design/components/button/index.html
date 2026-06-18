@@ -1,0 +1,77 @@
+<!-- @dsCard group="Components" -->
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Button — ServerManager Design System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Mirrors apps/web/tailwind.config.js so previews match the live app.
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              background: '#0f0f0f',
+              surface: '#1a1a1a',
+              'surface-2': '#242424',
+              border: '#2a2a2a',
+              'border-hover': '#3a3a3a',
+              accent: { DEFAULT: '#22c55e', hover: '#16a34a', muted: '#14532d' },
+              muted: '#6b7280',
+              'text-primary': '#f9fafb',
+              'text-secondary': '#9ca3af',
+            },
+          },
+        },
+      }
+    </script>
+  </head>
+  <body class="bg-background text-text-primary font-sans antialiased p-10">
+    <div class="max-w-3xl mx-auto space-y-10">
+      <header>
+        <h1 class="text-xl font-semibold">Button</h1>
+        <p class="text-sm text-text-secondary mt-1">
+          Source: <code class="text-accent">apps/web/src/components/ui/button.tsx</code>
+        </p>
+      </header>
+
+      <!-- Variants -->
+      <section class="space-y-3">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Variants</h2>
+        <div class="flex flex-wrap items-center gap-3">
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-9 px-4 text-sm rounded-md">Default</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-red-600 text-white hover:bg-red-700 h-9 px-4 text-sm rounded-md">Destructive</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors border border-border text-text-primary hover:bg-surface-2 h-9 px-4 text-sm rounded-md">Outline</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors text-text-secondary hover:text-text-primary hover:bg-surface-2 h-9 px-4 text-sm rounded-md">Ghost</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors text-accent underline-offset-4 hover:underline p-0 h-auto text-sm">Link</button>
+        </div>
+      </section>
+
+      <!-- Sizes -->
+      <section class="space-y-3">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Sizes</h2>
+        <div class="flex flex-wrap items-center gap-3">
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-7 px-3 text-xs rounded">Small</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-9 px-4 text-sm rounded-md">Medium</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-11 px-6 text-base rounded-md">Large</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-9 w-9 rounded-md" aria-label="Icon">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- States -->
+      <section class="space-y-3">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">States</h2>
+        <div class="flex flex-wrap items-center gap-3">
+          <button disabled class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black font-medium h-9 px-4 text-sm rounded-md opacity-50 cursor-not-allowed">Disabled</button>
+          <button class="inline-flex items-center justify-center gap-2 transition-colors bg-accent text-black hover:bg-accent-hover font-medium h-9 px-4 text-sm rounded-md">
+            <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            Loading
+          </button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

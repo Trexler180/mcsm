@@ -1,0 +1,51 @@
+<!-- @dsCard group="Components" -->
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Label — ServerManager Design System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Mirrors apps/web/tailwind.config.js so previews match the live app.
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              background: '#0f0f0f',
+              surface: '#1a1a1a',
+              'surface-2': '#242424',
+              border: '#2a2a2a',
+              'border-hover': '#3a3a3a',
+              accent: { DEFAULT: '#22c55e', hover: '#16a34a', muted: '#14532d' },
+              muted: '#6b7280',
+              'text-primary': '#f9fafb',
+              'text-secondary': '#9ca3af',
+            },
+          },
+        },
+      }
+    </script>
+  </head>
+  <body class="bg-background text-text-primary font-sans antialiased p-10">
+    <div class="max-w-md mx-auto space-y-10">
+      <header>
+        <h1 class="text-xl font-semibold">Label</h1>
+        <p class="text-sm text-text-secondary mt-1">
+          Source: <code class="text-accent">apps/web/src/components/ui/label.tsx</code>
+        </p>
+      </header>
+
+      <section class="space-y-4">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Default</h2>
+        <label class="text-sm font-medium text-text-secondary leading-none">Server name</label>
+      </section>
+
+      <section class="space-y-1.5">
+        <h2 class="text-xs uppercase tracking-wide text-text-secondary">Paired with input</h2>
+        <label class="text-sm font-medium text-text-secondary leading-none" for="name">Display name</label>
+        <input id="name" placeholder="survival-01" class="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-colors mt-1.5" />
+      </section>
+    </div>
+  </body>
+</html>

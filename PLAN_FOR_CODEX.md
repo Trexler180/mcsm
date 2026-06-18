@@ -76,7 +76,6 @@ _All clear — see `## 8 Changelog`._
 7. **Refresh-token rotation.** `docs/security.md` claims refresh tokens rotate on use. Confirm `handlers/auth.go` actually rotates + invalidates the old token (no replay window). Add a regression test if missing.
 8. **Backup targets ≠ local.** Schema lists `type` + `config` (S3/B2/Restic implied); only local ZIP exists. Either narrow the schema OR add S3 (AWS SDK v2, stream upload from agent).
 9. **`display_name` field, no PATCH endpoint.** Add `PUT /api/v1/auth/me` (self) + `PUT /api/v1/users/{id}` (admin).
-10. **Server permissions UI.** `server_permissions.permissions` JSON shape still undefined and `requireServerAccess` is boolean. Docs defer this deliberately — only build if granular collab moves in scope. Define enum (`view`, `console`, `files`, `start_stop`, `mods`, `backups`, `tasks`, `admin`) when you do.
 
 ### P2 — quality / DX
 11. **SecurityHeaders middleware is minimal** (`internal/api/middleware/security.go`): nosniff + frame-deny + referrer-policy only. Add CSP at whatever reverse proxy serves the web bundle, and HSTS when TLS-terminated.
@@ -126,6 +125,7 @@ _All clear — see `## 8 Changelog`._
 
 Newest first. Move items here from `## 4` as they land.
 
+- **Per-server collaborators + permissions** — was §4 P1 #10. `server_permissions` now backs direct server members with fixed permissions (`view`, `power`, `console`, `players`, `files`, `mods`, `backups`, `tasks`, `settings`, `admin`); server owners and global admins keep implicit full access. `/servers/{id}` routes now use explicit permission middleware, member management endpoints live under `/servers/{id}/members`, WebSocket proxies re-check permissions on live console/metrics sessions, and the web server detail page has an Access tab plus permission-aware navigation/actions.
 - **Real ESLint** (`chore(web): real eslint flat config + lint script`) — was §4 P0 #3. Flat `eslint.config.js` (eslint 9 + typescript-eslint 8 + react-hooks 7); `lint` script is now `eslint .` (typecheck moved to a `typecheck` script, still run by `build`). Genuine rules as errors; `no-explicit-any`/unused-vars demoted to warnings for the existing tree. `pnpm lint` is green (0 errors, 29 warnings) so CI stays green.
 - **Split `servers/$id.tsx`** (`refactor(web): split server detail …`) — was §4 P0 #1. The 3301-line route file is now 363 lines; per-tab components live in `components/servers/` (`shared`, `backups-tab`, `dashboard-tab`, `tasks-tab`, `logs-tab`, `worlds-tab`, `options-properties`). Route file is now just the page shell + sidebar + tab switch. Behaviour unchanged (exact code moves); `tsc -b` + `vite build` green.
 - **Web code-splitting** (`feat(web): … route code-splitting`) — was §4 P0 #2. `vite.config.ts` `manualChunks` splits react/markdown/terminal/editor/charts; initial JS chunk dropped from ~1.4 MB (412 KB gzip) to ~561 KB (160 KB gzip).

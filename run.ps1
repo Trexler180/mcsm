@@ -370,6 +370,37 @@ function Get-RestartDelaySeconds {
     return [int][Math]::Min(30, [Math]::Pow(2, $exponent))
 }
 
+# Reinstalling web deps on every launch is slow on an exFAT drive, so only run
+# pnpm install when package.json / the lockfile / the pnpm config actually
+# changed since the last successful install. The stamp lives inside node_modules
+# (so it's cleared on a clean install) and is content-hashed, so it stays valid
+# when the drive moves between machines.
+function Get-WebInstallStamp {
+    param([string]$Path)
+
+    $parts = foreach ($file in @("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml")) {
+        $manifest = Join-Path $Path $file
+        if (Test-Path $manifest) { (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash } else { "missing" }
+    }
+    return [string]::Join(":", $parts)
+}
+
+function Test-WebInstallNeeded {
+    param([string]$Path)
+
+    if (-not (Test-Path (Join-Path $Path "node_modules"))) { return $true }
+    $stampFile = Join-Path $Path "node_modules\.mcsm-install-stamp"
+    if (-not (Test-Path $stampFile)) { return $true }
+    return ((Get-Content -Raw -LiteralPath $stampFile -ErrorAction SilentlyContinue) -ne (Get-WebInstallStamp -Path $Path))
+}
+
+function Save-WebInstallStamp {
+    param([string]$Path)
+
+    $stampFile = Join-Path $Path "node_modules\.mcsm-install-stamp"
+    Set-Content -LiteralPath $stampFile -Value (Get-WebInstallStamp -Path $Path) -NoNewline
+}
+
 # Dependency manifests only — vite hot-reloads web sources itself, but new or
 # changed packages need a pnpm install plus a dev-server restart.
 function Get-WebDepsFingerprint {
@@ -422,13 +453,19 @@ $ResolvedPublicHost = Resolve-PublicHost -FallbackHost $BindHost
 $ApiConnectHost = Resolve-LocalConnectHost -HostName $BindHost
 
 if (-not $SkipInstall) {
-    Write-Host "[setup] Installing web dependencies..."
-    Push-Location $WebDir
-    try {
-        pnpm install
+    if (Test-WebInstallNeeded -Path $WebDir) {
+        Write-Host "[setup] Installing web dependencies..."
+        Push-Location $WebDir
+        try {
+            pnpm install
+            Save-WebInstallStamp -Path $WebDir
+        }
+        finally {
+            Pop-Location
+        }
     }
-    finally {
-        Pop-Location
+    else {
+        Write-Host "[setup] Web dependencies up to date; skipping install."
     }
 }
 
@@ -584,6 +621,7 @@ try {
                     Push-Location $WebDir
                     try {
                         pnpm install
+                        Save-WebInstallStamp -Path $WebDir
                     }
                     catch {
                         Write-Host "[web] pnpm install failed: $($_.Exception.Message)"
