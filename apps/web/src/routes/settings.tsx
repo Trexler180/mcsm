@@ -42,11 +42,11 @@ function IntegrationCard({ meta }: { meta: IntegrationMeta }) {
           <KeyRound className="h-4 w-4 text-accent" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold text-text-primary">{meta.label}</h3>
             {meta.configured ? (
               <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-green-500/30 bg-green-500/15 text-green-400">
-                <Check className="h-3 w-3" />
+                <Check className="h-3 w-3 flex-shrink-0" />
                 Configured ••••{meta.hint}
               </span>
             ) : (
@@ -69,7 +69,9 @@ function IntegrationCard({ meta }: { meta: IntegrationMeta }) {
         </div>
       </div>
 
-      <div className="flex items-end gap-2">
+      {/* Stack the field above its buttons on mobile so the key input keeps a
+          usable width; align them on one row from sm up. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
         <div className="flex-1 space-y-1.5">
           <Label>{meta.configured ? 'Replace key' : 'API key'}</Label>
           <Input
@@ -82,19 +84,26 @@ function IntegrationCard({ meta }: { meta: IntegrationMeta }) {
             }}
           />
         </div>
-        <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!value.trim()}>
-          Save
-        </Button>
-        {meta.configured && (
+        <div className="flex gap-2">
           <Button
-            variant="outline"
-            onClick={() => remove.mutate()}
-            loading={remove.isPending}
-            title="Remove key"
+            className="flex-1 sm:flex-none"
+            onClick={() => save.mutate()}
+            loading={save.isPending}
+            disabled={!value.trim()}
           >
-            <Trash2 className="h-4 w-4 text-red-400" />
+            Save
           </Button>
-        )}
+          {meta.configured && (
+            <Button
+              variant="outline"
+              onClick={() => remove.mutate()}
+              loading={remove.isPending}
+              title="Remove key"
+            >
+              <Trash2 className="h-4 w-4 text-red-400" />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )

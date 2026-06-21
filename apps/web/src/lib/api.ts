@@ -142,6 +142,54 @@ async function fetchWithAuth(
   return res;
 }
 
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+}
+
+// Upload via XHR rather than fetch, because fetch can't report request-body
+// upload progress. Mirrors fetchWithAuth's bearer auth and one-shot refresh on
+// 401, and resolves to a Response so callers keep their existing handling.
+function xhrUpload(
+  url: string,
+  formData: FormData,
+  onProgress?: (p: UploadProgress) => void,
+  retry = true,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    const token = getToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress({ loaded: e.loaded, total: e.total });
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401 && retry) {
+        refreshAccessToken().then((refreshed) => {
+          if (refreshed) {
+            xhrUpload(url, formData, onProgress, false).then(resolve, reject);
+          } else {
+            redirectToLogin();
+            resolve(new Response(xhr.responseText, { status: 401 }));
+          }
+        });
+        return;
+      }
+      resolve(
+        new Response(xhr.responseText, {
+          status: xhr.status,
+          statusText: xhr.statusText,
+        }),
+      );
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(formData);
+  });
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -409,15 +457,18 @@ export const api = {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
       });
     },
-    upload: (serverId: string, dirPath: string, file: File) => {
+    upload: (
+      serverId: string,
+      dirPath: string,
+      file: File,
+      onProgress?: (p: UploadProgress) => void,
+    ) => {
       const fd = new FormData();
       fd.append("files", file);
-      return fetchWithAuth(
+      return xhrUpload(
         `${BASE}/servers/${serverId}/files/upload?path=${encodeURIComponent(dirPath)}`,
-        {
-          method: "POST",
-          body: fd,
-        },
+        fd,
+        onProgress,
       ).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
       });
@@ -514,13 +565,18 @@ export const api = {
         project_id: projectId,
         version_id: versionId,
       }),
-    uploadCustom: (serverId: string, files: File[]) => {
+    uploadCustom: (
+      serverId: string,
+      files: File[],
+      onProgress?: (p: UploadProgress) => void,
+    ) => {
       const fd = new FormData();
       files.forEach((file) => fd.append("files", file));
-      return fetchWithAuth(`${BASE}/servers/${serverId}/mods/upload`, {
-        method: "POST",
-        body: fd,
-      }).then(async (r) => {
+      return xhrUpload(
+        `${BASE}/servers/${serverId}/mods/upload`,
+        fd,
+        onProgress,
+      ).then(async (r) => {
         if (!r.ok) {
           let msg = `HTTP ${r.status}`;
           try {

@@ -236,6 +236,8 @@ export interface ModSearchParams {
 export interface ModUpdate {
   mod_id: string;
   name: string;
+  source: string;
+  enabled: boolean;
   current_version: string;
   latest_version: string;
   latest_version_id: string;

@@ -149,7 +149,13 @@ function PlayerBanRow({
         <p className="text-sm font-medium text-text-primary truncate">{ban.name}</p>
         <BanMeta reason={ban.reason} created={ban.created} expires={ban.expires} />
       </div>
-      <Button size="sm" variant="outline" disabled={busy} onClick={onPardon}>
+      <Button
+        size="sm"
+        variant="outline"
+        className="flex-shrink-0"
+        disabled={busy}
+        onClick={onPardon}
+      >
         <CircleCheck className="h-3.5 w-3.5" /> Pardon
       </Button>
     </div>
@@ -166,7 +172,13 @@ function IPBanRow({ ban, busy, onPardon }: { ban: BannedIP; busy: boolean; onPar
         <p className="text-sm font-medium text-text-primary truncate font-mono">{ban.ip}</p>
         <BanMeta reason={ban.reason} created={ban.created} expires={ban.expires} />
       </div>
-      <Button size="sm" variant="outline" disabled={busy} onClick={onPardon}>
+      <Button
+        size="sm"
+        variant="outline"
+        className="flex-shrink-0"
+        disabled={busy}
+        onClick={onPardon}
+      >
         <CircleCheck className="h-3.5 w-3.5" /> Pardon
       </Button>
     </div>
@@ -263,7 +275,12 @@ export function BansView({ serverId, status }: BansViewProps) {
               : `Server is ${status} · edits banned-players.json / banned-ips.json`}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-shrink-0"
+          onClick={() => setAddOpen(true)}
+        >
           <Plus className="h-3.5 w-3.5" /> Ban IP
         </Button>
       </div>

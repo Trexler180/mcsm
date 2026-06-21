@@ -95,8 +95,10 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Desktop: static sidebar, part of the flex layout. */}
-      <aside className="hidden md:flex flex-col w-56 border-r border-border bg-surface h-dvh sticky top-0">
+      {/* Desktop: static sidebar, part of the flex layout. Narrower in the tight
+          md→lg band so it doesn't starve the content (the server view stacks a
+          second sidebar next to this one); full width again from lg up. */}
+      <aside className="hidden md:flex flex-col md:w-44 lg:w-56 border-r border-border bg-surface h-dvh sticky top-0">
         <SidebarContent />
       </aside>
 

@@ -123,8 +123,8 @@ export function ModConflictDialog({
               onChange={() => toggle(s.mod_id)}
             />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-text-primary">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="break-words text-sm font-medium text-text-primary">
                   {s.mod_name}
                 </span>
                 <Badge variant="muted" className="font-mono">
@@ -168,7 +168,7 @@ export function ModConflictDialog({
         </div>
       )}
 
-      <div className="mt-5 flex justify-end gap-3">
+      <div className="mt-5 flex flex-wrap justify-end gap-3">
         <Button variant="outline" onClick={onClose} disabled={apply.isPending}>
           {isJava ? "Close" : "Dismiss"}
         </Button>

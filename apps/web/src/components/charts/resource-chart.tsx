@@ -136,9 +136,11 @@ export function ResourceChart({
   })
 
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <div className="bg-surface rounded-lg border border-border p-3">
-        <div className="flex items-center justify-between mb-1.5">
+    // Stack the two cards on very narrow viewports so the RAM readout
+    // ("1024 / 4096 MB") never gets squeezed; side-by-side from sm up.
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="min-w-0 bg-surface rounded-lg border border-border p-3">
+        <div className="flex items-center justify-between gap-2 mb-1.5">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">CPU</span>
           <span className="text-sm font-mono font-medium text-text-primary">
             {latest ? `${latest.cpu.toFixed(1)}%` : '—'}
@@ -146,13 +148,13 @@ export function ResourceChart({
         </div>
         <Sparkline data={cpuData} color="#22c55e" />
       </div>
-      <div className="bg-surface rounded-lg border border-border p-3">
-        <div className="flex items-center justify-between mb-1.5">
+      <div className="min-w-0 bg-surface rounded-lg border border-border p-3">
+        <div className="flex items-center justify-between gap-2 mb-1.5">
           <span className="text-xs font-medium text-text-secondary uppercase tracking-wide">RAM</span>
           {/* Single line so the box keeps a constant height before/after the
               first metrics sample arrives. Host total stays in the tooltip. */}
           <span
-            className="text-sm font-mono font-medium text-text-primary"
+            className="truncate text-sm font-mono font-medium text-text-primary"
             title={latest ? `Host total: ${latest.ram_total_mb} MB` : undefined}
           >
             {latest

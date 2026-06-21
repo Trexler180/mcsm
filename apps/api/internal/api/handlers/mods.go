@@ -838,6 +838,8 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 	type updateInfo struct {
 		ModID           string `json:"mod_id"`
 		Name            string `json:"name"`
+		Source          string `json:"source"`
+		Enabled         bool   `json:"enabled"`
 		CurrentVersion  string `json:"current_version"`
 		LatestVersion   string `json:"latest_version"`
 		LatestVersionID string `json:"latest_version_id"`
@@ -860,6 +862,8 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 			out = append(out, updateInfo{
 				ModID:           m.ID,
 				Name:            m.Name,
+				Source:          m.Source,
+				Enabled:         m.Enabled,
 				CurrentVersion:  m.Version,
 				LatestVersion:   target.VersionNumber,
 				LatestVersionID: target.ID,

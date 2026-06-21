@@ -301,21 +301,21 @@ export function DatViewer({ serverId, path }: DatViewerProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-border bg-surface">
+      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-surface">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-sm text-text-secondary font-mono truncate">
+          <span className="min-w-0 truncate text-sm text-text-secondary font-mono">
             {path}
           </span>
           {gzippedRef.current && (
-            <span className="text-[10px] uppercase tracking-wide text-text-secondary/60 border border-border rounded px-1.5 py-0.5">
+            <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-text-secondary/60 border border-border rounded px-1.5 py-0.5">
               gzip
             </span>
           )}
-          <span className="text-[10px] uppercase tracking-wide text-text-secondary/60 border border-border rounded px-1.5 py-0.5">
+          <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-text-secondary/60 border border-border rounded px-1.5 py-0.5">
             NBT
           </span>
         </div>
-        <Button size="sm" onClick={save} loading={saving} disabled={!root || !dirty}>
+        <Button size="sm" onClick={save} loading={saving} disabled={!root || !dirty} className="flex-shrink-0">
           <Save className="h-3.5 w-3.5" />
           Save
         </Button>

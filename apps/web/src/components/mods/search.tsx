@@ -526,8 +526,11 @@ function VersionSwitchDialog({
         )
       }
     >
-      <div className="grid h-[72vh] min-h-[30rem] grid-cols-[21rem_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-r border-border bg-surface-2/50 p-5">
+      {/* Stack the version list above the changelog on phones; the fixed 21rem
+          sidebar would otherwise overflow the dialog. The list gets a capped
+          share of the height so the changelog stays reachable below it. */}
+      <div className="grid h-[72vh] min-h-[30rem] grid-rows-[14rem_minmax(0,1fr)] md:grid-rows-none md:grid-cols-[21rem_minmax(0,1fr)]">
+        <aside className="flex min-h-0 flex-col border-b border-border bg-surface-2/50 p-5 md:border-b-0 md:border-r">
           <div className="relative mb-3">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
             <Input
@@ -682,8 +685,10 @@ function VersionSwitchDialog({
             </div>
           )}
 
-          <div className="flex items-center gap-3 border-t border-border bg-surface-2/40 px-6 py-4">
-            <div className="flex min-w-0 flex-1 items-center gap-2 text-sm text-amber-400">
+          {/* Wrap on phones so the long action label ("Downgrade to …") drops
+              below the warning rather than overflowing the footer. */}
+          <div className="flex flex-wrap items-center gap-3 border-t border-border bg-surface-2/40 px-4 py-4 sm:px-6">
+            <div className="flex min-w-0 flex-1 basis-full items-center gap-2 text-sm text-amber-400 sm:basis-0">
               <AlertTriangle className="h-5 w-5 flex-shrink-0" />
               <span className="truncate">
                 Updating can break your instance. Review version changelogs and back up first.
@@ -703,8 +708,8 @@ function VersionSwitchDialog({
                   : "Switch to an incompatible version"
               }
             >
-              <Download className="h-4 w-4" />
-              {actionLabel}
+              {!switchMutation.isPending && <Download className="h-4 w-4" />}
+              {switchMutation.isPending ? "Downloading…" : actionLabel}
             </Button>
           </div>
         </section>
@@ -771,7 +776,7 @@ function InstalledModRow({
 
   return (
     <div
-      className={`grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] md:items-center md:gap-4 px-4 py-3 md:py-2.5 hover:bg-surface-2/40 border-b border-border/50 ${
+      className={`grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] xl:items-center xl:gap-4 px-4 py-3 xl:py-2.5 hover:bg-surface-2/40 border-b border-border/50 ${
         mod.enabled ? "" : "opacity-60"
       }`}
     >
@@ -876,9 +881,10 @@ function InstalledModRow({
         )}
       </div>
 
-      {/* Actions. On phones these sit on their own row with a divider and right
-          alignment so the tap targets aren't squeezed against the title. */}
-      <div className="flex items-center gap-1 flex-shrink-0 justify-end border-t border-border/40 pt-2 md:border-t-0 md:pt-0">
+      {/* Actions. While stacked these sit on their own row with a divider and
+          right alignment so the tap targets aren't squeezed against the title.
+          They only rejoin the row once the 3-column grid engages at xl. */}
+      <div className="flex items-center gap-1 flex-shrink-0 justify-end border-t border-border/40 pt-2 xl:border-t-0 xl:pt-0">
         {onSwitchVersion && (
           <Button
             size="sm"
@@ -1119,7 +1125,7 @@ function SearchHitCard({
               {formatDownloads(hit.downloads)}
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             {!isInstalled && !isCompatible && (
               <span
                 className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30"
@@ -1553,6 +1559,7 @@ export function ModSearch({
     onError: (e: Error) => error("Uninstall failed", e.message),
   });
 
+  const [customUploadPct, setCustomUploadPct] = useState<number | null>(null);
   const uploadCustomMutation = useMutation({
     mutationFn: (files: File[]) => {
       if (files.length === 0) {
@@ -1562,7 +1569,11 @@ export function ModSearch({
       if (invalid) {
         throw new Error(`${invalid.name} is not a jar file.`);
       }
-      return api.mods.uploadCustom(serverId, files);
+      return api.mods.uploadCustom(serverId, files, (p) =>
+        setCustomUploadPct(
+          p.total > 0 ? Math.min(100, Math.round((p.loaded / p.total) * 100)) : 0,
+        ),
+      );
     },
     onSuccess: (mods) => {
       qc.invalidateQueries({ queryKey: ["mods", serverId] });
@@ -1574,6 +1585,7 @@ export function ModSearch({
       );
     },
     onError: (e: Error) => error("Upload failed", e.message),
+    onSettled: () => setCustomUploadPct(null),
   });
 
   // Install from the detail dialog. versionId "" → latest compatible; an explicit
@@ -1770,8 +1782,10 @@ export function ModSearch({
             loading={uploadCustomMutation.isPending}
             title="Upload custom jar"
           >
-            <Upload className="h-3.5 w-3.5" />
-            Upload jar
+            {!uploadCustomMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+            {uploadCustomMutation.isPending && customUploadPct !== null
+              ? `${customUploadPct}%`
+              : "Upload jar"}
           </Button>
           {activeTab === "installed" && (
             <Button
@@ -1934,7 +1948,12 @@ export function ModSearch({
                   onClick={() => uploadInputRef.current?.click()}
                   loading={uploadCustomMutation.isPending}
                 >
-                  <Upload className="h-3.5 w-3.5" /> Upload jar
+                  {!uploadCustomMutation.isPending && (
+                    <Upload className="h-3.5 w-3.5" />
+                  )}
+                  {uploadCustomMutation.isPending && customUploadPct !== null
+                    ? `${customUploadPct}%`
+                    : "Upload jar"}
                 </Button>
               </div>
             ) : visibleInstalled.length === 0 ? (
@@ -1948,9 +1967,9 @@ export function ModSearch({
             ) : (
               <>
                 {/* Column header */}
-                <div className="grid grid-cols-[1fr_auto] md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] gap-4 px-4 py-2 border-b border-border bg-surface-2/30 text-[10px] uppercase tracking-wide text-text-secondary sticky top-0">
+                <div className="grid grid-cols-[1fr_auto] xl:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] gap-4 px-4 py-2 border-b border-border bg-surface-2/30 text-[10px] uppercase tracking-wide text-text-secondary sticky top-0">
                   <span>Project</span>
-                  <span className="hidden md:block">Version</span>
+                  <span className="hidden xl:block">Version</span>
                   <span className="text-right">Actions</span>
                 </div>
                 {visibleInstalled.map((mod) => (
@@ -1988,7 +2007,7 @@ export function ModSearch({
         </>
       ) : (
         /* ── Browse: search bar on top, results + right filter sidebar ─── */
-        <div className="flex flex-col md:flex-row flex-1 min-h-0">
+        <div className="flex flex-col xl:flex-row flex-1 min-h-0">
           {/* Main column */}
           <div className="flex-1 min-w-0 min-h-0 flex flex-col">
             <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-surface space-y-2">
@@ -2028,7 +2047,7 @@ export function ModSearch({
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="md:hidden flex-shrink-0"
+                  className="xl:hidden flex-shrink-0"
                   onClick={() => setFiltersOpen(true)}
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -2153,23 +2172,26 @@ export function ModSearch({
             </div>
           </div>
 
-          {/* Dim the results behind the filter drawer on phones. */}
+          {/* Dim the results behind the filter drawer while it overlays. */}
           {filtersOpen && (
             <div
-              className="fixed inset-0 z-30 bg-black/50 md:hidden"
+              className="fixed inset-0 z-30 bg-black/50 xl:hidden"
               onClick={() => setFiltersOpen(false)}
             />
           )}
 
-          {/* Right filter sidebar — slide-in drawer on phones, static on ≥md. */}
+          {/* Right filter sidebar — slide-in drawer until the pane is wide
+              enough for a static column. The server view's two sidebars keep the
+              content pane narrow until the viewport hits xl, so the static
+              sidebar only earns its place there; below that it's the drawer. */}
           <aside
             className={`${
               filtersOpen
                 ? "fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] shadow-2xl"
                 : "hidden"
-            } md:static md:z-auto md:block md:w-60 md:max-w-none md:shadow-none md:flex-shrink-0 border-l border-border bg-surface overflow-y-auto p-4 space-y-4`}
+            } xl:static xl:z-auto xl:block xl:w-60 xl:max-w-none xl:shadow-none xl:flex-shrink-0 border-l border-border bg-surface overflow-y-auto p-4 space-y-4`}
           >
-            <div className="flex items-center justify-between md:hidden">
+            <div className="flex items-center justify-between xl:hidden">
               <span className="text-sm font-medium text-text-primary">
                 Filters
               </span>

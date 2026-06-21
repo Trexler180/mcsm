@@ -350,7 +350,9 @@ function AuditPage() {
       />
       <div className="space-y-4 p-4 sm:p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[12rem] flex-1">
+          {/* Search takes the full row on mobile, then shares the row once
+              there's room for the filter pills beside it. */}
+          <div className="relative w-full min-w-[12rem] sm:w-auto sm:flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
             <Input
               className="pl-9"
@@ -359,7 +361,8 @@ function AuditPage() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-1">
+          {/* Pills wrap individually on tight widths instead of overflowing. */}
+          <div className="flex flex-wrap items-center gap-1">
             {CATEGORY_FILTERS.map((c) => (
               <button
                 key={c.value}

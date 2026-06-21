@@ -456,7 +456,7 @@ export function TasksTab({ serverId }: { serverId: string }) {
           {tasks.map((task, i) => (
             <div
               key={task.id}
-              className={`flex items-center gap-4 px-4 py-3 ${i < tasks.length - 1 ? "border-b border-border/50" : ""}`}
+              className={`flex items-center gap-3 px-4 py-3 ${i < tasks.length - 1 ? "border-b border-border/50" : ""}`}
             >
               <button
                 type="button"
@@ -482,15 +482,20 @@ export function TasksTab({ serverId }: { serverId: string }) {
                 className="min-w-0 flex-1 text-left"
                 title="View details"
               >
-                <p className="text-sm font-medium text-text-primary hover:text-accent">
+                <p className="truncate text-sm font-medium text-text-primary hover:text-accent">
                   {task.name}
                 </p>
-                <p className="text-xs text-text-secondary mt-0.5">
+                <p className="truncate text-xs text-text-secondary mt-0.5">
                   {describeCron(task.cron_expr)} ·{" "}
                   {describeAction(task.action, task.payload)}
                 </p>
               </button>
-              <div className="text-right text-xs text-text-secondary flex-shrink-0">
+              {/* The verbose next/last timestamps eat the row's width. Inside the
+                  server view two sidebars already claim ~448px, so the content
+                  pane stays cramped until the viewport is wide — only surface
+                  these at xl (still shown in the details dialog otherwise). The
+                  name/schedule above truncate so they can never overlap this. */}
+              <div className="hidden text-right text-xs text-text-secondary flex-shrink-0 xl:block">
                 {task.next_run &&
                   (task.enabled ? (
                     <p>

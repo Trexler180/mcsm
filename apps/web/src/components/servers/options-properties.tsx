@@ -1113,7 +1113,9 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
         title="Runtime"
         description="Choose the server runtime and version. Changing the Minecraft or loader version reinstalls the server runtime."
         actions={
-          <div className="flex gap-2">
+          // Wrap + don't shrink so "Apply & reinstall" stays readable next to the
+          // long panel description on narrow widths instead of overflowing.
+          <div className="flex flex-shrink-0 flex-wrap justify-end gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -1229,6 +1231,7 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
   const { success, error } = useNotifications();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoWorldDefaultRef = useRef<string | null>(null);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   const initial = getResourcePackSettings(server);
   const [form, setForm] = useState({
     enabled: initial.enabled ?? false,
@@ -1415,7 +1418,11 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
         lastModified: file.lastModified,
       });
       const sha1 = await sha1Hex(file);
-      await api.files.upload(server.id, RESOURCE_PACK_DIR, uploadFile);
+      await api.files.upload(server.id, RESOURCE_PACK_DIR, uploadFile, (p) =>
+        setUploadPct(
+          p.total > 0 ? Math.min(100, Math.round((p.loaded / p.total) * 100)) : 0,
+        ),
+      );
       const next = {
         ...form,
         enabled: true,
@@ -1442,6 +1449,7 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
       );
     },
     onError: (e: Error) => error("Upload failed", e.message),
+    onSettled: () => setUploadPct(null),
   });
 
   const copyUrl = async () => {
@@ -1454,7 +1462,7 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
       title="Resource Pack"
       description="Host one zip for this server and write its URL into server.properties."
       actions={
-        <div className="flex gap-2">
+        <div className="flex flex-shrink-0 flex-wrap justify-end gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -1462,7 +1470,9 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
             loading={uploadMutation.isPending}
           >
             {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
-            Upload
+            {uploadMutation.isPending && uploadPct !== null
+              ? `${uploadPct}%`
+              : "Upload"}
           </Button>
           <Button
             size="sm"

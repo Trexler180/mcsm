@@ -172,18 +172,20 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[12vh]"
+      // Less top offset on small/short screens; the modal is height-capped to
+      // the viewport so its header + list always fit (list scrolls internally).
+      className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[8vh] sm:pt-[12vh]"
       onMouseDown={() => setOpen(false)}
     >
       <div className="absolute inset-0 bg-black/60" />
       <div
-        className="relative w-full max-w-lg overflow-hidden rounded-xl border border-border bg-surface shadow-2xl"
+        className="relative flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
       >
-        <div className="flex items-center gap-2 border-b border-border px-3">
+        <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3">
           <Search className="h-4 w-4 flex-shrink-0 text-text-secondary" />
           <input
             ref={inputRef}
@@ -199,7 +201,7 @@ export function CommandPalette() {
           />
         </div>
 
-        <ul className="max-h-[50vh] overflow-y-auto py-1">
+        <ul className="min-h-0 flex-1 overflow-y-auto py-1">
           {filtered.length === 0 && (
             <li className="px-4 py-6 text-center text-sm text-text-secondary">
               No matches

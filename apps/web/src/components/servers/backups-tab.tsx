@@ -93,18 +93,20 @@ export function BackupsTab({ serverId }: { serverId: string }) {
           {backups.map((b, i) => (
             <div
               key={b.id}
-              className={`flex items-center justify-between px-4 py-3 ${i < backups.length - 1 ? "border-b border-border/50" : ""}`}
+              className={`flex items-center justify-between gap-3 px-4 py-3 ${i < backups.length - 1 ? "border-b border-border/50" : ""}`}
             >
-              <div>
+              <div className="min-w-0">
                 <p className={`text-sm font-medium ${statusColor[b.status]}`}>
                   {b.status.charAt(0).toUpperCase() + b.status.slice(1)}
                 </p>
-                <p className="text-xs text-text-secondary mt-0.5">
+                <p className="text-xs text-text-secondary mt-0.5 truncate">
                   {new Date(b.started_at).toLocaleString()}
                   {b.trigger !== "manual" && ` · ${b.trigger}`}
                 </p>
               </div>
-              <div className="flex items-center gap-3">
+              {/* Keep the meta + actions together and never let them shrink so the
+                  Restore/Delete buttons stay tappable; the timestamp truncates. */}
+              <div className="flex flex-shrink-0 items-center gap-2 sm:gap-3">
                 <div className="text-right">
                   <p className="text-sm text-text-secondary font-mono">
                     {formatBytes(b.size_bytes)}

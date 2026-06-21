@@ -12,6 +12,7 @@ import {
   Loader2,
   Info,
   CornerDownRight,
+  ChevronLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -463,7 +464,9 @@ function ConfigEditor({
     <div className="flex h-full flex-col">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-2">
-        <span className="truncate font-mono text-sm text-text-secondary">
+        {/* Cap the path so it truncates instead of widening the wrap row on
+            narrow screens; mono paths have no natural break points. */}
+        <span className="max-w-full truncate font-mono text-sm text-text-secondary sm:max-w-xs">
           {path}
         </span>
         <Badge variant="muted" className="uppercase">
@@ -474,7 +477,7 @@ function ConfigEditor({
 
         <div className="ml-auto flex items-center gap-2">
           {mode === "structured" && structuredAvailable && (
-            <div className="relative hidden md:block">
+            <div className="relative hidden xl:block">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-secondary" />
               <Input
                 value={filter}
@@ -613,7 +616,14 @@ export function ConfigsTab({ serverId }: { serverId: string }) {
 
   return (
     <div className="flex h-full min-w-0">
-      <aside className="flex w-72 flex-shrink-0 flex-col border-r border-border bg-surface/40">
+      {/* Master/detail like the Files tab: show the file list OR the editor (a
+          288px sidebar beside a sliver of editor is unusable); only show both
+          side by side once there's room. The server view's app + section
+          sidebars already eat ~448px, so a 72-list + editor split only fits from
+          xl — below that, one pane at a time. */}
+      <aside
+        className={`${selected ? "hidden xl:flex" : "flex"} w-full flex-shrink-0 flex-col border-border bg-surface/40 xl:w-72 xl:border-r`}
+      >
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <h2 className="text-sm font-semibold text-text-primary">Configs</h2>
           <Button size="sm" variant="ghost" onClick={() => refetch()} title="Rescan">
@@ -646,15 +656,29 @@ export function ConfigsTab({ serverId }: { serverId: string }) {
         )}
       </aside>
 
-      <main className="min-w-0 flex-1">
+      {/* Editor pane: full-width once a file is picked, hidden until then so the
+          list owns the screen (until the split engages at xl). */}
+      <main className={`${selected ? "flex" : "hidden xl:flex"} min-w-0 flex-1 flex-col`}>
         {selected ? (
-          <ConfigEditor
-            key={selected}
-            serverId={serverId}
-            path={selected}
-            target={target?.path === selected ? target.node : undefined}
-            targetNonce={targetNonce}
-          />
+          <>
+            {/* Back to the file list — only while single-pane (list is hidden). */}
+            <button
+              onClick={() => setSelected(null)}
+              className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary xl:hidden"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Configs
+            </button>
+            <div className="min-h-0 flex-1">
+              <ConfigEditor
+                key={selected}
+                serverId={serverId}
+                path={selected}
+                target={target?.path === selected ? target.node : undefined}
+                targetNonce={targetNonce}
+              />
+            </div>
+          </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-text-secondary">
             <FileCog className="h-10 w-10 opacity-30" />

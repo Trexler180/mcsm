@@ -675,7 +675,12 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
               : `Server is ${status} · roster from world files`}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-shrink-0"
+          onClick={() => setAddOpen(true)}
+        >
           <UserPlus className="h-3.5 w-3.5" /> Add player
         </Button>
       </div>

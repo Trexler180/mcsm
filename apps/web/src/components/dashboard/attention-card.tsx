@@ -160,8 +160,8 @@ export function AttentionCard({
   if (visible.length === 0) {
     return (
       <Card className="flex items-center gap-3 px-5 py-4">
-        <CheckCircle2 className="h-5 w-5 text-green-400" />
-        <div>
+        <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-400" />
+        <div className="min-w-0">
           <p className="text-sm font-medium text-text-primary">
             Everything looks healthy
           </p>

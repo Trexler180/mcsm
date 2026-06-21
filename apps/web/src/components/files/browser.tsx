@@ -37,6 +37,12 @@ function formatSize(bytes: number): string {
 export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState("/");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // Aggregate upload progress across the (possibly several) files in one pick.
+  const [upload, setUpload] = useState<{
+    loaded: number;
+    total: number;
+    count: number;
+  } | null>(null);
   const qc = useQueryClient();
   const { success, error } = useNotifications();
 
@@ -91,16 +97,32 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    Array.from(files).forEach((f) =>
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+    // Track per-file bytes so the bar reflects all files uploading in parallel.
+    const loaded = new Array(list.length).fill(0);
+    const total = list.reduce((sum, f) => sum + f.size, 0);
+    setUpload({ loaded: 0, total, count: list.length });
+    let remaining = list.length;
+
+    list.forEach((f, i) => {
       api.files
-        .upload(serverId, currentPath, f)
+        .upload(serverId, currentPath, f, (p) => {
+          loaded[i] = p.loaded;
+          setUpload((u) =>
+            u ? { ...u, loaded: loaded.reduce((a, b) => a + b, 0) } : u,
+          );
+        })
         .then(() => {
           success(`Uploaded ${f.name}`);
           qc.invalidateQueries({ queryKey: ["files", serverId, currentPath] });
         })
-        .catch((err: Error) => error("Upload failed", err.message)),
-    );
+        .catch((err: Error) => error("Upload failed", err.message))
+        .finally(() => {
+          remaining -= 1;
+          if (remaining === 0) setUpload(null);
+        });
+    });
     e.target.value = "";
   };
 
@@ -109,21 +131,21 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-surface">
         {/* Breadcrumb */}
-        <nav className="flex min-w-0 items-center gap-1 text-sm overflow-x-auto">
+        <nav className="flex min-w-0 items-center gap-1 text-sm overflow-x-auto scrollbar-none">
           <button
             onClick={() => setCurrentPath("/")}
-            className="text-text-secondary hover:text-text-primary transition-colors"
+            className="flex-shrink-0 text-text-secondary hover:text-text-primary transition-colors"
           >
             /
           </button>
           {pathParts.map((part, i) => {
             const to = "/" + pathParts.slice(0, i + 1).join("/");
             return (
-              <span key={to} className="flex items-center gap-1">
-                <ChevronRight className="h-3.5 w-3.5 text-text-secondary" />
+              <span key={to} className="flex flex-shrink-0 items-center gap-1">
+                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-text-secondary" />
                 <button
                   onClick={() => setCurrentPath(to)}
-                  className="text-text-secondary hover:text-text-primary transition-colors"
+                  className="whitespace-nowrap text-text-secondary hover:text-text-primary transition-colors"
                 >
                   {part}
                 </button>
@@ -163,6 +185,31 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
           </label>
         </div>
       </div>
+
+      {/* Upload progress */}
+      {upload && (
+        <div className="border-b border-border bg-surface px-4 py-2">
+          <div className="mb-1 flex items-center justify-between text-xs text-text-secondary">
+            <span>
+              Uploading {upload.count} file{upload.count !== 1 ? "s" : ""}…
+            </span>
+            <span>
+              {upload.total > 0
+                ? Math.min(100, Math.round((upload.loaded / upload.total) * 100))
+                : 0}
+              %
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+            <div
+              className="h-full rounded-full bg-accent transition-all"
+              style={{
+                width: `${upload.total > 0 ? Math.min(100, (upload.loaded / upload.total) * 100) : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* File list */}
       <div className="flex-1 min-w-0 overflow-auto">

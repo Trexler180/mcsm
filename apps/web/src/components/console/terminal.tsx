@@ -126,7 +126,7 @@ export function ServerTerminal({ serverId }: TerminalProps) {
           onClick={sendCommand}
           disabled={!connected}
           aria-label="Send command to server console"
-          className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded border border-border hover:border-border-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-text-secondary disabled:hover:border-border"
+          className="flex-shrink-0 text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded border border-border hover:border-border-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-text-secondary disabled:hover:border-border"
         >
           Send
         </button>

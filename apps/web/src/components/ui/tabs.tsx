@@ -25,7 +25,9 @@ export function TabsList({ className, children, ...props }: React.HTMLAttributes
   return (
     <div
       className={clsx(
-        'inline-flex h-9 items-center gap-1 border-b border-border w-full',
+        // Scroll horizontally rather than overflow when triggers don't fit on
+        // narrow screens; hide the scrollbar to keep the underline clean.
+        'flex h-9 items-center gap-1 border-b border-border w-full overflow-x-auto scrollbar-none',
         className,
       )}
       {...props}
@@ -48,7 +50,7 @@ export function TabsTrigger({ value, children, className }: TabsTriggerProps) {
     <button
       onClick={() => ctx.onChange(value)}
       className={clsx(
-        'px-4 py-2 text-sm font-medium transition-colors focus:outline-none',
+        'flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors focus:outline-none',
         'border-b-2 -mb-px',
         active
           ? 'text-text-primary border-accent'

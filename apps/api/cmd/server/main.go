@@ -169,15 +169,11 @@ func main() {
 		if adminPassword == "" {
 			log.Fatal("ADMIN_PASSWORD is required when RESET_ADMIN_PASSWORD=1")
 		}
-		hash, err := auth.HashPassword(adminPassword)
-		if err != nil {
-			log.Fatalf("hash password: %v", err)
-		}
-		u, err := s.EnsureAdminUser(ctx, adminEmail, hash)
+		u, err := s.EnsureAdminUser(ctx, adminEmail, adminPassword)
 		if err != nil {
 			log.Fatalf("reset admin password: %v", err)
 		}
-		log.Printf("reset admin user password: %s", u.Email)
+		log.Printf("ensured admin user: %s", u.Email)
 	}
 
 	if os.Getenv("AUTO_REGISTER_LOCAL_AGENT") == "1" {

@@ -46,12 +46,12 @@ export function FleetGrid({
                 <StatusBadge status={s.status as ServerStatus} />
               </div>
               <div className="flex items-center gap-2 text-xs text-text-secondary">
-                <span className="truncate">
+                <span className="min-w-0 truncate">
                   {s.platform} {s.mc_version}
                 </span>
                 {s.active_conflict && (
-                  <span className="ml-auto inline-flex items-center gap-1 text-red-400">
-                    <ShieldAlert className="h-3 w-3" /> conflict
+                  <span className="ml-auto inline-flex flex-shrink-0 items-center gap-1 text-red-400">
+                    <ShieldAlert className="h-3 w-3 flex-shrink-0" /> conflict
                   </span>
                 )}
               </div>

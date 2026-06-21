@@ -47,7 +47,7 @@ export function SafeUpdateDialog({
               <span className="min-w-0 flex-1 truncate text-text-primary">
                 {u.name}
               </span>
-              <span className="flex items-center gap-1.5 font-mono text-xs text-text-secondary">
+              <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 font-mono text-xs text-text-secondary">
                 <span className="truncate">{u.current_version}</span>
                 <ArrowRight className="h-3 w-3 flex-shrink-0" />
                 <span className="truncate text-green-400">

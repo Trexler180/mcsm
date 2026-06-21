@@ -21,11 +21,18 @@ const (
 
 type Client struct {
 	http *http.Client
+	// dl is used only for file downloads. http.Client.Timeout is a whole-request
+	// budget that includes streaming the response body, so the 15s used for JSON
+	// calls would abort any non-trivial jar download ("context deadline exceeded
+	// while reading body"). Downloads instead rely on the request context for
+	// their bound, with a generous ceiling as a backstop.
+	dl *http.Client
 }
 
 func New() *Client {
 	return &Client{
 		http: &http.Client{Timeout: 15 * time.Second},
+		dl:   &http.Client{Timeout: 15 * time.Minute},
 	}
 }
 
@@ -387,7 +394,7 @@ func (c *Client) Download(ctx context.Context, fileURL, wantSHA string) (path st
 	}
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.dl.Do(req)
 	if err != nil {
 		return "", err
 	}

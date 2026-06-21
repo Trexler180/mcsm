@@ -62,9 +62,10 @@ function DashboardPage() {
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {stats.map((s) => (
             <Card key={s.label}>
-              <CardContent className="flex items-center gap-4 py-4">
+              {/* Tighter gap on phones so two stat cards fit ~360px without crowding. */}
+              <CardContent className="flex items-center gap-3 py-4 sm:gap-4">
                 <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                  className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${
                     s.danger
                       ? "bg-red-500/15"
                       : s.accent
@@ -82,11 +83,13 @@ function DashboardPage() {
                     }`}
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="text-2xl font-bold text-text-primary">
                     {s.value}
                   </p>
-                  <p className="text-sm text-text-secondary">{s.label}</p>
+                  <p className="truncate text-sm text-text-secondary">
+                    {s.label}
+                  </p>
                 </div>
               </CardContent>
             </Card>

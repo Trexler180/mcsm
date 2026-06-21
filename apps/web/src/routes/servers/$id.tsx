@@ -283,7 +283,7 @@ function ServerDetailPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
-        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-56 md:border-b-0 md:border-r md:p-3">
+        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-44 md:border-b-0 md:border-r md:p-3 lg:w-56">
           {/* Mobile: a grouped picker so every section is reachable in one tap
               instead of a long horizontal strip where most tabs scroll off. */}
           <label className="md:hidden">
@@ -341,6 +341,7 @@ function ServerDetailPage() {
               <DashboardTab
                 server={server}
                 backups={backups}
+                can={can}
                 onSection={goSection}
               />
             </div>
@@ -378,9 +379,12 @@ function ServerDetailPage() {
           {tab === "configs" && can("files") && <ConfigsTab serverId={id} />}
           {tab === "files" && can("files") && (
             <div className="flex h-full min-w-0">
-              {/* On mobile, show the browser OR the editor (not both); on md+ show both side by side. */}
+              {/* Show the browser OR the editor (not both) until there's room for
+                  a side-by-side split. The app + section sidebars already claim
+                  ~448px, so the 80-wide browser + editor only fit from xl; below
+                  that, one pane at a time with a back button. */}
               <div
-                className={`${selectedFile ? "hidden md:flex" : "flex"} w-full flex-shrink-0 flex-col overflow-hidden border-border md:w-80 md:border-r`}
+                className={`${selectedFile ? "hidden xl:flex" : "flex"} w-full flex-shrink-0 flex-col overflow-hidden border-border xl:w-80 xl:border-r`}
               >
                 <FileBrowser
                   serverId={id}
@@ -388,13 +392,13 @@ function ServerDetailPage() {
                 />
               </div>
               <div
-                className={`${selectedFile ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col overflow-hidden`}
+                className={`${selectedFile ? "flex" : "hidden xl:flex"} min-w-0 flex-1 flex-col overflow-hidden`}
               >
                 {selectedFile ? (
                   <>
                     <button
                       onClick={() => setSelectedFile(null)}
-                      className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary md:hidden"
+                      className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary xl:hidden"
                     >
                       <ArrowLeft className="h-4 w-4" /> Back to files
                     </button>

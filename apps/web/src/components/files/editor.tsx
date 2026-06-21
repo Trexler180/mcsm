@@ -84,9 +84,9 @@ export function FileEditor({ serverId, path }: FileEditorProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-surface">
-        <span className="text-sm text-text-secondary font-mono truncate">{path}</span>
-        <Button size="sm" onClick={save} loading={saving}>
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-surface">
+        <span className="min-w-0 truncate text-sm text-text-secondary font-mono">{path}</span>
+        <Button size="sm" onClick={save} loading={saving} className="flex-shrink-0">
           <Save className="h-3.5 w-3.5" />
           Save
         </Button>

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mcsm/api/internal/auth"
 	"github.com/robfig/cron/v3"
 )
 
@@ -448,9 +449,13 @@ func (s *Store) CreateUser(ctx context.Context, email, passwordHash, role string
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, string, error) {
 	var u User
 	var hash string
+	// Email is matched case-insensitively and trimmed: addresses are not
+	// case-sensitive, and treating them so here only produced confusing
+	// "invalid credentials" failures when a login form capitalised or padded
+	// the address.
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, display_name, role, created_at, last_login FROM users WHERE email = ?`,
-		email,
+		`SELECT id, email, password_hash, display_name, role, created_at, last_login FROM users WHERE lower(email) = ?`,
+		strings.ToLower(strings.TrimSpace(email)),
 	).Scan(&u.ID, &u.Email, &hash, &u.DisplayName, &u.Role, &u.CreatedAt, &u.LastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", fmt.Errorf("user not found")
@@ -541,20 +546,37 @@ func (s *Store) UpdateUser(ctx context.Context, id string, displayName *string, 
 	return err
 }
 
-func (s *Store) EnsureAdminUser(ctx context.Context, email, passwordHash string) (*User, error) {
-	user, _, err := s.GetUserByEmail(ctx, email)
+func (s *Store) EnsureAdminUser(ctx context.Context, email, password string) (*User, error) {
+	user, hash, err := s.GetUserByEmail(ctx, email)
 	if err == nil {
-		if err := s.UpdateUserPassword(ctx, user.ID, passwordHash); err != nil {
-			return nil, err
+		// Only rewrite the password when it actually changed. Dev mode re-runs
+		// this on every boot; rehashing unconditionally would call
+		// DeleteRefreshTokensForUser each time and invalidate the browser's
+		// session, forcing a fresh login after every restart. Skipping the
+		// no-op keeps existing sessions alive across restarts.
+		if !auth.CheckPassword(hash, password) {
+			newHash, err := auth.HashPassword(password)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.UpdateUserPassword(ctx, user.ID, newHash); err != nil {
+				return nil, err
+			}
+			_ = s.DeleteRefreshTokensForUser(ctx, user.ID)
 		}
-		_ = s.DeleteRefreshTokensForUser(ctx, user.ID)
-		_, err = s.db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = ?`, user.ID)
-		if err != nil {
-			return nil, err
+		if user.Role != "admin" {
+			if _, err := s.db.ExecContext(ctx, `UPDATE users SET role = 'admin' WHERE id = ?`, user.ID); err != nil {
+				return nil, err
+			}
+			return s.GetUserByID(ctx, user.ID)
 		}
-		return s.GetUserByID(ctx, user.ID)
+		return user, nil
 	}
-	return s.CreateUser(ctx, email, passwordHash, "admin")
+	hash, err = auth.HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	return s.CreateUser(ctx, email, hash, "admin")
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id string) error {

@@ -149,8 +149,15 @@ export function LogsTab({ serverId }: { serverId: string }) {
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-4 p-4 sm:p-5 lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <div className="flex min-h-0 flex-col rounded-md border border-border bg-surface">
+    <div className="grid h-full min-h-0 grid-rows-[14rem_minmax(0,1fr)] grid-cols-[minmax(0,1fr)] gap-4 p-4 sm:p-5 xl:grid-rows-1 xl:grid-cols-[20rem_minmax(0,1fr)]">
+      {/* The file list and viewer stack (capped list height so the viewer keeps
+          the bulk of the screen). They only sit side by side from xl, since the
+          server view's two sidebars keep this pane narrow below that.
+          grid-cols-[minmax(0,1fr)] pins the single stacked column to the pane
+          width — without it the implicit auto column grows to the widest log
+          line and scrolls the whole tab sideways. min-w-0 on the children below
+          is the matching guard so their content scrolls internally instead. */}
+      <div className="flex min-w-0 min-h-0 flex-col rounded-md border border-border bg-surface">
         <div className="border-b border-border p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
@@ -201,7 +208,7 @@ export function LogsTab({ serverId }: { serverId: string }) {
                       <span className="mt-1 block truncate text-xs text-text-secondary">
                         {file.path}
                       </span>
-                      <span className="mt-1 flex items-center gap-2 text-xs text-text-secondary">
+                      <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
                         <Badge
                           variant={file.kind === "crash" ? "error" : "muted"}
                         >
@@ -219,7 +226,7 @@ export function LogsTab({ serverId }: { serverId: string }) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-col">
+      <div className="flex min-w-0 min-h-0 flex-col">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input
             value={path}
@@ -271,7 +278,7 @@ export function LogsTab({ serverId }: { serverId: string }) {
               No log file found at {path}.
             </div>
           ) : (
-            <pre className="whitespace-pre-wrap">{visibleLog}</pre>
+            <pre className="whitespace-pre-wrap break-words">{visibleLog}</pre>
           )}
         </div>
       </div>

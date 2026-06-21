@@ -78,7 +78,9 @@ export function PlayerActionsMenu({
             type="button"
             disabled={busy}
             title="Actions"
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-text-secondary hover:bg-surface-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+            // Larger touch target on phones (~36px); compact on pointer-precise
+            // larger screens.
+            className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded text-text-secondary hover:bg-surface-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 sm:h-7 sm:w-7"
           >
             <MoreVertical className="h-4 w-4" />
           </button>
@@ -88,7 +90,9 @@ export function PlayerActionsMenu({
         <DropdownMenu.Content
           align="end"
           sideOffset={4}
-          className="z-50 min-w-[11rem] rounded-md border border-border bg-surface p-1 shadow-xl"
+          collisionPadding={8}
+          // Never exceed the viewport on small/short screens; scroll internally.
+          className="z-50 max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[11rem] max-w-[calc(100vw-1rem)] overflow-y-auto rounded-md border border-border bg-surface p-1 shadow-xl"
         >
           <Item onSelect={onOpen} icon={<Eye className="h-3.5 w-3.5" />}>
             View saved data

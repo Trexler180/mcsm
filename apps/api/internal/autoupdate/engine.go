@@ -254,7 +254,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		d.Message = "no updates could be applied"
 		save("running", false)
 		if d.WasRunning {
-			e.startAndWatch(ctx, c, srv) // best-effort: bring it back up
+			e.startAndWatch(ctx, c, srv, nil) // best-effort: bring it back up
 		}
 		fail("no updates could be applied")
 		return
@@ -264,7 +264,10 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 	d.Phase = "verifying"
 	d.Message = fmt.Sprintf("restarting with %d update(s) and watching the boot", len(applied))
 	save("running", false)
-	h := e.startAndWatch(ctx, c, srv)
+	h := e.startAndWatch(ctx, c, srv, func(msg string) {
+		d.Message = msg
+		save("running", false)
+	})
 
 	if h.ok {
 		for _, cand := range applied {
@@ -291,7 +294,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		cand.step.Status = stepRevertedSkipped
 		cand.step.Error = h.reason
 
-		if rb := e.startAndWatch(ctx, c, srv); !rb.ok {
+		if rb := e.startAndWatch(ctx, c, srv, nil); !rb.ok {
 			fail(fmt.Sprintf("reverted %s but the server is still unhealthy: %s", cand.mod.Name, rb.reason))
 			return
 		}
@@ -312,7 +315,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 			return
 		}
 	}
-	if base := e.startAndWatch(ctx, c, srv); !base.ok {
+	if base := e.startAndWatch(ctx, c, srv, nil); !base.ok {
 		fail(fmt.Sprintf("server is unhealthy even with all updates reverted (%s) — the failure is not caused by these updates; nothing was blocklisted", base.reason))
 		return
 	}
@@ -326,14 +329,14 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		if err := e.applyUpdate(ctx, c, srv.ID, cand); err != nil {
 			cand.step.Status = stepFailed
 			cand.step.Error = "re-apply during isolation failed: " + err.Error()
-			if rb := e.startAndWatch(ctx, c, srv); !rb.ok {
+			if rb := e.startAndWatch(ctx, c, srv, nil); !rb.ok {
 				fail("server did not come back during isolation: " + rb.reason)
 				return
 			}
 			continue
 		}
 
-		ih := e.startAndWatch(ctx, c, srv)
+		ih := e.startAndWatch(ctx, c, srv, nil)
 		if ih.ok {
 			cand.step.Status = stepUpdated
 			continue
@@ -349,7 +352,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		e.markSkipped(ctx, srv.ID, cand, ih.reason)
 		cand.step.Status = stepRevertedSkipped
 		cand.step.Error = ih.reason
-		if rb := e.startAndWatch(ctx, c, srv); !rb.ok {
+		if rb := e.startAndWatch(ctx, c, srv, nil); !rb.ok {
 			fail("server did not come back after reverting " + cand.mod.Name + ": " + rb.reason)
 			return
 		}
@@ -589,7 +592,10 @@ func (e *Engine) stopServer(ctx context.Context, c agentAPI, serverID string) {
 // startAndWatch boots the server and classifies the result: healthy means it
 // reached "online" and stayed there for stableFor; crashed / startup_failure /
 // process-exit / timeout are unhealthy with a reason.
-func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Server) health {
+// onProgress, when non-nil, is called each poll with a human-readable status so
+// the caller can surface live boot progress (notably the stable-for countdown
+// once the server reaches "online"). It is invoked from this goroutine only.
+func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Server, onProgress func(string)) health {
 	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
 	e.setStatus(srv.ID, "starting")
 	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
@@ -623,13 +629,25 @@ func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Serve
 			if onlineSince.IsZero() {
 				onlineSince = time.Now()
 			}
-			if time.Since(onlineSince) >= e.stableFor {
+			stable := time.Since(onlineSince)
+			if onProgress != nil {
+				secs := int(stable.Seconds())
+				total := int(e.stableFor.Seconds())
+				if secs > total {
+					secs = total
+				}
+				onProgress(fmt.Sprintf("server online — confirming it stays up (%ds/%ds)", secs, total))
+			}
+			if stable >= e.stableFor {
 				e.setStatus(srv.ID, "online")
 				return health{ok: true}
 			}
 		case "starting", "stopping":
 			sawProcess = true
 			onlineSince = time.Time{}
+			if onProgress != nil {
+				onProgress(fmt.Sprintf("waiting for the server to come online (%ds)", int(time.Since(started).Seconds())))
+			}
 		case "crashed":
 			e.setStatus(srv.ID, "crashed")
 			return health{reason: "server crashed during startup"}

@@ -1,11 +1,13 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Globe2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { ChevronRight, Globe2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
 import { Panel } from "./shared";
+import { WorldInfoDialog } from "./world-info-dialog";
 
 export function WorldsTab({ serverId }: { serverId: string }) {
+  const [selected, setSelected] = useState<string | null>(null);
   const { data: root, isLoading } = useQuery({
     queryKey: ["files", serverId, "/"],
     queryFn: () => api.files.list(serverId, "/"),
@@ -40,27 +42,36 @@ export function WorldsTab({ serverId }: { serverId: string }) {
         ) : (
           <div className="divide-y divide-border rounded-md border border-border">
             {worlds.map((world) => (
-              <div
+              <button
                 key={world.name}
-                className="flex items-center justify-between px-4 py-3"
+                type="button"
+                onClick={() => setSelected(world.name)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2/40"
               >
-                <div className="flex items-center gap-3">
-                  <Globe2 className="h-4 w-4 text-text-secondary" />
-                  <div>
-                    <p className="text-sm font-medium text-text-primary">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Globe2 className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-text-primary">
                       {world.name}
                     </p>
-                    <p className="text-xs text-text-secondary">
+                    <p className="truncate text-xs text-text-secondary">
                       Modified {new Date(world.modified).toLocaleString()}
                     </p>
                   </div>
                 </div>
-                <Badge variant="muted">folder</Badge>
-              </div>
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+              </button>
             ))}
           </div>
         )}
       </Panel>
+      {selected && (
+        <WorldInfoDialog
+          serverId={serverId}
+          worldName={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }

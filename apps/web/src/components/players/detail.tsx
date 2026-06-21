@@ -171,7 +171,9 @@ function SlotRange({
   for (let s = from; s <= to; s++) {
     slots.push(<ItemTile key={s} item={bySlot.get(s)} highlight={s === selected} />)
   }
-  return <div className="grid grid-cols-9 gap-1">{slots}</div>
+  // Minecraft inventory rows are intrinsically 9-wide; cap the tile size so the
+  // full row fits on phones instead of overflowing the dialog.
+  return <div className="grid grid-cols-9 gap-1 max-w-[22rem] sm:max-w-none">{slots}</div>
 }
 
 function StatChip({
@@ -359,7 +361,10 @@ function DetailBody({
   }
 
   return (
-    <div className="space-y-5 max-h-[calc(100vh-12rem)] overflow-y-auto pr-2">
+    // The Dialog already scrolls its body, so don't nest a second scroll
+    // container here — just lay the sections out and let the dialog handle
+    // overflow on short viewports.
+    <div className="space-y-5">
       {/* Identity / state row */}
       <div className="flex flex-wrap items-center gap-2">
         {d.bedrock && (

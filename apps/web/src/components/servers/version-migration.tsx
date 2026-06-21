@@ -519,11 +519,14 @@ export function VersionMigrationPanel({ server }: { server: Server }) {
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs text-text-secondary">
+                      <p className="min-w-0 text-xs text-text-secondary">
                         Applying backs up the server first and reverts
                         automatically on a failed boot.
                       </p>
-                      <Button onClick={() => setConfirming(true)}>
+                      <Button
+                        className="flex-shrink-0"
+                        onClick={() => setConfirming(true)}
+                      >
                         Change version
                       </Button>
                     </div>
@@ -542,19 +545,21 @@ export function VersionMigrationPanel({ server }: { server: Server }) {
               <button
                 key={h.id}
                 onClick={() => setRunId(h.id)}
-                className="flex w-full items-center gap-3 px-1 py-2 text-left text-sm hover:bg-surface-2"
+                className="flex w-full items-center gap-2 px-1 py-2 text-left text-sm hover:bg-surface-2 sm:gap-3"
               >
-                <span className="font-mono text-xs text-text-secondary">
+                <span className="flex-shrink-0 font-mono text-xs text-text-secondary">
                   {h.from_mc_version}
                 </span>
-                <ArrowRight className="h-3 w-3 text-text-secondary" />
-                <span className="font-mono text-xs text-text-primary">
+                <ArrowRight className="h-3 w-3 flex-shrink-0 text-text-secondary" />
+                <span className="flex-shrink-0 font-mono text-xs text-text-primary">
                   {h.to_mc_version}
                 </span>
-                <span className={`ml-2 text-xs ${RUN_STATUS[h.status].tone}`}>
+                {/* Status label can be long; let it truncate so the relative time
+                    on the right always stays visible on narrow screens. */}
+                <span className={`min-w-0 flex-1 truncate text-xs ${RUN_STATUS[h.status].tone}`}>
                   {RUN_STATUS[h.status].label}
                 </span>
-                <span className="ml-auto flex items-center gap-1 text-xs text-text-secondary">
+                <span className="flex flex-shrink-0 items-center gap-1 text-xs text-text-secondary">
                   <Clock className="h-3 w-3" />
                   {relativeTime(h.started_at)}
                 </span>
