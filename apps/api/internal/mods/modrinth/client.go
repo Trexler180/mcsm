@@ -106,6 +106,8 @@ type VersionFile struct {
 	Size     int    `json:"size"`
 	Hashes   struct {
 		SHA256 string `json:"sha256"`
+		SHA512 string `json:"sha512"`
+		SHA1   string `json:"sha1"`
 	} `json:"hashes"`
 }
 
@@ -260,6 +262,39 @@ func (c *Client) GetVersions(ctx context.Context, projectID, loader, mcVersion s
 		return nil, err
 	}
 	return versions, nil
+}
+
+// GetProjects fetches multiple projects in one call (GET /v2/projects?ids=[...]),
+// used to resolve display titles for a batch of recognized mods without a request
+// per project. Unknown ids are simply absent from the result.
+func (c *Client) GetProjects(ctx context.Context, ids []string) ([]Project, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	params := url.Values{"ids": {"[" + strings.Join(quoted, ",") + "]"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/projects?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("modrinth returned %d", resp.StatusCode)
+	}
+	var out []Project
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, error) {
@@ -427,6 +462,45 @@ func (c *Client) Download(ctx context.Context, fileURL, wantSHA string) (path st
 		}
 	}
 	return tmp.Name(), nil
+}
+
+// GetVersionsByHashes looks up multiple files at once against Modrinth's file
+// index, returning a hash->Version map for the ones that exactly match a known
+// upload. This is how a loose/imported jar is recognized as a specific Modrinth
+// version (the same mechanism the Modrinth app uses). algorithm is "sha512" or
+// "sha1"; hashes must be lowercase hex of that algorithm. Unmatched hashes are
+// simply absent from the result.
+func (c *Client) GetVersionsByHashes(ctx context.Context, hashes []string, algorithm string) (map[string]Version, error) {
+	if len(hashes) == 0 {
+		return map[string]Version{}, nil
+	}
+	if algorithm == "" {
+		algorithm = "sha512"
+	}
+	body, err := json.Marshal(map[string]any{"hashes": hashes, "algorithm": algorithm})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/version_files", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("modrinth returned %d", resp.StatusCode)
+	}
+	var out map[string]Version
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *Client) GetVersion(ctx context.Context, versionID string) (*Version, error) {

@@ -16,17 +16,29 @@ On Windows, run:
 .\run.ps1
 ```
 
-Defaults:
+On Linux / macOS, run:
+
+```bash
+./run.sh
+```
+
+Defaults (both launchers):
 
 - Web: `http://localhost:3000`
 - API: `http://localhost:8081`
 - Agent: `http://localhost:8090`
 - Admin: `admin@example.com / changeme`
 
-The script starts all three services, sets `MCSM_DEV_MODE=1`, and auto-registers
-the local agent. Backend reload is enabled by default: edits to API or agent Go
-sources restart that service without restarting the web dev server. Use
-`.\run.ps1 -NoBackendWatch` to disable it.
+Both scripts start all three services with `MCSM_DEV_MODE=1` and auto-register
+the local agent. Override any default with an environment variable, e.g.
+`API_PORT=9000 ADMIN_PASSWORD=hunter2 ./run.sh` (or the matching `-ApiPort` /
+`-AdminPassword` parameters for `run.ps1`). Both require Go, Node.js + pnpm, and
+Java on `PATH`; `run.sh` runs `pnpm install` automatically on first start (skip
+with `./run.sh --skip-install`). Press Ctrl+C to stop all services.
+
+`run.ps1` additionally supervises the services and hot-reloads the Go backends on
+source edits (disable with `.\run.ps1 -NoBackendWatch`); `run.sh` is a simpler
+launcher — re-run it after editing Go sources.
 
 The script supervises all three services: any service that exits (crash, port
 conflict, compile error during a reload) is restarted automatically with

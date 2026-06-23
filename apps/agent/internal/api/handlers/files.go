@@ -150,6 +150,36 @@ func (h *FileHandlers) Rename(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
+// Hashes computes per-file fingerprints (sha512 + CurseForge murmur2) for each
+// requested server-relative path and returns a path->fingerprint map. Unreadable
+// paths are omitted so one bad entry doesn't fail the batch. Used by the panel to
+// recognize imported jars against Modrinth (sha512) and CurseForge (murmur2).
+func (h *FileHandlers) Hashes(w http.ResponseWriter, r *http.Request) {
+	base, err := h.base(r)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	type fileFP struct {
+		SHA512  string `json:"sha512"`
+		Murmur2 uint32 `json:"murmur2"`
+	}
+	out := make(map[string]fileFP, len(body.Paths))
+	for _, p := range body.Paths {
+		if sha, mur, err := agentfiles.FileFingerprints(base, p); err == nil {
+			out[p] = fileFP{SHA512: sha, Murmur2: mur}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": out})
+}
+
 func (h *FileHandlers) Mkdir(w http.ResponseWriter, r *http.Request) {
 	base, err := h.base(r)
 	if err != nil {

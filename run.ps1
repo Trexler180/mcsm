@@ -429,6 +429,54 @@ function Stop-ProcessTree {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
+# Liveness tuning for the health watchdog below.
+$StartupGraceSeconds = 75   # allow `go run` compile + boot before declaring a hung start
+$LivenessWindowSeconds = 30 # a previously-healthy service may blip this long before recycling
+$ProbeIntervalSeconds = 3   # how often to poll each service's health endpoint
+
+# New-HealthState is the per-service supervisor record. Healthy/UnhealthySince/
+# LastProbe drive the liveness watchdog; Failures/RestartAt drive backoff.
+function New-HealthState {
+    @{
+        Failures       = 0
+        RestartAt      = $null
+        StartedAt      = Get-Date
+        Healthy        = $false
+        UnhealthySince = $null
+        LastProbe      = [datetime]::MinValue
+    }
+}
+
+# Test-DevHealth probes a service's HTTP endpoint. Any response (even 4xx, e.g.
+# the agent's 401 without a token) means the process is listening and handling
+# requests; only a refused/timed-out connection counts as unhealthy. This is what
+# lets the watchdog catch a child that started but hung before binding — something
+# the exit-based restart can never see.
+function Test-DevHealth {
+    param([string]$Name)
+
+    $url = $null
+    $headers = @{}
+    switch ($Name) {
+        "api"   { $url = "http://${ApiConnectHost}:$ApiPort/api/v1/health" }
+        "agent" { $url = "http://${ApiConnectHost}:$AgentPort/agent/v1/health"; $headers = @{ Authorization = "Bearer $AgentToken" } }
+        "web"   { $url = "http://${ApiConnectHost}:$WebPort/" }
+        default { return $true } # unknown service: don't supervise
+    }
+
+    try {
+        $resp = Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return ([int]$resp.StatusCode -lt 500)
+    }
+    catch {
+        # An HTTP error status still proves the server is up and answering.
+        if ($_.Exception.Response) {
+            return $true
+        }
+        return $false
+    }
+}
+
 $cancelEventId = "ServerManager.$PID.cancel"
 # A prior run that crashed before its finally block can leave this subscriber
 # behind. Clear any same-id orphan so a re-run in the same session does not fail
@@ -528,7 +576,7 @@ function Start-Spec {
     param([string]$Name)
 
     $running[$Name] = Start-DevProcess -Name $Name -WorkingDirectory $specs[$Name].Dir -Environment $specs[$Name].Env -Command $specs[$Name].Command
-    $health[$Name] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+    $health[$Name] = New-HealthState
 }
 
 try {
@@ -591,7 +639,60 @@ try {
             if ($state.RestartAt -and (Get-Date) -ge $state.RestartAt) {
                 $state.RestartAt = $null
                 $state.StartedAt = Get-Date
-                $running[$name] = Restart-DevProcess -DevProcess $running[$name] -Reason "recovering after exit"
+                $state.Healthy = $false
+                $state.UnhealthySince = $null
+                $state.LastProbe = Get-Date
+                $running[$name] = Restart-DevProcess -DevProcess $running[$name] -Reason "recovering"
+            }
+        }
+
+        # Liveness watchdog: a service can start but hang before it ever serves a
+        # request (observed with `go run` children that wedge before binding).
+        # The exit-based restart above never fires for those, so we also probe
+        # each service's health endpoint and recycle one that never becomes ready
+        # within its startup grace, or that stops responding while still running.
+        foreach ($name in @($running.Keys)) {
+            $state = $health[$name]
+            $devProcess = $running[$name]
+            if ($state.RestartAt -or $devProcess.Process.HasExited) {
+                continue
+            }
+            if (((Get-Date) - $state.LastProbe).TotalSeconds -lt $ProbeIntervalSeconds) {
+                continue
+            }
+            $state.LastProbe = Get-Date
+
+            if (Test-DevHealth -Name $name) {
+                if (-not $state.Healthy) {
+                    $state.Healthy = $true
+                    Write-Host "[$name] healthy"
+                }
+                $state.UnhealthySince = $null
+                continue
+            }
+
+            if (-not $state.Healthy) {
+                # Never became ready. The grace covers `go run` compile + boot.
+                if (((Get-Date) - $state.StartedAt).TotalSeconds -ge $StartupGraceSeconds) {
+                    $state.Failures++
+                    $delay = Get-RestartDelaySeconds -Failures $state.Failures
+                    $state.RestartAt = (Get-Date).AddSeconds($delay)
+                    Write-Host "[$name] no response ${StartupGraceSeconds}s after start (hung); restarting in ${delay}s"
+                }
+            }
+            else {
+                # Was healthy, then stopped responding while still alive.
+                if (-not $state.UnhealthySince) {
+                    $state.UnhealthySince = Get-Date
+                }
+                if (((Get-Date) - $state.UnhealthySince).TotalSeconds -ge $LivenessWindowSeconds) {
+                    $state.Failures++
+                    $delay = Get-RestartDelaySeconds -Failures $state.Failures
+                    $state.RestartAt = (Get-Date).AddSeconds($delay)
+                    $state.Healthy = $false
+                    $state.UnhealthySince = $null
+                    Write-Host "[$name] unresponsive ${LivenessWindowSeconds}s; restarting in ${delay}s"
+                }
             }
         }
 
@@ -604,14 +705,14 @@ try {
                 if ($nextApiFingerprint -ne $apiFingerprint) {
                     $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
                     $running["api"] = Restart-DevProcess -DevProcess $running["api"]
-                    $health["api"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+                    $health["api"] = New-HealthState
                 }
 
                 $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                 if ($nextAgentFingerprint -ne $agentFingerprint) {
                     $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                     $running["agent"] = Restart-DevProcess -DevProcess $running["agent"]
-                    $health["agent"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+                    $health["agent"] = New-HealthState
                 }
 
                 $nextWebDepsFingerprint = Get-WebDepsFingerprint -Path $WebDir
@@ -630,7 +731,7 @@ try {
                         Pop-Location
                     }
                     $running["web"] = Restart-DevProcess -DevProcess $running["web"] -Reason "dependencies changed"
-                    $health["web"] = @{ Failures = 0; RestartAt = $null; StartedAt = Get-Date }
+                    $health["web"] = New-HealthState
                 }
             }
         }

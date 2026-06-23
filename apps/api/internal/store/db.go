@@ -306,6 +306,7 @@ type InstalledMod struct {
 	Version        string    `json:"version"`
 	FileName       string    `json:"file_name"`
 	SHA256         *string   `json:"sha256"`
+	SHA512         *string   `json:"sha512"`
 	Pinned         bool      `json:"pinned"`
 	Enabled        bool      `json:"enabled"`
 	InstallPath    string    `json:"install_path"`
@@ -1037,13 +1038,13 @@ func (s *Store) DeleteServer(ctx context.Context, id string) error {
 
 // ── Installed Mods ───────────────────────────────────────────────
 
-const modCols = `id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, enabled, install_path, installed_as_dep, installed_at`
+const modCols = `id, server_id, source, source_id, version_id, name, version, file_name, sha256, sha512, pinned, enabled, install_path, installed_as_dep, installed_at`
 
 func scanMod(sc interface {
 	Scan(...any) error
 }, m *InstalledMod) error {
 	return sc.Scan(&m.ID, &m.ServerID, &m.Source, &m.SourceID, &m.VersionID, &m.Name, &m.Version,
-		&m.FileName, &m.SHA256, &m.Pinned, &m.Enabled, &m.InstallPath, &m.InstalledAsDep, &m.InstalledAt)
+		&m.FileName, &m.SHA256, &m.SHA512, &m.Pinned, &m.Enabled, &m.InstallPath, &m.InstalledAsDep, &m.InstalledAt)
 }
 
 func (s *Store) ListMods(ctx context.Context, serverID string) ([]*InstalledMod, error) {
@@ -1070,9 +1071,9 @@ func (s *Store) CreateMod(ctx context.Context, m *InstalledMod) (*InstalledMod, 
 		m.InstallPath = "/mods"
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO installed_mods (id, server_id, source, source_id, version_id, name, version, file_name, sha256, pinned, install_path, installed_as_dep)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, m.ServerID, m.Source, m.SourceID, m.VersionID, m.Name, m.Version, m.FileName, m.SHA256, m.Pinned, m.InstallPath, m.InstalledAsDep,
+		`INSERT INTO installed_mods (id, server_id, source, source_id, version_id, name, version, file_name, sha256, sha512, pinned, install_path, installed_as_dep)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, m.ServerID, m.Source, m.SourceID, m.VersionID, m.Name, m.Version, m.FileName, m.SHA256, m.SHA512, m.Pinned, m.InstallPath, m.InstalledAsDep,
 	)
 	if err != nil {
 		return nil, err
@@ -1080,6 +1081,26 @@ func (s *Store) CreateMod(ctx context.Context, m *InstalledMod) (*InstalledMod, 
 	var out InstalledMod
 	err = scanMod(s.db.QueryRowContext(ctx, `SELECT `+modCols+` FROM installed_mods WHERE id = ?`, id), &out)
 	return &out, err
+}
+
+// StampModHash records the file's sha512 without otherwise changing the row. A
+// stored hash marks the jar as "already hashed and looked up", so reconciliation
+// won't rehash or re-query it on every Mods-tab load.
+func (s *Store) StampModHash(ctx context.Context, id, sha512 string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE installed_mods SET sha512=? WHERE id=?`, sha512, id)
+	return err
+}
+
+// RecognizeMod upgrades an existing (typically "custom") row to a known source
+// after its jar was matched to that source's file index by hash — promoting it to
+// a managed mod with version metadata and update checking, while keeping the same
+// on-disk file and enabled state.
+func (s *Store) RecognizeMod(ctx context.Context, id, source, sourceID, versionID, name, version, sha512 string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE installed_mods SET source=?, source_id=?, version_id=?, name=?, version=?, sha512=? WHERE id=?`,
+		source, sourceID, versionID, name, version, sha512, id,
+	)
+	return err
 }
 
 func (s *Store) GetMod(ctx context.Context, id string) (*InstalledMod, error) {

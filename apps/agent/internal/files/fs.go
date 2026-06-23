@@ -2,6 +2,8 @@ package files
 
 import (
 	"archive/zip"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -276,6 +278,87 @@ func WriteUpload(base, dirPath, filename string, src io.Reader) error {
 	defer f.Close()
 	_, err = io.Copy(f, src)
 	return err
+}
+
+// FileFingerprints returns the identifiers used to recognize a jar against
+// upstream file indexes in a single read: the lowercase hex sha512 (Modrinth
+// keys files by sha1/sha512) and the CurseForge "fingerprint" (a MurmurHash2 of
+// the file with whitespace bytes stripped, seed 1). The file is read once and
+// fed to both; the murmur input must be buffered because MurmurHash2 needs the
+// stripped length up front.
+func FileFingerprints(base, userPath string) (sha512hex string, murmur2 uint32, err error) {
+	abs, err := ResolveExisting(base, userPath)
+	if err != nil {
+		return "", 0, err
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+
+	h := sha512.New()
+	stripped := make([]byte, 0, 1<<20)
+	buf := make([]byte, 64*1024)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			h.Write(chunk)
+			for _, b := range chunk {
+				// CurseForge strips tab/LF/CR/space before fingerprinting.
+				if b == 9 || b == 10 || b == 13 || b == 32 {
+					continue
+				}
+				stripped = append(stripped, b)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return "", 0, rerr
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), murmurHash2(stripped, 1), nil
+}
+
+// murmurHash2 is Austin Appleby's 32-bit MurmurHash2, the variant CurseForge
+// uses for file fingerprints (seed 1, over the whitespace-stripped bytes).
+func murmurHash2(data []byte, seed uint32) uint32 {
+	const m = 0x5bd1e995
+	const r = 24
+	length := len(data)
+	h := seed ^ uint32(length)
+
+	nblocks := length / 4
+	for i := 0; i < nblocks; i++ {
+		j := i * 4
+		k := uint32(data[j]) | uint32(data[j+1])<<8 | uint32(data[j+2])<<16 | uint32(data[j+3])<<24
+		k *= m
+		k ^= k >> r
+		k *= m
+		h *= m
+		h ^= k
+	}
+
+	tail := data[nblocks*4:]
+	switch len(tail) {
+	case 3:
+		h ^= uint32(tail[2]) << 16
+		fallthrough
+	case 2:
+		h ^= uint32(tail[1]) << 8
+		fallthrough
+	case 1:
+		h ^= uint32(tail[0])
+		h *= m
+	}
+
+	h ^= h >> 13
+	h *= m
+	h ^= h >> 15
+	return h
 }
 
 func IsDir(base, userPath string) (bool, error) {

@@ -63,6 +63,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 			r.Delete("/files", fh.Delete)
 			r.Post("/files/rename", fh.Rename)
 			r.Post("/files/mkdir", fh.Mkdir)
+			r.Post("/files/hashes", fh.Hashes)
 			r.Get("/files/download", fh.Download)
 			r.Post("/files/upload", fh.Upload)
 		})

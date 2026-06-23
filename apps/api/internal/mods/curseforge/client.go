@@ -20,6 +20,7 @@
 package curseforge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -194,6 +195,157 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		return c.fetchJSON(ctx, []string{c.coreURL}, path, q, true, out)
 	}
 	return c.fetchJSON(ctx, c.proxyURLs, path, q, false, out)
+}
+
+// post sends a JSON body to the Core API (keyed core, else key-less proxy) and
+// decodes the response, with the same retry/failover behavior as get. Used by
+// the fingerprint and bulk-mod endpoints, which are POST-only.
+func (c *Client) post(ctx context.Context, path string, body any, out any) error {
+	if !c.Enabled() {
+		return ErrDisabled
+	}
+	bases := c.proxyURLs
+	keyed := false
+	if c.keyed() {
+		bases = []string{c.coreURL}
+		keyed = true
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for _, base := range bases {
+		u := base + path
+		for attempt := 0; ; attempt++ {
+			retryable, err := c.doPostOnce(ctx, u, keyed, payload, out)
+			if err == nil {
+				return nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				return err
+			}
+			if !retryable || attempt+1 >= maxAttempts {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(c.retryDelay << attempt):
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("curseforge: no endpoint configured")
+	}
+	return lastErr
+}
+
+func (c *Client) doPostOnce(ctx context.Context, u string, keyed bool, payload []byte, out any) (retryable bool, err error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return false, err
+	}
+	if keyed {
+		req.Header.Set("x-api-key", c.currentKey())
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return true, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return retry, fmt.Errorf("curseforge returned %d%s", resp.StatusCode, errSnippet(snippet))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return true, fmt.Errorf("curseforge decode failed: %w", err)
+	}
+	return false, nil
+}
+
+// FingerprintMatch identifies a jar that exactly matches a CurseForge file by its
+// murmur2 fingerprint.
+type FingerprintMatch struct {
+	ModID       int
+	FileID      int
+	DisplayName string // the file's display name (often a version string)
+	FileName    string
+}
+
+// MatchFingerprints looks up CurseForge files by murmur2 fingerprint (the same
+// mechanism modpack launchers use to identify loose jars), returning a
+// fingerprint->match map for exact matches. Requires CurseForge to be enabled
+// (an API key or a POST-capable proxy); when it isn't, it returns no matches
+// rather than an error so recognition silently no-ops.
+func (c *Client) MatchFingerprints(ctx context.Context, fingerprints []uint32) (map[uint32]FingerprintMatch, error) {
+	if !c.Enabled() || len(fingerprints) == 0 {
+		return map[uint32]FingerprintMatch{}, nil
+	}
+	var raw struct {
+		Data struct {
+			ExactMatches []struct {
+				ID   int `json:"id"` // mod id
+				File struct {
+					ID              int    `json:"id"`
+					ModID           int    `json:"modId"`
+					DisplayName     string `json:"displayName"`
+					FileName        string `json:"fileName"`
+					FileFingerprint uint32 `json:"fileFingerprint"`
+				} `json:"file"`
+			} `json:"exactMatches"`
+		} `json:"data"`
+	}
+	if err := c.post(ctx, "/v1/fingerprints", map[string]any{"fingerprints": fingerprints}, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[uint32]FingerprintMatch, len(raw.Data.ExactMatches))
+	for _, m := range raw.Data.ExactMatches {
+		modID := m.File.ModID
+		if modID == 0 {
+			modID = m.ID
+		}
+		out[m.File.FileFingerprint] = FingerprintMatch{
+			ModID:       modID,
+			FileID:      m.File.ID,
+			DisplayName: m.File.DisplayName,
+			FileName:    m.File.FileName,
+		}
+	}
+	return out, nil
+}
+
+// GetModNames resolves CurseForge mod ids to their display names in one bulk call
+// (POST /v1/mods), used to label recognized mods with the project name rather
+// than a file's version string. Best-effort: unknown ids are simply absent.
+func (c *Client) GetModNames(ctx context.Context, ids []int) (map[int]string, error) {
+	if !c.Enabled() || len(ids) == 0 {
+		return map[int]string{}, nil
+	}
+	var raw struct {
+		Data []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := c.post(ctx, "/v1/mods", map[string]any{"modIds": ids}, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[int]string, len(raw.Data))
+	for _, m := range raw.Data {
+		out[m.ID] = m.Name
+	}
+	return out, nil
 }
 
 // getWeb calls the anonymous curseforge.com website API. No key needed, but

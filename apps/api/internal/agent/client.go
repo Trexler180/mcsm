@@ -337,6 +337,69 @@ func (c *Client) UploadFile(ctx context.Context, serverID, destDir, filename, lo
 	return nil
 }
 
+// FileEntry is one item in an agent directory listing (mirrors the agent's
+// files.Entry wire shape; only the fields the panel needs are decoded).
+type FileEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "file" | "dir"
+	Size int64  `json:"size"`
+}
+
+// FileListing is the agent's response for a directory listing.
+type FileListing struct {
+	Path    string      `json:"path"`
+	Entries []FileEntry `json:"entries"`
+}
+
+// ListFiles returns the agent's listing of one directory within the server
+// directory (server-relative path like "/mods"). The caller must have called
+// RegisterDir first so the agent knows the server's base path.
+func (c *Client) ListFiles(ctx context.Context, serverID, path string) (*FileListing, error) {
+	p := fmt.Sprintf("/agent/v1/servers/%s/files?path=%s", serverID, url.QueryEscape(path))
+	resp, err := c.do(ctx, http.MethodGet, p, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	var out FileListing
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// FileFingerprint identifies a jar against upstream indexes: SHA512 for Modrinth,
+// Murmur2 (CurseForge's whitespace-stripped MurmurHash2) for CurseForge.
+type FileFingerprint struct {
+	SHA512  string `json:"sha512"`
+	Murmur2 uint32 `json:"murmur2"`
+}
+
+// HashFiles asks the agent to fingerprint each given server-relative path,
+// returning a path->fingerprint map. Paths the agent couldn't read are omitted.
+// Hashing happens on the agent so jar bytes never cross the network.
+func (c *Client) HashFiles(ctx context.Context, serverID string, paths []string) (map[string]FileFingerprint, error) {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/files/hashes",
+		map[string]any{"paths": paths})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	var out struct {
+		Files map[string]FileFingerprint `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Files, nil
+}
+
 // DeleteFile removes a file in the server directory. A 404 is treated as
 // success — the file is already gone, which is what the caller wanted.
 func (c *Client) DeleteFile(ctx context.Context, serverID, path string) error {
