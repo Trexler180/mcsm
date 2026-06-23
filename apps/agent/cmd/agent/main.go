@@ -73,15 +73,6 @@ func main() {
 	mgr := process.NewManager()
 	collector := metrics.NewCollector()
 	serverRoot := defaultServerRoot()
-	if err := os.MkdirAll(serverRoot, 0755); err != nil {
-		log.Fatalf("create server root: %v", err)
-	}
-	if err := ensureWritableDir(serverRoot); err != nil {
-		log.Fatalf("server root is not writable: %v", err)
-	}
-	if err := ensureWritableDir(filepath.Join(serverRoot, "mcsm-backups")); err != nil {
-		log.Fatalf("backup root is not writable: %v", err)
-	}
 
 	router := agentapi.NewRouter(token, mgr, collector, serverRoot)
 
@@ -112,6 +103,15 @@ func main() {
 		}
 	}()
 
+	// Prepare the server root off the bind path. Creating a dir and probing it
+	// with a temp file is normally instant, but on a slow/removable disk — or
+	// when antivirus scans the freshly-created probe file — it can stall for a
+	// long time. Doing it synchronously before binding would (and did) leave the
+	// agent started-but-not-listening, looking like a hang. Binding first keeps
+	// the agent reachable regardless of disk latency; writability problems surface
+	// as warnings here and as clear errors on the operations that need the disk.
+	go ensureServerRoot(serverRoot)
+
 	<-stop
 	log.Println("shutting down agent...")
 
@@ -121,6 +121,24 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
+}
+
+// ensureServerRoot creates the server root and its backups dir and verifies they
+// are writable. Run in the background after the agent is already listening, so a
+// slow disk can't delay binding; failures are logged as warnings rather than
+// fatal, since the per-request file operations create directories on demand and
+// will report their own errors if the disk really is unusable.
+func ensureServerRoot(serverRoot string) {
+	if err := os.MkdirAll(serverRoot, 0755); err != nil {
+		log.Printf("warning: create server root %q: %v", serverRoot, err)
+		return
+	}
+	if err := ensureWritableDir(serverRoot); err != nil {
+		log.Printf("warning: server root is not writable: %v", err)
+	}
+	if err := ensureWritableDir(filepath.Join(serverRoot, "mcsm-backups")); err != nil {
+		log.Printf("warning: backup root is not writable: %v", err)
+	}
 }
 
 func defaultServerRoot() string {

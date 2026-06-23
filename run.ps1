@@ -80,14 +80,16 @@ function Resolve-LocalConnectHost {
 function Join-ProcessArguments {
     param([string[]]$Arguments)
 
-    $escaped = foreach ($argument in $Arguments) {
+    # Force an array so zero args (a bare binary command) yields "" rather than a
+    # null, and a single arg doesn't get char-split by [string]::Join.
+    $escaped = @(foreach ($argument in $Arguments) {
         if ($argument -match '[\s"]') {
             '"' + ($argument -replace '"', '\"') + '"'
         }
         else {
             $argument
         }
-    }
+    })
 
     [string]::Join(" ", $escaped)
 }
@@ -138,6 +140,31 @@ function Resolve-ProcessStartInfo {
     }
 }
 
+# Resolve-StartProcessArgs turns a command vector into a Start-Process FilePath +
+# ArgumentList, wrapping .cmd/.bat (via cmd.exe) and .ps1 (via PowerShell) the way
+# the OS requires when the shell isn't used.
+function Resolve-StartProcessArgs {
+    param([string]$Name, [string[]]$Arguments)
+
+    $commandInfo = Get-Command $Name -ErrorAction Stop
+    $commandPath = $commandInfo.Path
+    if (-not $commandPath) { $commandPath = $commandInfo.Source }
+    if (-not $commandPath) { $commandPath = $Name }
+
+    $extension = [System.IO.Path]::GetExtension($commandPath).ToLowerInvariant()
+    if ($extension -in @(".cmd", ".bat")) {
+        $cmd = $env:ComSpec
+        if (-not $cmd) { $cmd = "cmd.exe" }
+        return [pscustomobject]@{ FilePath = $cmd; ArgumentList = @("/d", "/s", "/c", $commandPath) + $Arguments }
+    }
+    if ($extension -eq ".ps1") {
+        $ps = (Get-Command "pwsh" -ErrorAction SilentlyContinue).Path
+        if (-not $ps) { $ps = (Get-Command "powershell" -ErrorAction Stop).Path }
+        return [pscustomobject]@{ FilePath = $ps; ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $commandPath) + $Arguments }
+    }
+    return [pscustomobject]@{ FilePath = $commandPath; ArgumentList = $Arguments }
+}
+
 function Start-DevProcess {
     param(
         [string]$Name,
@@ -150,68 +177,82 @@ function Start-DevProcess {
     if ($Command.Count -gt 1) {
         $arguments = $Command[1..($Command.Count - 1)]
     }
+    $resolved = Resolve-StartProcessArgs -Name $Command[0] -Arguments $arguments
 
-    $startInfo = Resolve-ProcessStartInfo -Name $Command[0] -Arguments $arguments
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo.FileName = $startInfo.FileName
-    $process.StartInfo.Arguments = $startInfo.Arguments
-    $process.StartInfo.WorkingDirectory = $WorkingDirectory
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    $process.StartInfo.CreateNoWindow = $true
+    # Capture child output to per-service files rather than in-process redirected
+    # pipes. The pipe + BeginOutputReadLine/Register-ObjectEvent approach
+    # intermittently wedged Go children before they could bind under restart churn
+    # (the child blocked on its first stdout write while the managed pipe wasn't
+    # being drained). Files have no such backpressure path — verified to start
+    # cleanly every time. Truncated on each (re)start; we tail them from offset 0.
+    $logDir = Join-Path $Root ".logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $outFile = Join-Path $logDir "$Name.out.log"
+    $errFile = Join-Path $logDir "$Name.err.log"
 
-    $processEnvironment = $process.StartInfo.Environment
-    if ($null -eq $processEnvironment) {
-        $processEnvironment = $process.StartInfo.EnvironmentVariables
-    }
-    if ($null -eq $processEnvironment) {
-        throw "Unable to configure environment for '$Name'."
-    }
+    # The child inherits the parent environment; apply this service's vars first.
+    # Starts are sequential, so later starts just overwrite earlier values.
     foreach ($key in $Environment.Keys) {
-        $processEnvironment[$key] = $Environment[$key]
+        Set-Item -Path ("Env:" + $key) -Value $Environment[$key]
     }
 
-    $eventPrefix = "ServerManager.$PID.$Name"
-    $outputEventId = "$eventPrefix.output"
-    $errorEventId = "$eventPrefix.error"
-    Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -SourceIdentifier $outputEventId | Out-Null
-    Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -SourceIdentifier $errorEventId | Out-Null
-
-    try {
-        [void]$process.Start()
-        $process.BeginOutputReadLine()
-        $process.BeginErrorReadLine()
+    $startParams = @{
+        FilePath               = $resolved.FilePath
+        WorkingDirectory       = $WorkingDirectory
+        RedirectStandardOutput = $outFile
+        RedirectStandardError  = $errFile
+        WindowStyle            = "Hidden"
+        PassThru               = $true
     }
-    catch {
-        Unregister-Event -SourceIdentifier $outputEventId -ErrorAction SilentlyContinue
-        Unregister-Event -SourceIdentifier $errorEventId -ErrorAction SilentlyContinue
-        throw
+    if ($resolved.ArgumentList.Count -gt 0) {
+        $startParams.ArgumentList = $resolved.ArgumentList
     }
+    $process = Start-Process @startParams
 
     [pscustomobject]@{
-        Name = $Name
-        Process = $process
+        Name             = $Name
+        Process          = $process
         WorkingDirectory = $WorkingDirectory
-        Environment = $Environment
-        Command = $Command
-        OutputEventId = $outputEventId
-        ErrorEventId = $errorEventId
-        ExitReported = $false
+        Environment      = $Environment
+        Command          = $Command
+        OutFile          = $outFile
+        ErrFile          = $errFile
+        OutOffset        = [long]0
+        ErrOffset        = [long]0
+        ExitReported     = $false
     }
 }
 
 function Receive-DevOutput {
     param([pscustomobject]$DevProcess)
 
-    foreach ($sourceIdentifier in @($DevProcess.OutputEventId, $DevProcess.ErrorEventId)) {
-        $events = @(Get-Event -SourceIdentifier $sourceIdentifier -ErrorAction SilentlyContinue)
-        foreach ($event in $events) {
-            $line = $event.SourceEventArgs.Data
-            if ($null -ne $line) {
-                Write-Host "[$($DevProcess.Name)] $line"
+    foreach ($spec in @(
+            @{ File = $DevProcess.OutFile; Key = "OutOffset" },
+            @{ File = $DevProcess.ErrFile; Key = "ErrOffset" }
+        )) {
+        $file = $spec.File
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { continue }
+        $fs = $null
+        try {
+            # Share ReadWrite so reading never blocks the child still writing.
+            $fs = [System.IO.File]::Open($file, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $offset = [long]$DevProcess.($spec.Key)
+            if ($fs.Length -lt $offset) { $offset = 0 } # file truncated on restart
+            if ($fs.Length -gt $offset) {
+                [void]$fs.Seek($offset, [System.IO.SeekOrigin]::Begin)
+                $reader = New-Object System.IO.StreamReader($fs)
+                $text = $reader.ReadToEnd()
+                $DevProcess.($spec.Key) = $fs.Length
+                $reader.Dispose()
+                $fs = $null
+                foreach ($line in ($text -split "`r?`n")) {
+                    if ($line -ne "") { Write-Host "[$($DevProcess.Name)] $line" }
+                }
             }
-            Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue
+        }
+        catch { }
+        finally {
+            if ($fs) { $fs.Dispose() }
         }
     }
 }
@@ -270,8 +311,6 @@ function Stop-DevProcess {
     }
 
     Receive-DevOutput -DevProcess $DevProcess
-    Unregister-Event -SourceIdentifier $DevProcess.OutputEventId -ErrorAction SilentlyContinue
-    Unregister-Event -SourceIdentifier $DevProcess.ErrorEventId -ErrorAction SilentlyContinue
 }
 
 function Stop-DevProcesses {
@@ -429,9 +468,11 @@ function Stop-ProcessTree {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-# Liveness tuning for the health watchdog below.
-$StartupGraceSeconds = 75   # allow `go run` compile + boot before declaring a hung start
-$LivenessWindowSeconds = 30 # a previously-healthy service may blip this long before recycling
+# Liveness tuning for the health watchdog below. Services run as prebuilt
+# binaries (see below), so a cold start is ~1-2s; the grace only needs to cover
+# boot, not compilation — keeping hung-start recovery fast.
+$StartupGraceSeconds = 20   # max time to become ready before a start is judged hung
+$LivenessWindowSeconds = 20 # a previously-healthy service may blip this long before recycling
 $ProbeIntervalSeconds = 3   # how often to poll each service's health endpoint
 
 # New-HealthState is the per-service supervisor record. Healthy/UnhealthySince/
@@ -474,6 +515,37 @@ function Test-DevHealth {
             return $true
         }
         return $false
+    }
+}
+
+# Build-GoService compiles a Go package to a fixed output path. `go build` writes
+# the binary atomically (temp + rename), so on a compile error the previous
+# working binary is left intact — the caller can keep running it. Returns whether
+# the build succeeded.
+function Build-GoService {
+    param(
+        [string]$Name,
+        [string]$Dir,
+        [string]$Package,
+        [string]$Output
+    )
+
+    Write-Host "[$Name] building $Package..."
+    Push-Location $Dir
+    try {
+        $buildOutput = & go build -o $Output $Package 2>&1
+        $ok = ($LASTEXITCODE -eq 0)
+        foreach ($line in $buildOutput) {
+            if ($line) { Write-Host "[$Name] $line" }
+        }
+        return $ok
+    }
+    catch {
+        Write-Host "[$Name] build error: $($_.Exception.Message)"
+        return $false
+    }
+    finally {
+        Pop-Location
     }
 }
 
@@ -564,9 +636,27 @@ Write-Host ""
 # Service definitions for the supervisor loop. Any service that exits — crash,
 # port conflict, compile error during a reload — is restarted automatically
 # with backoff, so updating the manager never requires stopping this script.
+# Compile the Go services to stable paths up front and run the resulting
+# binaries, rather than `go run` each launch. This makes restarts instant, avoids
+# the `go run` build-cache wedge after a hard kill, and — because the executable
+# path is now constant across runs — stops Windows Firewall from re-prompting to
+# allow network access every launch (its rules are keyed by exe path, and
+# `go run` produced a fresh temp path each time).
+$BinDir = Join-Path $Root ".bin"
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+$ServerExe = Join-Path $BinDir "mcsm-api.exe"
+$AgentExe = Join-Path $BinDir "mcsm-agent.exe"
+
+if (-not (Build-GoService -Name "api" -Dir $ApiDir -Package "./cmd/server" -Output $ServerExe)) {
+    throw "Failed to build the API server; fix the compile error above and re-run."
+}
+if (-not (Build-GoService -Name "agent" -Dir $AgentDir -Package "./cmd/agent" -Output $AgentExe)) {
+    throw "Failed to build the agent; fix the compile error above and re-run."
+}
+
 $specs = [ordered]@{
-    api   = @{ Dir = $ApiDir;   Env = $ApiEnv;   Command = @("go", "run", "./cmd/server") }
-    agent = @{ Dir = $AgentDir; Env = $AgentEnv; Command = @("go", "run", "./cmd/agent") }
+    api   = @{ Dir = $ApiDir;   Env = $ApiEnv;   Command = @($ServerExe) }
+    agent = @{ Dir = $AgentDir; Env = $AgentEnv; Command = @($AgentExe) }
     web   = @{ Dir = $WebDir;   Env = $WebEnv;   Command = @("pnpm", "dev", "--host", $BindHost, "--port", "$WebPort") }
 }
 $running = @{}
@@ -704,15 +794,24 @@ try {
                 $nextApiFingerprint = Get-DevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
                 if ($nextApiFingerprint -ne $apiFingerprint) {
                     $apiFingerprint = Get-StableDevSourceFingerprint -Path $ApiDir -Extensions $apiExtensions -FileNames $apiFileNames
-                    $running["api"] = Restart-DevProcess -DevProcess $running["api"]
-                    $health["api"] = New-HealthState
+                    # Stop first so the running exe is unlocked and can be replaced.
+                    Write-Host "[api] source changed; rebuilding..."
+                    Stop-DevProcess -DevProcess $running["api"]
+                    if (-not (Build-GoService -Name "api" -Dir $ApiDir -Package "./cmd/server" -Output $ServerExe)) {
+                        Write-Host "[api] build failed; restarting the previous build"
+                    }
+                    Start-Spec -Name "api"
                 }
 
                 $nextAgentFingerprint = Get-DevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
                 if ($nextAgentFingerprint -ne $agentFingerprint) {
                     $agentFingerprint = Get-StableDevSourceFingerprint -Path $AgentDir -Extensions $agentExtensions -FileNames $agentFileNames
-                    $running["agent"] = Restart-DevProcess -DevProcess $running["agent"]
-                    $health["agent"] = New-HealthState
+                    Write-Host "[agent] source changed; rebuilding..."
+                    Stop-DevProcess -DevProcess $running["agent"]
+                    if (-not (Build-GoService -Name "agent" -Dir $AgentDir -Package "./cmd/agent" -Output $AgentExe)) {
+                        Write-Host "[agent] build failed; restarting the previous build"
+                    }
+                    Start-Spec -Name "agent"
                 }
 
                 $nextWebDepsFingerprint = Get-WebDepsFingerprint -Path $WebDir
