@@ -58,3 +58,6 @@ redis-data/
 apps/web/tsconfig.tsbuildinfo
 .codex/
 .codex-go-cache*/
+
+# Local design/animation scratchpad (not part of the app build)
+/tools/
