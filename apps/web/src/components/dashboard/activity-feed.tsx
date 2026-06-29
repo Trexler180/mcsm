@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/time";
 import type { AuditEntry, LogEvent } from "@/lib/types";
 
 /**
- * Recent activity for the cockpit: the latest audit events, with the newest
+ * Recent activity for the overview: the latest audit events, with the newest
  * error-level log warnings called out at the top.
  */
 export function ActivityFeed({

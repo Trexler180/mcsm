@@ -28,7 +28,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'MCSM — Minecraft ops panel',
+        name: 'MCSM',
         short_name: 'MCSM',
         description: 'Mod-aware operations panel for Minecraft servers',
         theme_color: '#0f0f0f',

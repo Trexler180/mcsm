@@ -61,7 +61,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.Get("/minecraft/versions", mcH.Versions)
 			r.Get("/minecraft/loaders", mcH.LoaderVersions)
 
-			// Ops cockpit aggregate (scoped to the caller's servers)
+			// Overview aggregate (scoped to the caller's servers)
 			r.Get("/overview", overviewH.Overview)
 
 			// Nodes (admin only)

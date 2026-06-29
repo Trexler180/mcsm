@@ -86,7 +86,7 @@ func pollAll(ctx context.Context, s *store.Store) {
 		if desired != "" && desired != srv.Status {
 			// A server we believed was online going offline on its own — with no
 			// recent panel-initiated stop/restart/kill to explain it — is a crash.
-			// Record it as a first-class signal for the ops cockpit before we
+			// Record it as a first-class signal for the overview before we
 			// overwrite the status (after which the transition is no longer visible).
 			if srv.Status == "online" && desired == "offline" {
 				recent, _ := s.HasRecentLifecycleAction(ctx, srv.ID, crashGrace)
