@@ -16,6 +16,9 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
 	r.Use(middleware.SecurityHeaders)
+	// Cap non-multipart bodies (file-content writes, JSON) at 32 MiB; large file
+	// transfers use the multipart upload path, which streams to disk.
+	r.Use(middleware.MaxBodyBytes(32 << 20))
 	r.Use(middleware.Auth(token))
 
 	h := handlers.NewServerHandlers(mgr, serverRoot)
@@ -30,6 +33,8 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 		r.Get("/info", handlers.Info)
 		r.Get("/java", handlers.JavaInstallations)
 		r.Get("/metrics", mh.HostMetrics)
+		// Discover existing server directories on disk so the panel can import them.
+		r.Get("/import/scan", h.ScanImports)
 
 		r.Route("/servers/{id}", func(r chi.Router) {
 			r.Post("/start", h.Start)
@@ -52,6 +57,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 			r.Get("/players/bans", ph.Bans)
 			r.Post("/players/action", ph.Action)
 			r.Get("/players/{uuid}", ph.Detail)
+			r.Delete("/players/{uuid}", ph.Delete)
 
 			r.Get("/console", ch.Console)
 			r.Get("/metrics", mh.ServerMetrics)

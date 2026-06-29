@@ -14,7 +14,10 @@ function RootLayout() {
   }, [])
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && window.location.pathname !== '/login') {
+    // navigate() is basepath-aware; the guard must compare against the
+    // base-prefixed login path so it matches under a subpath deployment.
+    const loginPath = import.meta.env.BASE_URL + 'login'
+    if (!isLoading && !isAuthenticated && window.location.pathname !== loginPath) {
       navigate({ to: '/login' })
     }
   }, [isAuthenticated, isLoading])

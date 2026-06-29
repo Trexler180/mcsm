@@ -22,6 +22,27 @@ cd apps/agent && go build -o mcsm-agent ./cmd/agent
 cd apps/web   && pnpm install --frozen-lockfile && pnpm build
 ```
 
+### Web build options (subpath / reverse proxy)
+
+The web build honours two optional environment variables. Both default off, so
+local dev (`run.ps1` / `run.sh`) and a root-hosted deployment need neither.
+
+- `VITE_BASE` — base path the app is served from, with leading and trailing
+  slash. Set to e.g. `/dashboard/` to host the SPA under a subpath behind a
+  reverse proxy. This drives the asset base, the router `basepath`, the PWA
+  manifest `scope`/`start_url`, and base-path-aware login redirects.
+- `VITE_PWA_SELF_DESTROY=1` — emit a self-destroying service worker that
+  unregisters any previously-installed SW and clears its caches. Useful for
+  ephemeral/test deployments where stale PWA caches cause confusion.
+
+```bash
+# Example: build for hosting under https://host/dashboard
+VITE_BASE=/dashboard/ VITE_PWA_SELF_DESTROY=1 pnpm build
+```
+
+When hosting under a subpath, the API still serves `/api/v1` at the origin root,
+so proxy `/api/` to `:8081` (not `/dashboard/api/`).
+
 ## Run
 
 Run `mcsm-api` and `mcsm-agent` under whatever service manager the host uses
@@ -132,6 +153,66 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 ```
+
+## Hardening
+
+Before exposing the panel to the public internet:
+
+- **Keep the agent off the network.** The agent launches processes and reads and
+  writes the server filesystem, guarded only by `AGENT_TOKEN`. Keep
+  `AGENT_HOST=127.0.0.1` and firewall `:8090` to loopback. The agent now refuses
+  to bind a non-loopback address without TLS unless you set
+  `AGENT_ALLOW_INSECURE=1`; if you must run it across hosts, set
+  `AGENT_TLS_CERT`/`AGENT_TLS_KEY` instead and treat the token as a TLS-only
+  secret. Never port-forward `:8081` or `:8090` directly — only the reverse
+  proxy should face the internet.
+
+- **Set `APP_ORIGIN`** on the API to your panel's public URL (e.g.
+  `https://mc.example.com`). This pins the console/metrics WebSocket Origin
+  allowlist. Leave it unset only for local split-origin development.
+
+- **Set `TRUSTED_PROXIES`** to the reverse proxy's address(es) (IPs or CIDRs,
+  comma-separated) when the proxy is on a different host than the API. Forwarded
+  headers (`X-Forwarded-For`, `X-Forwarded-Proto`, …) are honored only from these
+  peers; everything else has them stripped, so client IPs in the audit log and
+  login throttle can't be spoofed. When unset it defaults to loopback only,
+  which is correct for a same-host proxy.
+
+- **Login throttling, rate limiting, and password policy are automatic.**
+  Repeated failed logins lock the source IP (and, briefly, the targeted account);
+  authenticated traffic is per-caller rate limited; passwords must be ≥10 chars.
+  No configuration needed.
+
+- **Optional MFA + session management** are available per-user under Settings →
+  Security (TOTP with recovery codes; review/revoke active sessions). Set
+  `APP_NAME` to control the label shown in authenticator apps.
+
+- **The bootstrap admin password is written to a file, not the logs.** On first
+  boot with no `ADMIN_PASSWORD`, the generated password is written to
+  `.mcsm-initial-admin-password` (mode 0600) beside the database. Log in, change
+  it, then delete the file.
+
+- **Stored agent tokens are encrypted at rest** using the app encryption key
+  (`APP_ENCRYPTION_KEY`, else the persisted key file beside the database). Set
+  `APP_ENCRYPTION_KEY` explicitly in production so the key never lives on disk.
+
+### Reverse-proxy security headers (recommended)
+
+The API sets a strict CSP and HSTS on its own JSON responses, but the SPA shell
+is served by the proxy — set its headers there. A starting point for the nginx
+`server` block:
+
+```nginx
+add_header X-Frame-Options DENY always;
+add_header X-Content-Type-Options nosniff always;
+add_header Referrer-Policy strict-origin-when-cross-origin always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header Content-Security-Policy "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" always;
+```
+
+Adjust `connect-src`/`img-src` if you front the API or mod-thumbnail CDNs from
+other origins. Do not put the full `script-src 'self'` policy in the bundled
+`index.html` — it would break the Vite dev server; it belongs at the proxy.
 
 ## State
 

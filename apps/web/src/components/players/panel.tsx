@@ -194,6 +194,7 @@ function PlayerRow({
   onAction,
   onOpen,
   onCopyUuid,
+  onDelete,
 }: {
   player: Player
   serverOnline: boolean
@@ -201,6 +202,7 @@ function PlayerRow({
   onAction: (kind: PlayerActionKind, player: Player) => void
   onOpen: (player: Player) => void
   onCopyUuid: (player: Player) => void
+  onDelete: (player: Player) => void
 }) {
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2/30">
@@ -236,6 +238,7 @@ function PlayerRow({
         onAction={(kind) => onAction(kind, player)}
         onOpen={() => onOpen(player)}
         onCopyUuid={player.uuid ? () => onCopyUuid(player) : undefined}
+        onDelete={() => onDelete(player)}
       />
     </div>
   )
@@ -474,6 +477,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
   const [addOpen, setAddOpen] = useState(false)
   const [confirm, setConfirm] = useState<{ kind: PlayerActionKind; player: Player } | null>(null)
   const [confirmReason, setConfirmReason] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Player | null>(null)
 
   const isOnline = status === 'online'
 
@@ -581,6 +585,20 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
       )
     },
     onError: (e: Error) => error('Action failed', e.message),
+  })
+
+  // Permanently removes a player's saved data files. Offline-only and keyed by
+  // UUID, so the menu item that triggers it is gated on both.
+  const deleteData = useMutation({
+    mutationFn: (player: Player) => api.players.remove(serverId, player.uuid!),
+    onSuccess: (_d, player) => {
+      qc.invalidateQueries({ queryKey: ['players', serverId] })
+      if (player.uuid) {
+        qc.invalidateQueries({ queryKey: ['player-detail', serverId, player.uuid] })
+      }
+      success(`Deleted ${player.name}`, 'Removed their saved data from the world')
+    },
+    onError: (e: Error) => error('Delete failed', e.message),
   })
 
   const applyAction = (
@@ -756,6 +774,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
                     onAction={requestAction}
                     onOpen={setDetailPlayer}
                     onCopyUuid={copyUuid}
+                    onDelete={setDeleteTarget}
                   />
                 ))}
               </>
@@ -785,6 +804,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
                         onAction={requestAction}
                         onOpen={setDetailPlayer}
                         onCopyUuid={copyUuid}
+                        onDelete={setDeleteTarget}
                       />
                     ))}
                     {offlinePlayers.length > pagedOffline.length && (
@@ -856,6 +876,21 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
           autoFocus
         />
       </ConfirmDialog>
+
+      {/* Delete saved data (permanent, offline-only) */}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteData.mutate(deleteTarget)
+          setDeleteTarget(null)
+        }}
+        title={deleteTarget ? `Delete ${deleteTarget.name}'s saved data?` : ''}
+        description="Permanently removes this player's playerdata, statistics, and advancements files from the world. This cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        loading={deleteData.isPending}
+      />
 
       <PlayerDetailDialog
         serverId={serverId}

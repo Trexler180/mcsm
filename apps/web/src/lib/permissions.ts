@@ -42,6 +42,7 @@ export const PERMISSION_MODEL: PermissionGroupDef[] = [
       { value: "players.kick", label: "Kick" },
       { value: "players.ban", label: "Ban / pardon (players & IPs)" },
       { value: "players.op", label: "Op / deop" },
+      { value: "players.delete", label: "Delete saved data" },
     ],
   },
   {

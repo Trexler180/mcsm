@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,20 @@ import (
 )
 
 var validRoles = map[string]bool{"admin": true, "operator": true, "user": true}
+
+// minPasswordLength is the floor for any password set through the API. Short of
+// a full policy engine, a length minimum is the single most effective control
+// against trivially guessable credentials on a publicly reachable panel.
+const minPasswordLength = 10
+
+// validatePassword enforces the minimum password policy, returning a
+// user-facing message when the password is unacceptable.
+func validatePassword(pw string) (string, bool) {
+	if len(pw) < minPasswordLength {
+		return fmt.Sprintf("password must be at least %d characters", minPasswordLength), false
+	}
+	return "", true
+}
 
 type UserHandlers struct {
 	store     *store.Store
@@ -42,6 +57,10 @@ func (h *UserHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "email and password required")
 		return
 	}
+	if msg, ok := validatePassword(body.Password); !ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if body.Role == "" {
 		body.Role = "user"
 	}
@@ -72,10 +91,21 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		DisplayName *string `json:"display_name"`
 		Role        *string `json:"role"`
 		Password    string  `json:"password"`
+		// DisableMFA lets an admin clear a locked-out user's second factor (e.g.
+		// lost authenticator with no recovery codes left). This route is admin-only.
+		DisableMFA bool `json:"disable_mfa"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
+	}
+
+	if body.DisableMFA {
+		if err := h.store.DisableUserTOTP(r.Context(), id); err != nil {
+			writeServerError(w, r, "admin disable mfa", err)
+			return
+		}
+		audit(h.store, r, "", "user.mfa_reset", map[string]any{"user_id": id})
 	}
 
 	role := existing.Role
@@ -109,6 +139,10 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Password != "" {
+		if msg, ok := validatePassword(body.Password); !ok {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		hash, err := auth.HashPassword(body.Password)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "password hashing failed")

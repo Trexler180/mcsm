@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,44 @@ func hintOf(plaintext string) string {
 	}
 	return plaintext[len(plaintext)-4:]
 }
+
+// encTokenPrefix marks a node token value as encrypted-at-rest, so legacy
+// plaintext rows (written before encryption, or by an encryption-disabled dev
+// instance) are distinguishable and read back transparently. They get encrypted
+// on the next write.
+const encTokenPrefix = "enc:v1:"
+
+// encryptAtRest returns the at-rest representation of a sensitive value: a
+// prefixed AES-GCM ciphertext when an encryption key is configured, or the raw
+// value when it isn't (dev/no-secret). Used for credentials we must store but
+// that a DB leak should not immediately expose — agent tokens, TOTP secrets.
+func (s *Store) encryptAtRest(v string) (string, error) {
+	if len(s.secretKey) == 0 {
+		return v, nil
+	}
+	enc, err := encryptSecret(s.secretKey, v)
+	if err != nil {
+		return "", err
+	}
+	return encTokenPrefix + enc, nil
+}
+
+// decryptAtRest reverses encryptAtRest, passing through any value without the
+// encrypted marker (legacy plaintext written before encryption was added).
+func (s *Store) decryptAtRest(stored string) (string, error) {
+	rest, ok := strings.CutPrefix(stored, encTokenPrefix)
+	if !ok {
+		return stored, nil
+	}
+	if len(s.secretKey) == 0 {
+		return "", errNoEncryptionKey
+	}
+	return decryptSecret(s.secretKey, rest)
+}
+
+// EncryptNodeToken / DecryptNodeToken encrypt agent tokens at rest.
+func (s *Store) EncryptNodeToken(token string) (string, error) { return s.encryptAtRest(token) }
+func (s *Store) DecryptNodeToken(stored string) (string, error) { return s.decryptAtRest(stored) }
 
 // SetSecret encrypts plaintext and upserts it under key. updatedBy is recorded
 // for the audit trail; pass "" when unknown.

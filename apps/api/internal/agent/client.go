@@ -97,6 +97,40 @@ func (c *Client) JavaInstallations(ctx context.Context) (map[string]any, error) 
 	return result, nil
 }
 
+// ImportCandidate is an existing server directory the agent found on disk, with
+// best-effort detected settings the panel pre-fills into the import dialog.
+type ImportCandidate struct {
+	Directory      string `json:"directory"`
+	AbsPath        string `json:"abs_path"`
+	Platform       string `json:"platform"`
+	MCVersion      string `json:"mc_version"`
+	JarFile        string `json:"jar_file"`
+	Port           int    `json:"port"`
+	HasWorld       bool   `json:"has_world"`
+	EULA           bool   `json:"eula_accepted"`
+	ModCount       int    `json:"mod_count"`
+	PluginCount    int    `json:"plugin_count"`
+	HasRuntimeFile bool   `json:"has_runtime_file"`
+}
+
+// ScanImports asks the agent for importable server directories under its server
+// root, each with detected settings. Read-only on the agent side.
+func (c *Client) ScanImports(ctx context.Context) ([]ImportCandidate, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/import/scan", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	var out []ImportCandidate
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) StartServer(ctx context.Context, serverID string, cfg map[string]any) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/start", cfg)
 	if err != nil {

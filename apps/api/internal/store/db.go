@@ -82,6 +82,7 @@ const (
 	ServerPermissionPlayersKick      ServerPermission = "players.kick"
 	ServerPermissionPlayersBan       ServerPermission = "players.ban"
 	ServerPermissionPlayersOp        ServerPermission = "players.op"
+	ServerPermissionPlayersDelete    ServerPermission = "players.delete"
 
 	ServerPermissionFilesRead   ServerPermission = "files.read"
 	ServerPermissionFilesWrite  ServerPermission = "files.write"
@@ -128,6 +129,7 @@ var serverPermissionLeaves = map[string][]string{
 	string(ServerPermissionPlayers): {
 		string(ServerPermissionPlayersWhitelist), string(ServerPermissionPlayersKick),
 		string(ServerPermissionPlayersBan), string(ServerPermissionPlayersOp),
+		string(ServerPermissionPlayersDelete),
 	},
 	string(ServerPermissionFiles): {
 		string(ServerPermissionFilesRead), string(ServerPermissionFilesWrite),
@@ -361,6 +363,31 @@ type ScheduledTask struct {
 	LastRun   *time.Time      `json:"last_run"`
 	NextRun   *time.Time      `json:"next_run"`
 	CreatedAt time.Time       `json:"created_at"`
+	// CreatedBy is the user who created the task; the scheduler re-checks that
+	// this user still holds the permission the action requires before each run.
+	// Nil for legacy tasks created before attribution existed.
+	CreatedBy *string `json:"created_by"`
+}
+
+// RequiredTaskPermission maps a scheduled-task action to the per-server
+// permission a user must hold to create or run it, so a task can never do more
+// than its creator could do by hand. The bool reports whether the action is
+// recognized at all.
+func RequiredTaskPermission(action string) (ServerPermission, bool) {
+	switch action {
+	case "command":
+		return ServerPermissionConsole, true
+	case "restart":
+		return ServerPermissionPowerRestart, true
+	case "stop":
+		return ServerPermissionPowerStop, true
+	case "backup":
+		return ServerPermissionBackupsCreate, true
+	case "mod_update":
+		return ServerPermissionModsUpdate, true
+	default:
+		return "", false
+	}
 }
 
 type RefreshToken struct {
@@ -593,12 +620,26 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 
 // ── Refresh Tokens ───────────────────────────────────────────────
 
-func (s *Store) CreateRefreshToken(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+// CreateRefreshToken stores a new session and returns its id. userAgent and ip
+// are recorded so the user can later identify the session; pass "" when unknown.
+func (s *Store) CreateRefreshToken(ctx context.Context, userID, tokenHash, userAgent, ip string, expiresAt time.Time) (string, error) {
+	id := uuid.NewString()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`,
-		uuid.NewString(), userID, tokenHash, expiresAt,
+		`INSERT INTO refresh_tokens (id, user_id, token_hash, user_agent, ip, last_used_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+		id, userID, tokenHash, nullIfEmpty(userAgent), nullIfEmpty(ip), expiresAt,
 	)
-	return err
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (s *Store) GetRefreshToken(ctx context.Context, tokenHash string) (*RefreshToken, error) {
@@ -638,10 +679,14 @@ func (s *Store) DeleteRefreshTokensForUser(ctx context.Context, userID string) e
 
 func (s *Store) CreateNode(ctx context.Context, n *Node, token string) (*Node, error) {
 	id := uuid.NewString()
-	_, err := s.db.ExecContext(ctx,
+	encToken, err := s.EncryptNodeToken(token)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO nodes (id, name, fqdn, port, scheme, token, location)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, n.Name, n.FQDN, n.Port, n.Scheme, token, n.Location,
+		id, n.Name, n.FQDN, n.Port, n.Scheme, encToken, n.Location,
 	)
 	if err != nil {
 		return nil, err
@@ -663,9 +708,13 @@ func (s *Store) EnsureNode(ctx context.Context, name, fqdn string, port int, sch
 	if err != nil {
 		return nil, err
 	}
+	encToken, err := s.EncryptNodeToken(token)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE nodes SET fqdn=?, port=?, scheme=?, token=? WHERE id=?`,
-		fqdn, port, scheme, token, id,
+		fqdn, port, scheme, encToken, id,
 	)
 	if err != nil {
 		return nil, err
@@ -682,7 +731,13 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("node not found")
 	}
-	return &n, err
+	if err != nil {
+		return nil, err
+	}
+	if n.Token, err = s.DecryptNodeToken(n.Token); err != nil {
+		return nil, err
+	}
+	return &n, nil
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
@@ -698,6 +753,11 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 		if err := rows.Scan(&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen); err != nil {
 			return nil, err
 		}
+		token, err := s.DecryptNodeToken(n.Token)
+		if err != nil {
+			return nil, err
+		}
+		n.Token = token
 		nodes = append(nodes, &n)
 	}
 	return nodes, rows.Err()
@@ -1325,7 +1385,7 @@ func (s *Store) CreateBackup(ctx context.Context, b *Backup) (*Backup, error) {
 
 func (s *Store) ListTasks(ctx context.Context, serverID string) ([]*ScheduledTask, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at
+		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at, created_by
 		 FROM scheduled_tasks WHERE server_id=? ORDER BY name`, serverID)
 	if err != nil {
 		return nil, err
@@ -1334,7 +1394,7 @@ func (s *Store) ListTasks(ctx context.Context, serverID string) ([]*ScheduledTas
 	var tasks []*ScheduledTask
 	for rows.Next() {
 		var t ScheduledTask
-		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt, &t.CreatedBy); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, &t)
@@ -1346,7 +1406,7 @@ func (s *Store) ListTasks(ctx context.Context, serverID string) ([]*ScheduledTas
 // scheduler uses this to (re)register cron entries.
 func (s *Store) ListAllEnabledTasks(ctx context.Context) ([]*ScheduledTask, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at
+		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at, created_by
 		 FROM scheduled_tasks WHERE enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1355,7 +1415,7 @@ func (s *Store) ListAllEnabledTasks(ctx context.Context) ([]*ScheduledTask, erro
 	var tasks []*ScheduledTask
 	for rows.Next() {
 		var t ScheduledTask
-		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt, &t.CreatedBy); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, &t)
@@ -1374,9 +1434,9 @@ func (s *Store) UpdateTaskLastRun(ctx context.Context, id string, lastRun time.T
 func (s *Store) GetTask(ctx context.Context, id string) (*ScheduledTask, error) {
 	var t ScheduledTask
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at
+		`SELECT id, server_id, name, cron_expr, action, payload, enabled, last_run, next_run, created_at, created_by
 		 FROM scheduled_tasks WHERE id=?`, id,
-	).Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt)
+	).Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt, &t.CreatedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("task not found")
 	}
@@ -1392,9 +1452,9 @@ func (s *Store) CreateTask(ctx context.Context, t *ScheduledTask) (*ScheduledTas
 		next = NextRunForCron(t.CronExpr, time.Now())
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO scheduled_tasks (id, server_id, name, cron_expr, action, payload, enabled, next_run)
-		 VALUES (?,?,?,?,?,?,?,?)`,
-		id, t.ServerID, t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next,
+		`INSERT INTO scheduled_tasks (id, server_id, name, cron_expr, action, payload, enabled, next_run, created_by)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		id, t.ServerID, t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next, t.CreatedBy,
 	)
 	if err != nil {
 		return nil, err
@@ -1410,8 +1470,8 @@ func (s *Store) UpdateTask(ctx context.Context, id string, t *ScheduledTask) err
 		next = NextRunForCron(t.CronExpr, time.Now())
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE scheduled_tasks SET name=?, cron_expr=?, action=?, payload=?, enabled=?, next_run=? WHERE id=?`,
-		t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next, id,
+		`UPDATE scheduled_tasks SET name=?, cron_expr=?, action=?, payload=?, enabled=?, next_run=?, created_by=? WHERE id=?`,
+		t.Name, t.CronExpr, t.Action, jsonRaw(t.Payload), t.Enabled, next, t.CreatedBy, id,
 	)
 	return err
 }

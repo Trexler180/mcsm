@@ -35,6 +35,7 @@ import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { ModDetailDialog } from "@/components/mods/detail";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
 import { api } from "@/lib/api";
+import { sanitizeSvg } from "@/lib/sanitize";
 import { useNotifications } from "@/store/notifications";
 import type {
   InstalledMod,
@@ -2351,10 +2352,10 @@ export function ModSearch({
                                 alt=""
                                 className="h-3.5 w-3.5 rounded-sm object-cover"
                               />
-                            ) : c.icon ? (
+                            ) : c.icon && sanitizeSvg(c.icon) ? (
                               <span
                                 className="h-3.5 w-3.5 inline-flex items-center justify-center [&_svg]:h-full [&_svg]:w-full"
-                                dangerouslySetInnerHTML={{ __html: c.icon }}
+                                dangerouslySetInnerHTML={{ __html: sanitizeSvg(c.icon) }}
                               />
                             ) : null}
                             {c.name}

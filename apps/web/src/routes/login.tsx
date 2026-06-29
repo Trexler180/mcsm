@@ -12,6 +12,9 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [mfaRequired, setMfaRequired] = useState(false)
+  const [useRecovery, setUseRecovery] = useState(false)
+  const [code, setCode] = useState('')
   const { login } = useAuthStore()
   const navigate = useNavigate()
 
@@ -20,7 +23,18 @@ function LoginPage() {
     setError('')
     setLoading(true)
     try {
-      await login(email, password)
+      const opts = mfaRequired
+        ? useRecovery
+          ? { recoveryCode: code }
+          : { totpCode: code }
+        : undefined
+      const res = await login(email, password, opts)
+      if (res.mfaRequired) {
+        // Password accepted; prompt for the second factor.
+        setMfaRequired(true)
+        setLoading(false)
+        return
+      }
       navigate({ to: '/' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
@@ -64,8 +78,39 @@ function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              disabled={mfaRequired}
             />
           </div>
+
+          {mfaRequired && (
+            <div className="space-y-1.5">
+              <Label htmlFor="code">
+                {useRecovery ? 'Recovery code' : 'Authentication code'}
+              </Label>
+              <Input
+                id="code"
+                inputMode={useRecovery ? 'text' : 'numeric'}
+                autoComplete="one-time-code"
+                placeholder={useRecovery ? 'xxxx-xxxx-xxxx-xxxx' : '123456'}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+                autoFocus
+              />
+              <button
+                type="button"
+                className="text-xs text-text-secondary hover:text-text-primary underline"
+                onClick={() => {
+                  setUseRecovery((v) => !v)
+                  setCode('')
+                }}
+              >
+                {useRecovery
+                  ? 'Use an authenticator code instead'
+                  : "Can't access your authenticator? Use a recovery code"}
+              </button>
+            </div>
+          )}
 
           {error && (
             <p className="text-sm text-red-400 bg-red-900/20 border border-red-800/50 rounded-md px-3 py-2">
@@ -74,7 +119,7 @@ function LoginPage() {
           )}
 
           <Button type="submit" className="w-full" loading={loading}>
-            Sign in
+            {mfaRequired ? 'Verify' : 'Sign in'}
           </Button>
         </form>
       </div>

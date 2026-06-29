@@ -67,3 +67,6 @@ apps/web/tsconfig.tsbuildinfo
 /.codex-bin/
 /.logs/
 /.bin/
+
+# Local Claude Code memory (machine-specific ops notes; never commit)
+/CLAUDE.local.md

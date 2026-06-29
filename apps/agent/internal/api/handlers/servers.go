@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,6 +22,42 @@ type ServerHandlers struct {
 
 func NewServerHandlers(mgr *process.Manager, serverRoot string) *ServerHandlers {
 	return &ServerHandlers{mgr: mgr, serverRoot: serverRoot}
+}
+
+// ScanImports lists existing server directories under the agent's server root
+// with best-effort detected settings, so the panel can adopt a server already on
+// disk. Read-only — it never touches the directories it reports.
+func (h *ServerHandlers) ScanImports(w http.ResponseWriter, r *http.Request) {
+	type candidate struct {
+		Directory string `json:"directory"`
+		AbsPath   string `json:"abs_path"`
+		install.Detection
+	}
+	out := []candidate{}
+	entries, err := os.ReadDir(h.serverRoot)
+	if err != nil {
+		writeJSON(w, http.StatusOK, out) // no root yet → nothing to import
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || name == "mcsm-backups" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Join(h.serverRoot, name))
+		if err != nil {
+			continue
+		}
+		if !install.LooksLikeServer(abs) {
+			continue
+		}
+		out = append(out, candidate{
+			Directory: name,
+			AbsPath:   abs,
+			Detection: install.Detect(abs),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +82,9 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	// Auto-fetch a server JAR (or run an installer) if the directory is empty.
 	// Detached context with a generous deadline so a slow Spigot BuildTools
 	// run (~5–10 min) or Forge/NeoForge installer doesn't get truncated.
-	if cfg.Platform != "" {
+	// Skipped for imported servers (NoInstall): their runtime is already on disk
+	// and must not be overwritten.
+	if cfg.Platform != "" && !cfg.NoInstall {
 		dlCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		err := install.EnsureRuntime(dlCtx, cfg.Directory, cfg.Platform, cfg.MCVersion, cfg.JavaBinary)
 		cancel()

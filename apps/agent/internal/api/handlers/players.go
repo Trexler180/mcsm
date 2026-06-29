@@ -46,6 +46,23 @@ func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+// Delete permanently removes a player's saved data files (playerdata .dat +
+// backup, stats, advancements) from the world. Offline-only; the manager rejects
+// the request while the server is running.
+func (h *PlayersHandlers) Delete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	uuid := chi.URLParam(r, "uuid")
+	if !process.ValidUUID(uuid) {
+		writeError(w, http.StatusBadRequest, "invalid player uuid")
+		return
+	}
+	if err := h.mgr.DeletePlayerData(id, uuid); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // Meta reports the server's Bedrock-bridge setup (Geyser/Floodgate install and
 // the Bedrock username prefix), letting the UI show that Bedrock players are
 // supported even when none are currently in the roster.

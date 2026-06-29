@@ -136,6 +136,29 @@ func (s *Scheduler) refresh(ctx context.Context) {
 	}
 }
 
+// creatorAuthorized reports whether the task's creator may still run its action
+// on the server. Legacy tasks (no creator recorded) are allowed; a deleted
+// creator is denied (their lookup fails). Global admins always pass; otherwise
+// the creator must hold the per-server permission the action maps to.
+func (s *Scheduler) creatorAuthorized(ctx context.Context, task *store.ScheduledTask, serverID string) bool {
+	if task.CreatedBy == nil {
+		return true
+	}
+	user, err := s.store.GetUserByID(ctx, *task.CreatedBy)
+	if err != nil {
+		return false
+	}
+	if user.Role == "admin" {
+		return true
+	}
+	needed, ok := store.RequiredTaskPermission(task.Action)
+	if !ok {
+		return false
+	}
+	allowed, err := s.store.UserHasServerPermission(ctx, *task.CreatedBy, serverID, needed)
+	return err == nil && allowed
+}
+
 func (s *Scheduler) runTask(task *store.ScheduledTask) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -159,6 +182,14 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 	srv, err := s.store.GetServer(ctx, task.ServerID)
 	if err != nil {
 		log.Printf("scheduler: task %s server lookup: %v", task.ID, err)
+		return
+	}
+
+	// Re-authorize at fire time: a task must never outlive its creator's ability
+	// to perform its action. If the creator was deleted or lost the permission the
+	// action requires, the task is skipped (not run with the server's authority).
+	if !s.creatorAuthorized(ctx, task, srv.ID) {
+		log.Printf("scheduler: task %q skipped — creator no longer authorized for %q", task.Name, task.Action)
 		return
 	}
 

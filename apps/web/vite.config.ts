@@ -9,6 +9,17 @@ const apiPort = process.env.VITE_API_PORT ?? '8081'
 const apiHost = process.env.VITE_API_HOST ?? '127.0.0.1'
 const webPort = Number(process.env.PORT ?? '3000')
 
+// Base path the app is served from. Defaults to root ('/') so local dev is
+// unaffected; set VITE_BASE=/dashboard/ at build time to host under a subpath
+// behind a reverse proxy. Must have a leading and trailing slash.
+const base = process.env.VITE_BASE ?? '/'
+
+// When set, emit a self-destroying service worker that unregisters any
+// previously-installed SW and clears its caches. Useful for ephemeral/test
+// deployments where stale PWA caches cause confusion. Off by default so normal
+// production builds keep the full PWA behaviour.
+const pwaSelfDestroy = process.env.VITE_PWA_SELF_DESTROY === '1'
+
 function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
   if (!res || res.destroyed) return
 
@@ -22,9 +33,11 @@ function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
 }
 
 export default defineConfig({
+  base,
   plugins: [
     react(),
     VitePWA({
+      selfDestroying: pwaSelfDestroy,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
@@ -34,13 +47,17 @@ export default defineConfig({
         theme_color: '#0f0f0f',
         background_color: '#0f0f0f',
         display: 'standalone',
-        start_url: '/',
-        scope: '/',
+        // Scope/start_url follow the base path so the installed PWA and the
+        // service worker are correctly bounded under a subpath deployment.
+        start_url: base,
+        scope: base,
         icons: [
-          { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          // Relative paths resolve against the manifest's own URL, so they
+          // stay correct whether served from '/' or a subpath like '/dashboard/'.
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
           {
-            src: '/pwa-maskable-512x512.png',
+            src: 'pwa-maskable-512x512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable',
@@ -51,7 +68,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         // The API (including WebSockets) must always hit the network; only
         // the app shell and static assets are precached.
-        navigateFallback: '/index.html',
+        navigateFallback: base + 'index.html',
         navigateFallbackDenylist: [/^\/api\//],
       },
     }),

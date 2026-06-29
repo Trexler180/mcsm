@@ -80,6 +80,11 @@ func TestIsPluginPlatform(t *testing.T) {
 }
 
 func TestDownloadVerifiesSHA(t *testing.T) {
+	// httptest binds loopback, which the SSRF dial guard blocks; relax it for the
+	// duration of this test.
+	allowLoopbackDownloads = true
+	defer func() { allowLoopbackDownloads = false }()
+
 	payload := []byte("fake-jar-bytes")
 	sum := sha256.Sum256(payload)
 	good := hex.EncodeToString(sum[:])

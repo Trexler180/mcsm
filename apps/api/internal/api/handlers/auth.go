@@ -14,12 +14,18 @@ import (
 )
 
 type AuthHandlers struct {
-	store     *store.Store
-	jwtSecret string
-	tickets   *auth.TicketStore
+	store        *store.Store
+	jwtSecret    string
+	tickets      *auth.TicketStore
+	ipThrottle   *auth.LoginThrottle
+	acctThrottle *auth.LoginThrottle
 }
 
 const refreshCookieName = "mcsm_refresh_token"
+
+// recoveryCodeCount is how many one-time recovery codes are issued when a user
+// enables MFA.
+const recoveryCodeCount = 10
 
 var refreshTokenTTL = 7 * 24 * time.Hour
 
@@ -29,43 +35,104 @@ var refreshTokenTTL = 7 * 24 * time.Hour
 const downloadTicketTTL = 30 * time.Second
 
 func NewAuthHandlers(s *store.Store, jwtSecret string, tickets *auth.TicketStore) *AuthHandlers {
-	return &AuthHandlers{store: s, jwtSecret: jwtSecret, tickets: tickets}
+	return &AuthHandlers{
+		store:        s,
+		jwtSecret:    jwtSecret,
+		tickets:      tickets,
+		ipThrottle:   auth.NewLoginThrottle(),
+		acctThrottle: auth.NewAccountThrottle(),
+	}
 }
 
 func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		TOTPCode     string `json:"totp_code"`
+		RecoveryCode string `json:"recovery_code"`
 	}
 	if err := decode(r, &body); err != nil || body.Email == "" || body.Password == "" {
 		writeError(w, http.StatusBadRequest, "email and password required")
 		return
 	}
 
+	// Brute-force defense: an aggressive per-IP lockout stops a single attacker,
+	// and a lenient short-window per-account lockout slows a distributed guess
+	// without letting anyone deny a real user access to their account for long.
+	ipKey := "ip:" + clientIP(r)
+	acctKey := "acct:" + strings.ToLower(strings.TrimSpace(body.Email))
+	if ok, retry := h.ipThrottle.Allowed(ipKey); !ok {
+		tooManyRequests(w, retry)
+		return
+	}
+	if ok, retry := h.acctThrottle.Allowed(acctKey); !ok {
+		tooManyRequests(w, retry)
+		return
+	}
+	failAuth := func() {
+		h.ipThrottle.Fail(ipKey)
+		h.acctThrottle.Fail(acctKey)
+	}
+
 	user, hash, err := h.store.GetUserByEmail(r.Context(), body.Email)
-	if err != nil || !auth.CheckPassword(hash, body.Password) {
+	if err != nil {
+		// Spend equivalent CPU on a missing account so response time can't be used
+		// to tell "no such user" from "wrong password".
+		auth.DummyCheck(body.Password)
+		failAuth()
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	if !auth.CheckPassword(hash, body.Password) {
+		failAuth()
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
+	// Second factor, when the account has TOTP enabled.
+	cfg, err := h.store.GetUserTOTP(r.Context(), user.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token error")
+		writeServerError(w, r, "login: totp lookup", err)
 		return
+	}
+	if cfg.Enabled {
+		switch {
+		case body.TOTPCode != "":
+			if !auth.ValidateTOTP(cfg.Secret, body.TOTPCode, time.Now()) {
+				failAuth()
+				writeError(w, http.StatusUnauthorized, "invalid authentication code")
+				return
+			}
+		case body.RecoveryCode != "":
+			ok, err := h.store.ConsumeRecoveryCode(r.Context(), user.ID, auth.NormalizeRecoveryCode(body.RecoveryCode))
+			if err != nil {
+				writeServerError(w, r, "login: recovery code", err)
+				return
+			}
+			if !ok {
+				failAuth()
+				writeError(w, http.StatusUnauthorized, "invalid recovery code")
+				return
+			}
+		default:
+			// Password is correct but a second factor is needed. This is the normal
+			// two-step handshake, not a failed attempt, so don't burn the throttle.
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":        "mfa_required",
+				"mfa_required": true,
+			})
+			return
+		}
 	}
 
-	refreshToken, tokenHash, err := generateRefreshToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token error")
-		return
-	}
+	h.ipThrottle.Reset(ipKey)
+	h.acctThrottle.Reset(acctKey)
 
-	expiresAt := time.Now().Add(refreshTokenTTL)
-	if err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, expiresAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "token storage error")
+	accessToken, err := h.startSession(w, r, user)
+	if err != nil {
+		writeServerError(w, r, "login: issue session", err)
 		return
 	}
-	setRefreshCookie(w, r, refreshToken, expiresAt)
 
 	_ = h.store.UpdateUserLastLogin(r.Context(), user.ID)
 	// Login is a public route (no JWT claims yet), so attribute directly.
@@ -75,6 +142,25 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		"access_token": accessToken,
 		"user":         user,
 	})
+}
+
+// startSession mints an access token, creates a new refresh-token session row
+// recording the caller's device, and sets the refresh cookie.
+func (h *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user *store.User) (string, error) {
+	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
+	if err != nil {
+		return "", err
+	}
+	refreshToken, tokenHash, err := generateRefreshToken()
+	if err != nil {
+		return "", err
+	}
+	expiresAt := time.Now().Add(refreshTokenTTL)
+	if _, err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, userAgent(r), clientIP(r), expiresAt); err != nil {
+		return "", err
+	}
+	setRefreshCookie(w, r, refreshToken, expiresAt)
+	return accessToken, nil
 }
 
 func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
@@ -97,28 +183,27 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.DeleteRefreshTokenByID(r.Context(), rt.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "token storage error")
-		return
-	}
-
 	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token error")
+		writeServerError(w, r, "refresh: token", err)
 		return
 	}
 
-	refreshToken, tokenHash, err := generateRefreshToken()
+	// Rotate the token in place: the session keeps its identity (and original
+	// created_at) across refreshes, so the sessions list shows one row per login
+	// rather than churning a new one every 15 minutes. A stolen-and-rotated token
+	// invalidates the victim's copy, which surfaces as a forced re-login.
+	newToken, newHash, err := generateRefreshToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token error")
+		writeServerError(w, r, "refresh: rotate", err)
 		return
 	}
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	if err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, expiresAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "token storage error")
+	if err := h.store.RotateRefreshToken(r.Context(), rt.ID, newHash, clientIP(r), userAgent(r), expiresAt); err != nil {
+		writeServerError(w, r, "refresh: store", err)
 		return
 	}
-	setRefreshCookie(w, r, refreshToken, expiresAt)
+	setRefreshCookie(w, r, newToken, expiresAt)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"access_token": accessToken,

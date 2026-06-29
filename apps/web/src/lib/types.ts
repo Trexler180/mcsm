@@ -30,6 +30,7 @@ export type ServerPermissionLeaf =
   | "players.kick"
   | "players.ban"
   | "players.op"
+  | "players.delete"
   | "files.read"
   | "files.write"
   | "files.delete"
@@ -675,8 +676,50 @@ export interface ScheduledTask {
 }
 
 export interface LoginResponse {
-  access_token: string;
-  user: User;
+  access_token?: string;
+  user?: User;
+  // Set when the password was accepted but a TOTP/recovery code is still needed.
+  mfa_required?: boolean;
+}
+
+export interface MfaStatus {
+  enabled: boolean;
+}
+
+export interface MfaSetup {
+  secret: string;
+  otpauth_url: string;
+}
+
+export interface MfaEnableResponse {
+  enabled: boolean;
+  recovery_codes: string[];
+}
+
+export interface Session {
+  id: string;
+  ip: string;
+  user_agent: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string;
+  current: boolean;
+}
+
+// ImportCandidate is an existing server directory on a node, with best-effort
+// detected settings, offered for adoption in the Add Server dialog.
+export interface ImportCandidate {
+  directory: string;
+  abs_path: string;
+  platform: string;
+  mc_version: string;
+  jar_file: string;
+  port: number;
+  has_world: boolean;
+  eula_accepted: boolean;
+  mod_count: number;
+  plugin_count: number;
+  has_runtime_file: boolean;
 }
 
 export interface TokenResponse {

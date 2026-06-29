@@ -62,9 +62,18 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
 
-      {/* User info */}
+      {/* User info — links to the account page (security + sessions). */}
       <div className="border-t border-border p-3 flex-shrink-0">
-        <div className="flex items-center gap-3 px-3 py-2 mb-1">
+        <Link
+          to="/account"
+          onClick={onNavigate}
+          className={clsx(
+            'flex items-center gap-3 px-3 py-2 mb-1 rounded-md transition-colors',
+            currentPath.startsWith('/account')
+              ? 'bg-accent/10'
+              : 'hover:bg-surface-2',
+          )}
+        >
           <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-bold text-accent">
               {user?.email?.[0]?.toUpperCase() ?? '?'}
@@ -74,7 +83,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <p className="text-xs font-medium text-text-primary truncate">{user?.email}</p>
             <p className="text-xs text-text-secondary capitalize">{user?.role}</p>
           </div>
-        </div>
+        </Link>
         <button
           onClick={() => {
             logout()
