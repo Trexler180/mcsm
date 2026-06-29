@@ -122,7 +122,7 @@ function ServerDetailPage() {
   const showConflict =
     conflict != null && conflict.detected_at !== dismissedConflict;
 
-  // Persist each newly detected conflict to the backend once, so the ops cockpit
+  // Persist each newly detected conflict to the backend once, so the overview
   // can surface unresolved conflicts across servers. The store de-dupes by
   // (server, summary) while a conflict is open; disabling the jars resolves it.
   const reportedConflict = useRef<number | null>(null);

@@ -32,7 +32,7 @@ interface PlayersPanelProps {
 const NAME_RE = /^[A-Za-z0-9_]{1,16}$/
 const OFFLINE_PAGE = 50
 
-type FilterKey = 'all' | 'online' | 'ops' | 'whitelisted' | 'banned' | 'bedrock'
+type FilterKey = 'all' | 'online' | 'operators' | 'whitelisted' | 'banned' | 'bedrock'
 type SortKey = 'recent' | 'name' | 'status'
 type PanelView = 'roster' | 'bans'
 
@@ -505,7 +505,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
     () => ({
       all: players.length,
       online: players.filter((p) => p.online).length,
-      ops: players.filter((p) => p.op).length,
+      operators: players.filter((p) => p.op).length,
       whitelisted: players.filter((p) => p.whitelisted).length,
       banned: players.filter((p) => p.banned).length,
       bedrock: players.filter((p) => p.bedrock).length,
@@ -520,7 +520,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
       switch (filter) {
         case 'online':
           return p.online
-        case 'ops':
+        case 'operators':
           return !!p.op
         case 'whitelisted':
           return !!p.whitelisted
@@ -626,7 +626,7 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
   const FILTERS: { key: FilterKey; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'online', label: 'Online' },
-    { key: 'ops', label: 'Ops' },
+    { key: 'operators', label: 'Operators' },
     { key: 'whitelisted', label: 'Whitelisted' },
     { key: 'banned', label: 'Banned' },
     // Only surface the Bedrock filter where it's relevant (Geyser installed or

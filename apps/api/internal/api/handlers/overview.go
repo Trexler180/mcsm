@@ -8,7 +8,7 @@ import (
 	"github.com/mcsm/api/internal/store"
 )
 
-// OverviewHandlers powers the ops-cockpit dashboard with a single aggregate
+// OverviewHandlers powers the overview dashboard with a single aggregate
 // endpoint, so the home screen makes one request instead of fanning out per
 // server. It deliberately uses only cheap DB-local signals (status, conflicts,
 // crashes, backups, node health, recent activity) — never per-mod live source
@@ -62,7 +62,7 @@ type overviewCounts struct {
 	OfflineNodes  int `json:"offline_nodes"`
 }
 
-// Overview assembles the cockpit payload. Non-admins only see their own servers;
+// Overview assembles the overview payload. Non-admins only see their own servers;
 // admins see everything. Node/activity/conflict feeds are scoped to that set.
 func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

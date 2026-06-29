@@ -406,7 +406,7 @@ export interface LogEvent {
   created_at: string;
 }
 
-// Ops-cockpit aggregate (GET /overview).
+// Overview aggregate (GET /overview).
 export interface OverviewServer {
   id: string;
   name: string;
