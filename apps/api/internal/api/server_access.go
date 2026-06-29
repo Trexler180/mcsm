@@ -69,6 +69,28 @@ func serverAccessGate(s *store.Store, allow func(r *http.Request, userID, server
 	}
 }
 
+// requireAdmin gates a route on the global admin role, read fresh from the DB on
+// every request. Unlike auth.AdminOnly (which trusts the role baked into the
+// 15-minute access token), this makes a demotion or deletion take effect
+// immediately, closing the window where a just-revoked admin keeps admin access.
+func requireAdmin(s *store.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := auth.ClaimsFrom(r.Context())
+			if claims == nil {
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			user, err := s.GetUserByID(r.Context(), claims.UserID)
+			if err != nil || user.Role != "admin" {
+				writeJSONError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

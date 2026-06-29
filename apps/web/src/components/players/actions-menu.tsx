@@ -10,6 +10,7 @@ import {
   UserX,
   Copy,
   Eye,
+  Trash2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { Player, PlayerActionKind } from '@/lib/types'
@@ -21,6 +22,8 @@ interface PlayerActionsMenuProps {
   onAction: (kind: PlayerActionKind) => void
   onOpen: () => void
   onCopyUuid?: () => void
+  // Permanently delete the player's saved data. Only rendered when supplied.
+  onDelete?: () => void
   trigger?: ReactNode
 }
 
@@ -67,6 +70,7 @@ export function PlayerActionsMenu({
   onAction,
   onOpen,
   onCopyUuid,
+  onDelete,
   trigger,
 }: PlayerActionsMenuProps) {
   const offlineHint = serverOnline ? undefined : 'offline edit'
@@ -171,6 +175,24 @@ export function PlayerActionsMenu({
               <DropdownMenu.Separator className="my-1 h-px bg-border/60" />
               <Item onSelect={onCopyUuid} icon={<Copy className="h-3.5 w-3.5" />}>
                 Copy UUID
+              </Item>
+            </>
+          )}
+
+          {onDelete && (
+            <>
+              <DropdownMenu.Separator className="my-1 h-px bg-border/60" />
+              <Item
+                onSelect={onDelete}
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                destructive
+                // Files are named by UUID, and a running server would rewrite the
+                // .dat on its next save — so only offer this for an identifiable
+                // player while the server is stopped.
+                disabled={!player.uuid || serverOnline}
+                hint={serverOnline ? 'server offline only' : undefined}
+              >
+                Delete saved data
               </Item>
             </>
           )}

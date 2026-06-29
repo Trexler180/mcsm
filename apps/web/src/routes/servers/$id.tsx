@@ -4,7 +4,7 @@ import {
   useParams,
   useNavigate,
 } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -126,6 +126,12 @@ function ServerDetailPage() {
   // can surface unresolved conflicts across servers. The store de-dupes by
   // (server, summary) while a conflict is open; disabling the jars resolves it.
   const reportedConflict = useRef<number | null>(null);
+  // Keep the active pill in view on the mobile tab strip when the section
+  // changes (e.g. via deep link or the dashboard quick-links).
+  const activeTabRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [tab]);
   useEffect(() => {
     if (!permissions) return;
     if (!allowedSectionValues.has(tab)) {
@@ -284,26 +290,49 @@ function ServerDetailPage() {
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
         <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-44 md:border-b-0 md:border-r md:p-3 lg:w-56">
-          {/* Mobile: a grouped picker so every section is reachable in one tap
-              instead of a long horizontal strip where most tabs scroll off. */}
-          <label className="md:hidden">
-            <span className="sr-only">Section</span>
-            <select
-              value={allowedSectionValues.has(tab) ? tab : "dashboard"}
-              onChange={(e) => setTab(e.target.value as ServerSection)}
-              className="h-10 w-full rounded-md border border-border bg-surface-2 px-3 text-sm text-text-primary"
-            >
-              {sectionGroups.map((g) => (
-                <optgroup key={g.group} label={g.group}>
-                  {g.items.map((section) => (
-                    <option key={section.value} value={section.value}>
-                      {section.label}
-                    </option>
-                  ))}
-                </optgroup>
+          {/* Mobile: a horizontally scrollable strip of visible tab pills (no
+              dropdown). Every section is a labelled, tappable button; groups are
+              separated by a thin divider, and the active tab auto-scrolls into
+              view. Swipe to reach sections past the edge. */}
+          <div
+            className="-mx-2 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:hidden"
+            role="tablist"
+            aria-label="Server sections"
+          >
+            <div className="flex w-max items-center gap-1.5">
+              {sectionGroups.map((g, gi) => (
+                <Fragment key={g.group}>
+                  {gi > 0 && (
+                    <span
+                      className="mx-0.5 h-5 w-px flex-shrink-0 bg-border"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {g.items.map((section) => {
+                    const Icon = section.icon;
+                    const active = tab === section.value;
+                    return (
+                      <button
+                        key={section.value}
+                        ref={active ? activeTabRef : undefined}
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setTab(section.value)}
+                        className={`flex h-9 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm transition-colors ${
+                          active
+                            ? "bg-accent/15 text-text-primary"
+                            : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4 flex-shrink-0" />
+                        {section.label}
+                      </button>
+                    );
+                  })}
+                </Fragment>
               ))}
-            </select>
-          </label>
+            </div>
+          </div>
 
           {/* Desktop: vertical sidebar nav, grouped with section headings. */}
           <nav className="hidden md:flex md:flex-col md:gap-1">

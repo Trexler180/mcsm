@@ -10,6 +10,7 @@ import { Route as nodesRoute } from './routes/nodes'
 import { Route as usersRoute } from './routes/users'
 import { Route as auditRoute } from './routes/audit'
 import { Route as settingsRoute } from './routes/settings'
+import { Route as accountRoute } from './routes/account'
 
 export const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -21,4 +22,5 @@ export const routeTree = rootRoute.addChildren([
   usersRoute,
   auditRoute,
   settingsRoute,
+  accountRoute,
 ])

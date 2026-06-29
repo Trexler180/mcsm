@@ -30,6 +30,17 @@ import { useAuthStore } from "@/store/auth";
 import { useNotifications } from "@/store/notifications";
 import type { Server as ServerType, ServerStatus } from "@/lib/types";
 
+const PLATFORMS = [
+  "vanilla",
+  "paper",
+  "purpur",
+  "fabric",
+  "forge",
+  "neoforge",
+  "quilt",
+  "spigot",
+];
+
 function CreateServerDialog({
   open,
   onClose,
@@ -45,6 +56,9 @@ function CreateServerDialog({
     enabled: open,
   });
 
+  // "new" provisions a fresh runtime; "import" adopts an existing directory and
+  // runs it as-is without touching its files.
+  const [mode, setMode] = useState<"new" | "import">("new");
   const [form, setForm] = useState({
     name: "",
     node_id: "",
@@ -54,6 +68,15 @@ function CreateServerDialog({
     port: "25565",
     ram_mb_max: "2048",
   });
+  const [selectedDir, setSelectedDir] = useState("");
+  const [jarFile, setJarFile] = useState("");
+
+  const { data: candidates = [], isFetching: scanning } = useQuery({
+    queryKey: ["import-candidates", form.node_id],
+    queryFn: () => api.servers.importCandidates(form.node_id),
+    enabled: open && mode === "import" && !!form.node_id,
+  });
+  const selected = candidates.find((c) => c.directory === selectedDir);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -61,13 +84,24 @@ function CreateServerDialog({
         ...form,
         port: Number(form.port),
         ram_mb_max: Number(form.ram_mb_max),
+        ...(mode === "import"
+          ? {
+              import_existing: true,
+              jar_file: jarFile,
+              directory_path: selectedDir,
+            }
+          : {}),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["servers"] });
-      success("Server created");
+      success(mode === "import" ? "Server imported" : "Server created");
       onClose();
     },
-    onError: (e: Error) => error("Failed to create server", e.message),
+    onError: (e: Error) =>
+      error(
+        mode === "import" ? "Failed to import server" : "Failed to create server",
+        e.message,
+      ),
   });
 
   const f =
@@ -75,29 +109,74 @@ function CreateServerDialog({
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
       setForm((p) => ({ ...p, [k]: e.target.value }));
 
+  // Picking a directory pre-fills the form from what the agent detected; every
+  // field stays editable so the user can correct a wrong guess.
+  const pickDirectory = (dir: string) => {
+    setSelectedDir(dir);
+    const c = candidates.find((x) => x.directory === dir);
+    if (!c) {
+      setJarFile("");
+      return;
+    }
+    setJarFile(c.jar_file);
+    setForm((p) => ({
+      ...p,
+      name: p.name || c.directory,
+      directory_path: c.directory,
+      platform: c.platform || p.platform,
+      mc_version: c.mc_version || p.mc_version,
+      port: c.port ? String(c.port) : p.port,
+    }));
+  };
+
+  const switchMode = (next: "new" | "import") => {
+    setMode(next);
+    setSelectedDir("");
+    setJarFile("");
+  };
+
+  const canSubmit =
+    !!form.name.trim() &&
+    !!form.node_id &&
+    (mode === "new" || !!selectedDir);
+
+  const tabClass = (active: boolean) =>
+    `flex-1 h-9 rounded-md text-sm font-medium transition-colors ${
+      active
+        ? "bg-accent text-black"
+        : "text-text-secondary hover:text-text-primary"
+    }`;
+
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title="Create Server"
+      title="Add Server"
       className="max-w-lg"
     >
       <div className="space-y-4">
+        <div className="flex gap-1 rounded-lg border border-border bg-surface-2 p-1">
+          <button className={tabClass(mode === "new")} onClick={() => switchMode("new")}>
+            New server
+          </button>
+          <button
+            className={tabClass(mode === "import")}
+            onClick={() => switchMode("import")}
+          >
+            Import existing
+          </button>
+        </div>
+
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5 col-span-2">
-            <Label>Name</Label>
-            <Input
-              placeholder="My Server"
-              value={form.name}
-              onChange={f("name")}
-            />
-          </div>
           <div className="space-y-1.5 col-span-2">
             <Label>Node</Label>
             <select
               className="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
               value={form.node_id}
-              onChange={f("node_id")}
+              onChange={(e) => {
+                setForm((p) => ({ ...p, node_id: e.target.value }));
+                setSelectedDir("");
+              }}
             >
               <option value="">Select a node…</option>
               {nodes.map((n) => (
@@ -107,14 +186,76 @@ function CreateServerDialog({
               ))}
             </select>
           </div>
+
+          {mode === "import" && (
+            <div className="space-y-1.5 col-span-2">
+              <Label>Existing server directory</Label>
+              {!form.node_id ? (
+                <p className="text-sm text-text-secondary">
+                  Select a node first to scan for servers.
+                </p>
+              ) : scanning ? (
+                <p className="text-sm text-text-secondary">Scanning…</p>
+              ) : candidates.length === 0 ? (
+                <p className="text-sm text-text-secondary">
+                  No unmanaged server directories found in SERVER_ROOT on this
+                  node.
+                </p>
+              ) : (
+                <select
+                  className="flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+                  value={selectedDir}
+                  onChange={(e) => pickDirectory(e.target.value)}
+                >
+                  <option value="">Select a directory…</option>
+                  {candidates.map((c) => (
+                    <option key={c.directory} value={c.directory}>
+                      {c.directory}
+                      {c.platform ? ` — ${c.platform}` : ""}
+                      {c.mc_version ? ` ${c.mc_version}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selected && (
+                <div className="flex flex-wrap gap-1.5 pt-1 text-xs">
+                  <Chip>{selected.jar_file || "no jar found"}</Chip>
+                  {selected.has_world && <Chip>world present</Chip>}
+                  {selected.mod_count > 0 && <Chip>{selected.mod_count} mods</Chip>}
+                  {selected.plugin_count > 0 && (
+                    <Chip>{selected.plugin_count} plugins</Chip>
+                  )}
+                  <Chip>
+                    EULA {selected.eula_accepted ? "accepted" : "not accepted"}
+                  </Chip>
+                </div>
+              )}
+              <p className="text-xs text-text-secondary pt-1">
+                Files are left untouched — the server runs exactly what's on disk.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-1.5 col-span-2">
-            <Label>Server Directory</Label>
+            <Label>Name</Label>
             <Input
-              placeholder="Leave blank for SERVER_ROOT/name"
-              value={form.directory_path}
-              onChange={f("directory_path")}
+              placeholder="My Server"
+              value={form.name}
+              onChange={f("name")}
             />
           </div>
+
+          {mode === "new" && (
+            <div className="space-y-1.5 col-span-2">
+              <Label>Server Directory</Label>
+              <Input
+                placeholder="Leave blank for SERVER_ROOT/name"
+                value={form.directory_path}
+                onChange={f("directory_path")}
+              />
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label>Platform</Label>
             <select
@@ -122,16 +263,7 @@ function CreateServerDialog({
               value={form.platform}
               onChange={f("platform")}
             >
-              {[
-                "vanilla",
-                "paper",
-                "purpur",
-                "fabric",
-                "forge",
-                "neoforge",
-                "quilt",
-                "spigot",
-              ].map((p) => (
+              {PLATFORMS.map((p) => (
                 <option key={p} value={p}>
                   {p}
                 </option>
@@ -166,12 +298,21 @@ function CreateServerDialog({
           <Button
             onClick={() => mutation.mutate()}
             loading={mutation.isPending}
+            disabled={!canSubmit}
           >
-            Create Server
+            {mode === "import" ? "Import Server" : "Create Server"}
           </Button>
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded border border-border bg-surface-2 px-1.5 py-0.5 text-text-secondary">
+      {children}
+    </span>
   );
 }
 

@@ -163,7 +163,15 @@ func main() {
 		}
 		log.Printf("created admin user: %s", u.Email)
 		if generatedPassword {
-			log.Printf("generated initial admin password for %s: %s", u.Email, adminPassword)
+			// Don't print the bootstrap password to the logs (they get shipped,
+			// aggregated, and retained). Write it to a 0600 file beside the DB and
+			// tell the operator where to find it; they delete it after first login.
+			pwPath := filepath.Join(filepath.Dir(dbPath), ".mcsm-initial-admin-password")
+			if err := os.WriteFile(pwPath, []byte(adminPassword+"\n"), 0600); err != nil {
+				log.Printf("could not write initial admin password file (%v); password is: %s", err, adminPassword)
+			} else {
+				log.Printf("generated initial admin password for %s; written to %s (delete after first login)", u.Email, pwPath)
+			}
 		}
 	} else if os.Getenv("RESET_ADMIN_PASSWORD") == "1" {
 		if adminPassword == "" {
@@ -202,11 +210,14 @@ func main() {
 	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater)
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", host, port),
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:    fmt.Sprintf("%s:%s", host, port),
+		Handler: router,
+		ReadTimeout: 30 * time.Second,
+		// Bound how long a client may take to send request headers, so a slow-drip
+		// (slowloris) connection can't hold a goroutine open indefinitely.
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Background workers: cron-driven scheduled tasks + status synchronization

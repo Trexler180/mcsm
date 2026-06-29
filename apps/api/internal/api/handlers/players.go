@@ -73,6 +73,12 @@ func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 	h.proxy(w, r, "/players/"+chi.URLParam(r, "uuid"))
 }
 
+// Delete proxies removal of a player's saved data files (gated on players.delete
+// by the router). The agent rejects it while the server is running.
+func (h *PlayersHandlers) Delete(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players/"+chi.URLParam(r, "uuid"))
+}
+
 // Meta proxies the server's Bedrock-bridge info (Geyser/Floodgate install +
 // username prefix).
 func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {

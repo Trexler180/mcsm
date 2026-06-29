@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -70,6 +71,20 @@ func main() {
 		host = "127.0.0.1"
 	}
 
+	certFile := os.Getenv("AGENT_TLS_CERT")
+	keyFile := os.Getenv("AGENT_TLS_KEY")
+	tlsEnabled := certFile != "" && keyFile != ""
+
+	// The agent is an RCE surface (it launches processes and reads/writes the
+	// server filesystem) protected only by a bearer token. Binding it to a public
+	// interface in plaintext would expose that token — and everything it guards —
+	// to network sniffing. Refuse such a bind unless TLS is configured or the
+	// operator explicitly accepts the risk (e.g. an already-encrypted overlay
+	// network). Loopback binds and dev mode are always allowed.
+	if !isLoopbackHost(host) && !tlsEnabled && os.Getenv("AGENT_ALLOW_INSECURE") != "1" && !isDevMode() {
+		log.Fatalf("refusing to bind agent to non-loopback %q without TLS: set AGENT_TLS_CERT/AGENT_TLS_KEY, bind AGENT_HOST=127.0.0.1, or set AGENT_ALLOW_INSECURE=1 to override", host)
+	}
+
 	mgr := process.NewManager()
 	collector := metrics.NewCollector()
 	serverRoot := defaultServerRoot()
@@ -77,15 +92,13 @@ func main() {
 	router := agentapi.NewRouter(token, mgr, collector, serverRoot)
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", host, port),
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0, // streaming responses need no write timeout
-		IdleTimeout:  120 * time.Second,
+		Addr:              fmt.Sprintf("%s:%s", host, port),
+		Handler:           router,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, // bound slow-header (slowloris) connections
+		WriteTimeout:      0,                // streaming responses need no write timeout
+		IdleTimeout:       120 * time.Second,
 	}
-
-	certFile := os.Getenv("AGENT_TLS_CERT")
-	keyFile := os.Getenv("AGENT_TLS_KEY")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -154,6 +167,18 @@ func defaultServerRoot() string {
 func isDevMode() bool {
 	v := strings.ToLower(os.Getenv("APP_ENV"))
 	return os.Getenv("MCSM_DEV_MODE") == "1" || v == "dev" || v == "development" || v == "local"
+}
+
+// isLoopbackHost reports whether the bind host is the loopback interface, where
+// the agent is only reachable from the same machine and plaintext is safe.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func ensureWritableDir(dir string) error {

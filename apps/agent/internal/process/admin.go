@@ -75,6 +75,46 @@ func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason, ip string, l
 	}
 }
 
+// DeletePlayerData permanently removes a player's saved data from disk: their
+// playerdata .dat (and Minecraft's .dat_old backup), their stats file, and their
+// advancements file. It is offline-only — a running server keeps the player in
+// memory and would rewrite the .dat on the next save, so deleting underneath it
+// is racy and ineffective. Each removal is idempotent: a missing file is not an
+// error, so a partially-present player still cleans up.
+func (m *Manager) DeletePlayerData(id, uuid string) error {
+	if !ValidUUID(uuid) {
+		return fmt.Errorf("invalid player uuid")
+	}
+	switch m.Status(id).Status {
+	case StatusOnline, StatusStarting:
+		return fmt.Errorf("server must be offline to delete player data")
+	}
+
+	dir, ok := m.GetDir(id)
+	if !ok {
+		return fmt.Errorf("server directory not registered")
+	}
+
+	var targets []string
+	if pd := playerDataDir(dir); pd != "" {
+		targets = append(targets, filepath.Join(pd, uuid+".dat"), filepath.Join(pd, uuid+".dat_old"))
+	}
+	if sd := statsDir(dir); sd != "" {
+		targets = append(targets, filepath.Join(sd, uuid+".json"))
+	}
+	if ad := advancementsDir(dir); ad != "" {
+		targets = append(targets, filepath.Join(ad, uuid+".json"))
+	}
+
+	for _, path := range targets {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	m.dropRosterCache(id)
+	return nil
+}
+
 // applyIPAction adds or removes a banned-ips.json entry. Online it runs the
 // server's ban-ip/pardon-ip console commands; offline it edits the file. ban-ip
 // may target a raw address or an online player's name (the server resolves the

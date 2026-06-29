@@ -69,6 +69,10 @@ type StartConfig struct {
 	// directory is empty (paper, purpur, vanilla supported).
 	Platform  string `json:"platform,omitempty"`
 	MCVersion string `json:"mc_version,omitempty"`
+	// NoInstall is set for imported servers: the directory already holds the
+	// user's own runtime, so the agent must run it as-is and never auto-download
+	// or run an installer over it.
+	NoInstall bool `json:"no_install,omitempty"`
 }
 
 type ConsoleEvent struct {
@@ -146,6 +150,14 @@ func (inst *Instance) start() error {
 	if javaPath == "" {
 		javaPath = "java"
 	}
+	// Defense in depth: the panel already restricts who can set java_binary, but
+	// the agent independently refuses to launch anything that isn't a Java
+	// executable, so a bad value can never turn this into "run an arbitrary
+	// program". The basename must be java/javaw (optionally .exe); the path itself
+	// is otherwise unrestricted so any real JDK location still works.
+	if !isJavaBinary(javaPath) {
+		return fmt.Errorf("java_binary must be a java executable, got %q", javaPath)
+	}
 
 	args := make([]string, 0, len(cfg.JVMArgs)+8+len(cfg.StartArgs))
 	args = append(args, cfg.JVMArgs...)
@@ -213,6 +225,15 @@ func (inst *Instance) start() error {
 	go inst.waitExit()
 
 	return nil
+}
+
+// isJavaBinary reports whether path names a Java launcher (java / javaw, with an
+// optional .exe). It only inspects the basename, so any directory is allowed —
+// the point is to reject non-Java executables, not to constrain install paths.
+func isJavaBinary(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	base = strings.TrimSuffix(base, ".exe")
+	return base == "java" || base == "javaw"
 }
 
 func (inst *Instance) pipeStream(r io.Reader, stream string) {

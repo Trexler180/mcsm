@@ -187,6 +187,53 @@ func TestApplyOfflineActionRoundTrip(t *testing.T) {
 	_ = banPath
 }
 
+func TestDeletePlayerData(t *testing.T) {
+	dir := t.TempDir()
+	uuid := "11111111-2222-3333-4444-555555555555"
+	datPath := filepath.Join(dir, "world", "playerdata", uuid+".dat")
+	oldPath := filepath.Join(dir, "world", "playerdata", uuid+".dat_old")
+	statsPath := filepath.Join(dir, "world", "stats", uuid+".json")
+	advPath := filepath.Join(dir, "world", "advancements", uuid+".json")
+	for _, p := range []string{datPath, oldPath, statsPath, advPath} {
+		writeFile(t, p, "x")
+	}
+	// A second player's files must be left untouched.
+	other := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	otherDat := filepath.Join(dir, "world", "playerdata", other+".dat")
+	writeFile(t, otherDat, "x")
+
+	m := NewManager()
+	const id = "srv1"
+	m.RegisterDir(id, dir)
+
+	if err := m.DeletePlayerData(id, uuid); err != nil {
+		t.Fatalf("DeletePlayerData: %v", err)
+	}
+	for _, p := range []string{datPath, oldPath, statsPath, advPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s should be gone, stat err = %v", p, err)
+		}
+	}
+	if _, err := os.Stat(otherDat); err != nil {
+		t.Fatalf("other player's file should remain: %v", err)
+	}
+
+	// Idempotent: deleting again (now that the files are gone) still succeeds.
+	if err := m.DeletePlayerData(id, uuid); err != nil {
+		t.Fatalf("second DeletePlayerData should be a no-op: %v", err)
+	}
+
+	// Invalid UUID is rejected.
+	if err := m.DeletePlayerData(id, "../escape"); err == nil {
+		t.Fatal("invalid uuid should error")
+	}
+
+	// Unregistered server is rejected.
+	if err := m.DeletePlayerData("missing", uuid); err == nil {
+		t.Fatal("unregistered server should error")
+	}
+}
+
 func TestParseItemsLegacyAndModern(t *testing.T) {
 	legacy := map[string]any{
 		"id":    "minecraft:diamond_sword",

@@ -7,10 +7,15 @@ import type {
   AgentStatus,
   GameVersion,
   GeyserInfo,
+  ImportCandidate,
   InstalledMod,
   IntegrationMeta,
   JavaInfo,
   LoginResponse,
+  MfaStatus,
+  MfaSetup,
+  MfaEnableResponse,
+  Session,
   LogEvent,
   ModCategory,
   Overview,
@@ -111,8 +116,11 @@ async function retryAfterRefresh<T>(
 
 function redirectToLogin() {
   clearStoredSession();
-  if (window.location.pathname !== "/login") {
-    window.location.href = "/login";
+  // Respect the app's base path (Vite BASE_URL, e.g. "/dashboard/") so a hard
+  // redirect lands on the real login route under a subpath deployment, not root.
+  const loginPath = import.meta.env.BASE_URL + "login";
+  if (window.location.pathname !== loginPath) {
+    window.location.href = loginPath;
   }
 }
 
@@ -287,9 +295,44 @@ const del = <T>(path: string) => request<T>("DELETE", path);
 
 export const api = {
   auth: {
-    login: (email: string, password: string) =>
-      post<LoginResponse>("/auth/login", { email, password }),
+    login: async (
+      email: string,
+      password: string,
+      opts?: { totpCode?: string; recoveryCode?: string },
+    ): Promise<LoginResponse> => {
+      try {
+        return await post<LoginResponse>("/auth/login", {
+          email,
+          password,
+          totp_code: opts?.totpCode,
+          recovery_code: opts?.recoveryCode,
+        });
+      } catch (e) {
+        // The server signals "password ok, second factor needed" as a 401 whose
+        // error is "mfa_required"; surface that as a normal result, not a failure.
+        if (e instanceof Error && e.message === "mfa_required") {
+          return { mfa_required: true };
+        }
+        throw e;
+      }
+    },
     logout: () => post("/auth/logout"),
+    mfa: {
+      status: () => get<MfaStatus>("/auth/mfa"),
+      setup: () => post<MfaSetup>("/auth/mfa/setup"),
+      enable: (code: string) =>
+        post<MfaEnableResponse>("/auth/mfa/enable", { code }),
+      disable: (opts: { code?: string; recoveryCode?: string }) =>
+        post<MfaStatus>("/auth/mfa/disable", {
+          code: opts.code,
+          recovery_code: opts.recoveryCode,
+        }),
+    },
+    sessions: {
+      list: () => get<Session[]>("/auth/sessions"),
+      revoke: (id: string) => del(`/auth/sessions/${id}`),
+      revokeOthers: () => post("/auth/sessions/revoke-others"),
+    },
     refresh: async () => {
       const accessToken = await refreshAccessToken();
       if (!accessToken) throw new Error("Unauthorized");
@@ -307,7 +350,14 @@ export const api = {
   servers: {
     list: (signal?: AbortSignal) => get<Server[]>("/servers", signal),
     get: (id: string) => get<Server>(`/servers/${id}`),
-    create: (data: Partial<Server>) => post<Server>("/servers", data),
+    create: (
+      data: Partial<Server> & { import_existing?: boolean; jar_file?: string },
+    ) => post<Server>("/servers", data),
+    // Existing server directories on a node not yet managed by the panel.
+    importCandidates: (nodeId: string) =>
+      get<ImportCandidate[]>(
+        `/servers/import-candidates?node_id=${encodeURIComponent(nodeId)}`,
+      ),
     update: (id: string, data: Partial<Server>) =>
       put<Server>(`/servers/${id}`, data),
     delete: (id: string, opts?: { files?: boolean; backups?: boolean }) => {
@@ -497,6 +547,10 @@ export const api = {
         level?: number;
       },
     ) => post(`/servers/${serverId}/players/action`, body),
+    // Permanently deletes a player's saved data files (offline-only; enforced by
+    // the agent). Keyed by UUID since the files are named by it.
+    remove: (serverId: string, uuid: string) =>
+      del(`/servers/${serverId}/players/${uuid}`),
   },
 
   mods: {

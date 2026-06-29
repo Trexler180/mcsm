@@ -33,6 +33,22 @@ func statsDir(dir string) string {
 	return ""
 }
 
+// advancementsDir finds the world's per-player advancements directory, handling
+// the classic (<world>/advancements) and newer (<world>/players/advancements)
+// layouts. Returns "" when neither exists.
+func advancementsDir(dir string) string {
+	world := filepath.Join(dir, levelName(dir))
+	for _, candidate := range []string{
+		filepath.Join(world, "players", "advancements"),
+		filepath.Join(world, "advancements"),
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // readPlayerStats parses one player's stats file. A missing or unreadable file
 // yields nil (the player simply has no stats to show), never an error.
 func readPlayerStats(dir, uuid string) *PlayerStats {

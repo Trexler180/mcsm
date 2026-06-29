@@ -3,10 +3,12 @@ package modrinth
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,9 +32,23 @@ type Client struct {
 }
 
 func New() *Client {
+	// The download client refuses connections to non-public IPs (SSRF guard); see
+	// guardedDialControl. JSON calls go through the default client — those URLs are
+	// fixed (api.modrinth.com), not caller-supplied.
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: guardedDialControl}
 	return &Client{
 		http: &http.Client{Timeout: 15 * time.Second},
-		dl:   &http.Client{Timeout: 15 * time.Minute},
+		dl: &http.Client{
+			Timeout: 15 * time.Minute,
+			Transport: &http.Transport{
+				DialContext:           dialer.DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          10,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		},
 	}
 }
 
@@ -423,6 +439,19 @@ func IsPluginPlatform(platform string) bool {
 // Streaming + temp-file avoids holding multi-MB jars in memory (A5) and lets us
 // reject a corrupt/MITM download before it ever reaches the agent (A4).
 func (c *Client) Download(ctx context.Context, fileURL, wantSHA string) (path string, err error) {
+	return c.DownloadVerified(ctx, fileURL, wantSHA, "", 0)
+}
+
+// DownloadVerified is Download with the full set of guards, used by callers
+// (notably modpack installs) that have a SHA512 from a manifest and want a size
+// ceiling. Any non-empty want* hash is enforced; maxBytes > 0 caps the bytes
+// written so an oversized or zip-bomb manifest entry can't fill the disk. The URL
+// is validated and the connection is refused to non-public addresses.
+func (c *Client) DownloadVerified(ctx context.Context, fileURL, wantSHA256, wantSHA512 string, maxBytes int64) (path string, err error) {
+	if err := validateDownloadURL(fileURL); err != nil {
+		return "", err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return "", err
@@ -449,15 +478,31 @@ func (c *Client) Download(ctx context.Context, fileURL, wantSHA string) (path st
 		}
 	}()
 
-	h := sha256.New()
-	if _, err = io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+	var src io.Reader = resp.Body
+	if maxBytes > 0 {
+		// +1 byte so a file exactly at the cap passes but one over it is detectable.
+		src = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	h256 := sha256.New()
+	h512 := sha512.New()
+	written, err := io.Copy(io.MultiWriter(tmp, h256, h512), src)
+	if err != nil {
+		return "", err
+	}
+	if maxBytes > 0 && written > maxBytes {
+		err = fmt.Errorf("download exceeds %d-byte limit", maxBytes)
 		return "", err
 	}
 
-	if wantSHA != "" {
-		got := hex.EncodeToString(h.Sum(nil))
-		if !strings.EqualFold(got, wantSHA) {
-			err = fmt.Errorf("sha256 mismatch: want %s got %s", wantSHA, got)
+	if wantSHA256 != "" {
+		if got := hex.EncodeToString(h256.Sum(nil)); !strings.EqualFold(got, wantSHA256) {
+			err = fmt.Errorf("sha256 mismatch: want %s got %s", wantSHA256, got)
+			return "", err
+		}
+	}
+	if wantSHA512 != "" {
+		if got := hex.EncodeToString(h512.Sum(nil)); !strings.EqualFold(got, wantSHA512) {
+			err = fmt.Errorf("sha512 mismatch: want %s got %s", wantSHA512, got)
 			return "", err
 		}
 	}

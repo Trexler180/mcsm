@@ -1,7 +1,20 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, Link2, RotateCcw, Save, Trash2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  Copy,
+  FolderTree,
+  Image as ImageIcon,
+  Link2,
+  MemoryStick,
+  Network,
+  RotateCcw,
+  Save,
+  Server as ServerIcon,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -1642,6 +1655,277 @@ function ResourcePackOptionsPanel({ server }: { server: Server }) {
   );
 }
 
+// ── Server icon ─────────────────────────────────────────────────────────────
+
+// Minecraft loads a 64x64 server-icon.png from the server root at startup and
+// shows it next to the MOTD in the multiplayer list. We let users drop in any
+// image and normalise it to that exact format client-side, so they never have
+// to resize or convert anything by hand.
+const SERVER_ICON_PATH = "/server-icon.png";
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Center-crop to a square and scale to 64x64, then encode as PNG. Returns the
+// raw bytes ready to write to server-icon.png.
+async function imageFileToServerIcon(file: File): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas is not supported in this browser");
+    const side = Math.min(bitmap.width, bitmap.height);
+    const sx = (bitmap.width - side) / 2;
+    const sy = (bitmap.height - side) / 2;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, 64, 64);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
+    if (!blob) throw new Error("Failed to encode the icon as PNG");
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    bitmap.close();
+  }
+}
+
+function IconPreview({
+  src,
+  loading,
+  className,
+}: {
+  src?: string;
+  loading?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`flex flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-2 ${
+        className ?? "h-16 w-16"
+      }`}
+    >
+      {loading ? (
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      ) : src ? (
+        <img
+          src={src}
+          alt="Server icon"
+          className="h-full w-full [image-rendering:pixelated]"
+        />
+      ) : (
+        <ImageIcon className="h-6 w-6 text-text-secondary" />
+      )}
+    </div>
+  );
+}
+
+function ServerIconOptionsPanel({ server }: { server: Server }) {
+  const qc = useQueryClient();
+  const { success, error } = useNotifications();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const iconQuery = useQuery({
+    queryKey: ["server-icon", server.id],
+    queryFn: async () => {
+      const bytes = await api.files.readBytes(server.id, SERVER_ICON_PATH);
+      return blobToDataUrl(new Blob([bytes as BlobPart], { type: "image/png" }));
+    },
+    retry: false,
+    staleTime: 0,
+  });
+  const hasIcon = !!iconQuery.data;
+
+  // The active world is whatever level-name points at (default "world"); its
+  // map render lives at <world>/icon.png. We surface it as a one-click source so
+  // users can adopt the auto-generated world icon instead of uploading one.
+  const levelNameQuery = useQuery({
+    queryKey: ["file-content", server.id, "/server.properties"],
+    queryFn: () => api.files.readContent(server.id, "/server.properties"),
+    retry: false,
+  });
+  const worldName =
+    parseProperties(levelNameQuery.data ?? "")["level-name"]?.trim() || "world";
+  const worldIconPath = `/${worldName}/icon.png`;
+
+  const worldIconQuery = useQuery({
+    queryKey: ["world-icon", server.id, worldIconPath],
+    queryFn: async () => {
+      const bytes = await api.files.readBytes(server.id, worldIconPath);
+      return blobToDataUrl(new Blob([bytes as BlobPart], { type: "image/png" }));
+    },
+    retry: false,
+    staleTime: 0,
+  });
+  const hasWorldIcon = !!worldIconQuery.data;
+
+  const restartHint =
+    server.status === "online"
+      ? "Restart the Minecraft server to refresh the icon players see."
+      : undefined;
+
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!file.type.startsWith("image/")) {
+        throw new Error("Choose an image file (PNG, JPG, GIF, …).");
+      }
+      const bytes = await imageFileToServerIcon(file);
+      await api.files.writeBytes(server.id, SERVER_ICON_PATH, bytes);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["server-icon", server.id] });
+      success("Server icon updated", restartHint);
+    },
+    onError: (e: Error) => error("Upload failed", e.message),
+  });
+
+  // Copy the world's icon.png onto server-icon.png. The world icon is already a
+  // valid 64×64 PNG, so we copy the bytes verbatim rather than re-encoding.
+  const useWorldIconMutation = useMutation({
+    mutationFn: async () => {
+      const bytes = await api.files.readBytes(server.id, worldIconPath);
+      await api.files.writeBytes(server.id, SERVER_ICON_PATH, bytes);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["server-icon", server.id] });
+      success("Using world icon", restartHint);
+    },
+    onError: (e: Error) => error("Failed to apply world icon", e.message),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: () => api.files.delete(server.id, SERVER_ICON_PATH),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["server-icon", server.id] });
+      success("Server icon removed", restartHint);
+    },
+    onError: (e: Error) => error("Remove failed", e.message),
+  });
+
+  const busy =
+    uploadMutation.isPending ||
+    useWorldIconMutation.isPending ||
+    removeMutation.isPending;
+
+  return (
+    <Panel
+      title="Server Icon"
+      description="The 64×64 icon shown next to your server in the multiplayer list. Use the world's own icon or upload a custom image."
+      actions={
+        hasIcon ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => removeMutation.mutate()}
+            loading={removeMutation.isPending}
+            disabled={busy}
+          >
+            {!removeMutation.isPending && <Trash2 className="h-3.5 w-3.5" />}
+            Remove
+          </Button>
+        ) : undefined
+      }
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) uploadMutation.mutate(file);
+        }}
+      />
+
+      <div className="space-y-5">
+        {/* Current icon */}
+        <div className="flex items-center gap-4">
+          <IconPreview src={iconQuery.data} loading={iconQuery.isLoading} />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-text-primary">Current icon</p>
+            <p className="text-sm text-text-secondary">
+              {hasIcon
+                ? "Saved as server-icon.png in the server root."
+                : "No server icon set yet — pick a source below."}
+            </p>
+          </div>
+        </div>
+
+        {/* Sources */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {/* World icon */}
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-2/40 p-4">
+            <div className="flex items-center gap-3">
+              <IconPreview
+                src={worldIconQuery.data}
+                loading={worldIconQuery.isLoading}
+                className="h-12 w-12"
+              />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-text-primary">
+                  World icon
+                </p>
+                <p className="truncate text-xs text-text-secondary">
+                  {hasWorldIcon
+                    ? `From ${worldName}/icon.png`
+                    : `No icon.png in ${worldName}`}
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => useWorldIconMutation.mutate()}
+              loading={useWorldIconMutation.isPending}
+              disabled={!hasWorldIcon || busy}
+            >
+              Use world icon
+            </Button>
+          </div>
+
+          {/* Custom upload */}
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-2/40 p-4">
+            <div className="flex items-center gap-3">
+              <IconPreview className="h-12 w-12" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-text-primary">
+                  Custom image
+                </p>
+                <p className="truncate text-xs text-text-secondary">
+                  Any image, auto-cropped to 64×64
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => fileInputRef.current?.click()}
+              loading={uploadMutation.isPending}
+              disabled={busy}
+            >
+              {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
+              {hasIcon ? "Upload new" : "Upload"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+// A small accented section heading — an icon chip plus an uppercase label — so
+// each group of fields gets a visual anchor instead of a bare bold line.
 function PanelOptionsPanel({ server }: { server: Server }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
@@ -1701,81 +1985,159 @@ function PanelOptionsPanel({ server }: { server: Server }) {
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((p) => ({ ...p, [k]: e.target.value }));
 
+  // Drive the footer's state copy + Save button so the panel reacts to edits
+  // instead of offering an always-on, always-identical "Save Changes".
+  const dirty =
+    form.name !== server.name ||
+    form.description !== (server.description ?? "") ||
+    form.directory_path !== server.directory_path ||
+    form.port !== String(server.port) ||
+    form.ram_mb_max !== String(server.ram_mb_max) ||
+    form.ram_mb_min !== String(server.ram_mb_min);
+
+  const inputLife = "hover:border-border-hover";
+
   return (
     <>
-      <Panel
-        title="Panel Options"
-        description="Settings stored in the control panel database."
-      >
-        <div className="space-y-4 max-w-lg">
-          <h3 className="text-sm font-semibold text-text-primary">General</h3>
-          <div className="space-y-1.5">
-            <Label>Name</Label>
-            <Input value={form.name} onChange={f("name")} />
+      <section className="overflow-hidden rounded-lg border border-border bg-surface">
+        {/* Header — a small accent icon chip gives the card a face without
+            eating a full title bar. */}
+        <div className="flex items-center gap-2.5 border-b border-border bg-surface-2/40 px-3.5 py-2.5">
+          <div className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md border border-accent/20 bg-accent/10 text-accent">
+            <ServerIcon className="h-4 w-4" />
           </div>
-          <div className="space-y-1.5">
-            <Label>Description</Label>
-            <Input
-              value={form.description}
-              onChange={f("description")}
-              placeholder="Optional…"
-            />
+          <h2 className="text-sm font-semibold text-text-primary">
+            Panel Options
+          </h2>
+          <span className="truncate text-xs text-text-secondary">
+            — name, location & resources
+          </span>
+        </div>
+
+        <div className="space-y-3.5 p-3.5">
+          {/* Identity */}
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Display name</Label>
+                <Input
+                  value={form.name}
+                  onChange={f("name")}
+                  className={inputLife}
+                  placeholder="My Survival Server"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Description</Label>
+                <Input
+                  value={form.description}
+                  onChange={f("description")}
+                  placeholder="Optional note…"
+                  className={inputLife}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="flex items-center gap-1.5">
+                <FolderTree className="h-3.5 w-3.5 text-text-secondary" />
+                Server directory
+              </Label>
+              <Input
+                value={form.directory_path}
+                onChange={f("directory_path")}
+                className={`font-mono ${inputLife}`}
+                placeholder="E:/mc-test"
+              />
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label>Server Directory</Label>
-            <Input
-              value={form.directory_path}
-              onChange={f("directory_path")}
-              className="font-mono"
-              placeholder="E:/mc-test"
-            />
+
+          {/* Resources */}
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-3 gap-2.5">
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1.5">
+                  <Network className="h-3.5 w-3.5 text-text-secondary" />
+                  Port
+                </Label>
+                <Input
+                  type="number"
+                  value={form.port}
+                  onChange={f("port")}
+                  className={inputLife}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1.5">
+                  <MemoryStick className="h-3.5 w-3.5 text-text-secondary" />
+                  Max RAM
+                </Label>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    value={form.ram_mb_max}
+                    onChange={f("ram_mb_max")}
+                    className={`pr-10 ${inputLife}`}
+                  />
+                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-secondary">
+                    MB
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1.5">
+                  <MemoryStick className="h-3.5 w-3.5 text-text-secondary" />
+                  Min RAM
+                </Label>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    value={form.ram_mb_min}
+                    onChange={f("ram_mb_min")}
+                    className={`pr-10 ${inputLife}`}
+                  />
+                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-secondary">
+                    MB
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold text-text-primary">Resources</h3>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Port</Label>
-              <Input type="number" value={form.port} onChange={f("port")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Max RAM (MB)</Label>
-              <Input
-                type="number"
-                value={form.ram_mb_max}
-                onChange={f("ram_mb_max")}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Min RAM (MB)</Label>
-              <Input
-                type="number"
-                value={form.ram_mb_min}
-                onChange={f("ram_mb_min")}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-3">
+        {/* Footer save bar — reflects whether there's anything to save. */}
+        <div className="flex items-center justify-between gap-3 border-t border-border bg-surface-2/30 px-3.5 py-2">
+          <span className="text-xs text-text-secondary">
+            {dirty ? "Unsaved changes" : "All changes saved"}
+          </span>
           <Button
+            size="sm"
             onClick={() => updateMutation.mutate()}
             loading={updateMutation.isPending}
+            disabled={!dirty}
           >
-            Save Changes
+            {!updateMutation.isPending && <Save className="h-3.5 w-3.5" />}
+            {dirty ? "Save" : "Saved"}
           </Button>
         </div>
-      </Panel>
+      </section>
 
-      <div className="border-t border-border pt-6 space-y-3">
-        <h3 className="text-sm font-semibold text-red-400">Danger Zone</h3>
-        <p className="text-sm text-text-secondary">
-          Deleting a server removes it from the panel. By default the files on
-          the node are kept — tick the options below to also wipe them from disk.
-        </p>
-        <Button variant="destructive" size="sm" onClick={openDelete}>
-          <Trash2 className="h-3.5 w-3.5" /> Delete Server
+      {/* Danger zone — a compact red-tinted strip so it reads as its own place
+          without claiming a full card. */}
+      <div className="flex items-center gap-3 rounded-lg border border-red-900/40 bg-red-950/10 px-3.5 py-2.5">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-400" />
+        <div className="min-w-0 flex-1">
+          <span className="text-sm font-medium text-red-400">Delete server</span>
+          <span className="ml-2 text-xs text-text-secondary">
+            Files on the node are kept unless you wipe them.
+          </span>
+        </div>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={openDelete}
+          className="flex-shrink-0"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete
         </Button>
       </div>
 
@@ -1821,6 +2183,7 @@ function PanelOptionsPanel({ server }: { server: Server }) {
 export function OptionsTab({ server }: { server: Server }) {
   return (
     <div className="max-w-3xl space-y-5">
+      <ServerIconOptionsPanel server={server} />
       <ResourcePackOptionsPanel server={server} />
       <PanelOptionsPanel server={server} />
     </div>

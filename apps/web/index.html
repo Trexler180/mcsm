@@ -2,6 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Baseline CSP safe for both the Vite dev server and a production build:
+      blocks plugin/object execution and <base> hijacking. A full policy that
+      also constrains script-src/connect-src belongs at the reverse proxy that
+      serves this bundle in production (it would break Vite HMR if set here);
+      see docs/deployment.md.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="object-src 'none'; base-uri 'self'"
+    />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"

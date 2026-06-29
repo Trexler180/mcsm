@@ -2,11 +2,13 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/mcsm/api/internal/api/handlers"
 	apimw "github.com/mcsm/api/internal/api/middleware"
+	"github.com/mcsm/api/internal/api/ws"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/migrate"
@@ -14,10 +16,23 @@ import (
 )
 
 func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine) http.Handler {
+	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
+	// top of the single-use ticket auth). APP_ORIGIN unset => any origin, which
+	// keeps local dev working; production sets it to the panel's URL.
+	if origin := os.Getenv("APP_ORIGIN"); origin != "" {
+		ws.SetAllowedOrigins([]string{origin})
+	}
+
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
+	// Strip spoofable X-Forwarded-* from untrusted peers before RealIP consumes
+	// them, so client IPs in audit logs and login throttling can't be forged.
+	r.Use(apimw.TrustedProxy(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
 	r.Use(chimw.RealIP)
 	r.Use(apimw.SecurityHeaders)
+	// Cap non-multipart request bodies at 8 MiB; uploads use the multipart path,
+	// which is proxied straight to the agent.
+	r.Use(apimw.MaxBodyBytes(8 << 20))
 	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 
@@ -39,6 +54,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	mcH := handlers.NewMinecraftHandlers()
 	settingsH := handlers.NewSettingsHandlers(s)
 	overviewH := handlers.NewOverviewHandlers(s)
+	mfaH := handlers.NewMFAHandlers(s)
+	sessionH := handlers.NewSessionHandlers(s)
+
+	// Per-caller rate limit on authenticated traffic (generous for interactive
+	// and polling use; trips only on pathological hammering).
+	rateLimiter := apimw.NewRateLimiter(1200, 200)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
@@ -51,11 +72,23 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(jwtSecret, tickets))
+			r.Use(rateLimiter.Middleware)
 
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/auth/me", authH.Me)
 			// Mint a short-lived ticket for header-less requests (downloads, WS).
 			r.Post("/auth/ticket", authH.Ticket)
+
+			// Multi-factor auth (self-service TOTP enrollment).
+			r.Get("/auth/mfa", mfaH.Status)
+			r.Post("/auth/mfa/setup", mfaH.Setup)
+			r.Post("/auth/mfa/enable", mfaH.Enable)
+			r.Post("/auth/mfa/disable", mfaH.Disable)
+
+			// Active sessions: review and revoke.
+			r.Get("/auth/sessions", sessionH.List)
+			r.Post("/auth/sessions/revoke-others", sessionH.RevokeOthers)
+			r.Delete("/auth/sessions/{id}", sessionH.Revoke)
 
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)
@@ -66,7 +99,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Nodes (admin only)
 			r.Route("/nodes", func(r chi.Router) {
-				r.Use(auth.AdminOnly)
+				r.Use(requireAdmin(s))
 				r.Get("/", nodeH.List)
 				r.Post("/", nodeH.Create)
 				r.Get("/{id}", nodeH.Get)
@@ -77,7 +110,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			// Servers
 			r.Route("/servers", func(r chi.Router) {
 				r.Get("/", serverH.List)
-				r.With(auth.AdminOnly).Post("/", serverH.Create)
+				r.With(requireAdmin(s)).Post("/", serverH.Create)
+				// Discover existing on-disk servers to import (admin, like create).
+				r.With(requireAdmin(s)).Get("/import-candidates", serverH.ImportCandidates)
 
 				r.Route("/{id}", func(r chi.Router) {
 					// Atomic permissions.
@@ -102,6 +137,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// Mutating leaves.
 					filesWrite := requireServerPermission(s, store.ServerPermissionFilesWrite)
 					filesDelete := requireServerPermission(s, store.ServerPermissionFilesDelete)
+					playersDelete := requireServerPermission(s, store.ServerPermissionPlayersDelete)
 					modsInstall := requireServerPermission(s, store.ServerPermissionModsInstall)
 					modsUpdate := requireServerPermission(s, store.ServerPermissionModsUpdate)
 					modsRemove := requireServerPermission(s, store.ServerPermissionModsRemove)
@@ -136,6 +172,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(playersRead).Get("/players/bans", playersH.Bans)
 					r.With(playersRead).Post("/players/action", playersH.Action)
 					r.With(playersRead).Get("/players/{uuid}", playersH.Detail)
+					r.With(playersDelete).Delete("/players/{uuid}", playersH.Delete)
 
 					// Files
 					r.With(filesRead).Get("/files", fileH.List)
@@ -203,7 +240,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Users (admin only)
 			r.Route("/users", func(r chi.Router) {
-				r.Use(auth.AdminOnly)
+				r.Use(requireAdmin(s))
 				r.Get("/", userH.List)
 				r.Post("/", userH.Create)
 				r.Put("/{id}", userH.Update)
@@ -212,14 +249,14 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// App settings — integration secrets (admin only)
 			r.Route("/settings/integrations", func(r chi.Router) {
-				r.Use(auth.AdminOnly)
+				r.Use(requireAdmin(s))
 				r.Get("/", settingsH.ListIntegrations)
 				r.Put("/{key}", settingsH.SetIntegration)
 				r.Delete("/{key}", settingsH.DeleteIntegration)
 			})
 
 			// Global audit log (admin only)
-			r.With(auth.AdminOnly).Get("/audit", auditH.List)
+			r.With(requireAdmin(s)).Get("/audit", auditH.List)
 		})
 	})
 

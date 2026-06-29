@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -12,6 +13,35 @@ import (
 )
 
 type PermissionCheck func(context.Context) bool
+
+// allowedOrigins pins the set of browser Origins permitted to open a console /
+// metrics WebSocket. When empty (the default), any origin is accepted — needed
+// for split-origin local dev — and the connection relies solely on its
+// single-use ticket. When set (production, via APP_ORIGIN), the library enforces
+// the Origin against this list as defense in depth against cross-site hijacking.
+var (
+	originMu       sync.RWMutex
+	allowedOrigins []string
+)
+
+// SetAllowedOrigins configures the WebSocket Origin allowlist process-wide.
+func SetAllowedOrigins(origins []string) {
+	originMu.Lock()
+	defer originMu.Unlock()
+	allowedOrigins = append([]string(nil), origins...)
+}
+
+// acceptOptions builds AcceptOptions honoring the configured allowlist. With no
+// allowlist it skips Origin verification (ticket-only auth); with one it enforces
+// the patterns instead of blanket-skipping.
+func acceptOptions() *websocket.AcceptOptions {
+	originMu.RLock()
+	defer originMu.RUnlock()
+	if len(allowedOrigins) == 0 {
+		return &websocket.AcceptOptions{InsecureSkipVerify: true}
+	}
+	return &websocket.AcceptOptions{OriginPatterns: append([]string(nil), allowedOrigins...)}
+}
 
 // Re-check cadence for live permission revocation. Console is high-risk (can
 // run server commands) so it polls faster than metrics. Package vars rather
@@ -24,10 +54,7 @@ var (
 // ProxyConsole upgrades the browser connection and bidirectionally proxies
 // to the agent's console WebSocket.
 func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Client, serverID string, canUse PermissionCheck) {
-	browserConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-		OriginPatterns:     []string{"*"},
-	})
+	browserConn, err := websocket.Accept(w, r, acceptOptions())
 	if err != nil {
 		return
 	}
@@ -92,10 +119,7 @@ func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Cli
 
 // ProxyMetrics proxies the agent metrics WebSocket to the browser.
 func ProxyMetrics(w http.ResponseWriter, r *http.Request, agentClient *agent.Client, serverID string, canUse PermissionCheck) {
-	browserConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-		OriginPatterns:     []string{"*"},
-	})
+	browserConn, err := websocket.Accept(w, r, acceptOptions())
 	if err != nil {
 		return
 	}

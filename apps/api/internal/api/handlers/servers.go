@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,96 @@ type ServerHandlers struct {
 
 func NewServerHandlers(s *store.Store, serverRoot string) *ServerHandlers {
 	return &ServerHandlers{store: s, serverRoot: serverRoot}
+}
+
+// withImportSettings merges import metadata (the detected jar + a no-install
+// flag) into a server's settings JSON, so Start can run the existing runtime
+// without overwriting it. Preserves any other settings the caller sent.
+func withImportSettings(settings json.RawMessage, jarFile string) json.RawMessage {
+	m := map[string]any{}
+	if len(settings) > 0 {
+		_ = json.Unmarshal(settings, &m)
+	}
+	m["import"] = map[string]any{"jar_file": jarFile, "no_install": true}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return settings
+	}
+	return out
+}
+
+// applyImportConfig threads a server's import metadata into the agent start
+// payload: the detected jar to run and the no-install flag that stops the agent
+// re-provisioning over the user's files.
+func applyImportConfig(cfg map[string]any, settings json.RawMessage) {
+	if len(settings) == 0 {
+		return
+	}
+	var s struct {
+		Import *struct {
+			JarFile   string `json:"jar_file"`
+			NoInstall bool   `json:"no_install"`
+		} `json:"import"`
+	}
+	if err := json.Unmarshal(settings, &s); err != nil || s.Import == nil {
+		return
+	}
+	if s.Import.JarFile != "" {
+		cfg["jar_file"] = s.Import.JarFile
+	}
+	if s.Import.NoInstall {
+		cfg["no_install"] = true
+	}
+}
+
+// ImportCandidates lists existing server directories on a node that aren't yet
+// managed by the panel, with detected settings to pre-fill the import dialog.
+func (h *ServerHandlers) ImportCandidates(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("node_id")
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "node_id required")
+		return
+	}
+	c, err := h.agentClient(r.Context(), h.store, nodeID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "node not found")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	candidates, err := c.ScanImports(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not scan node for servers")
+		return
+	}
+
+	// Hide directories already managed by a server so the user can't double-import.
+	managed := map[string]bool{}
+	if servers, err := h.store.ListServers(r.Context()); err == nil {
+		for _, s := range servers {
+			managed[filepath.Clean(s.DirectoryPath)] = true
+		}
+	}
+	out := make([]agent.ImportCandidate, 0, len(candidates))
+	for _, cand := range candidates {
+		if managed[filepath.Clean(cand.AbsPath)] {
+			continue
+		}
+		out = append(out, cand)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// isAdmin reports whether the caller holds the global admin role, read fresh
+// from the DB so a demotion takes effect immediately rather than living on in a
+// still-valid access token.
+func (h *ServerHandlers) isAdmin(r *http.Request) bool {
+	claims := auth.ClaimsFrom(r.Context())
+	if claims == nil {
+		return false
+	}
+	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
+	return err == nil && user.Role == "admin"
 }
 
 func (h *ServerHandlers) agentClient(ctx context.Context, s *store.Store, nodeID string) (*agent.Client, error) {
@@ -77,9 +168,18 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		AutoStart     bool            `json:"auto_start"`
 		Tags          []string        `json:"tags"`
 		Settings      json.RawMessage `json:"settings"`
+		// ImportExisting adopts a server directory already on disk: its files are
+		// left untouched (no EULA write, no runtime install), and JarFile records
+		// the existing launcher so start runs their jar rather than fetching one.
+		ImportExisting bool   `json:"import_existing"`
+		JarFile        string `json:"jar_file"`
 	}
 	if err := decode(r, &body); err != nil || body.NodeID == "" || body.Name == "" {
 		writeError(w, http.StatusBadRequest, "node_id and name are required")
+		return
+	}
+	if body.ImportExisting && strings.TrimSpace(body.DirectoryPath) == "" {
+		writeError(w, http.StatusBadRequest, "a server directory is required to import")
 		return
 	}
 
@@ -87,6 +187,22 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Never let two servers manage the same directory — that's how an import (or a
+	// name collision) would "step on" an existing server.
+	if existing, err := h.store.ListServers(r.Context()); err == nil {
+		for _, e := range existing {
+			if filepath.Clean(e.DirectoryPath) == filepath.Clean(directoryPath) {
+				writeError(w, http.StatusConflict, "a server already manages that directory")
+				return
+			}
+		}
+	}
+
+	// Record import metadata so start runs the existing runtime as-is.
+	if body.ImportExisting {
+		body.Settings = withImportSettings(body.Settings, body.JarFile)
 	}
 
 	if body.Platform == "" {
@@ -144,14 +260,17 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Best-effort: ask the agent to create the server directory and write
 	// eula.txt. Failure here doesn't break server creation — user can fix
-	// manually and retry the start.
-	if c, err := h.agentClient(r.Context(), h.store, created.NodeID); err == nil {
-		setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		_ = c.Setup(setupCtx, created.ID, created.DirectoryPath)
-		cancel()
+	// manually and retry the start. Skipped for imports: the directory already
+	// exists and must not be modified (writing eula.txt would step on it).
+	if !body.ImportExisting {
+		if c, err := h.agentClient(r.Context(), h.store, created.NodeID); err == nil {
+			setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			_ = c.Setup(setupCtx, created.ID, created.DirectoryPath)
+			cancel()
+		}
 	}
 
-	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform})
+	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform, "imported": body.ImportExisting})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -192,6 +311,17 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
+	}
+
+	// java_binary, jvm_args, and directory_path are start-command inputs the agent
+	// executes, so changing them is effectively host code execution. Confine those
+	// to global admins — a server-scoped `settings` collaborator must not be able
+	// to escalate to running arbitrary binaries/flags on the agent host.
+	if body.JavaBinary != nil || body.JVMArgs != nil || body.DirectoryPath != nil {
+		if !h.isAdmin(r) {
+			writeError(w, http.StatusForbidden, "only an administrator may change java_binary, jvm_args, or directory_path")
+			return
+		}
 	}
 
 	// Record a before/after diff of the fields the request actually changes, so
@@ -345,6 +475,9 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
+	// Imported servers carry their existing jar + a no-install flag, so the agent
+	// runs what's already on disk instead of fetching a runtime over it.
+	applyImportConfig(cfg, srv.Settings)
 
 	// Long deadline because the agent may auto-install the server runtime on
 	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
