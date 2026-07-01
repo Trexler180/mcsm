@@ -64,7 +64,7 @@ export interface NbtRoot {
 class Reader {
   private view: DataView;
   private off = 0;
-  constructor(private buf: Uint8Array) {
+  constructor(buf: Uint8Array) {
     this.view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   }
   u8() {
