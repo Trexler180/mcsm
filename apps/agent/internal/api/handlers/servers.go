@@ -62,6 +62,11 @@ func (h *ServerHandlers) ScanImports(w http.ResponseWriter, r *http.Request) {
 
 func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// The id becomes a runtime-state path segment (runstate/console log/FIFO).
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var cfg process.StartConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -207,6 +212,11 @@ func (h *ServerHandlers) DisableMods(w http.ResponseWriter, r *http.Request) {
 // releases its file locks on the world/jar.
 func (h *ServerHandlers) Purge(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	// The id is joined into the mcsm-backups path that gets RemoveAll'd.
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var body struct {
 		Directory string `json:"directory"`
