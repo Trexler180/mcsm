@@ -66,6 +66,10 @@ func (h *BackupHandlers) Setup(w http.ResponseWriter, r *http.Request) {
 // metadata. Skips the backups folder itself and runtime state files.
 func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	src, err := h.base(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -75,6 +79,9 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	backupID := r.URL.Query().Get("backup_id")
 	if backupID == "" {
 		backupID = fmt.Sprintf("backup-%d", time.Now().Unix())
+	} else if err := validatePathID(backupID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Backups go in <server_dir>/../mcsm-backups/<server_id>/<backup_id>.zip
@@ -178,6 +185,14 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	backupID := chi.URLParam(r, "backupId")
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validatePathID(backupID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	dst, err := h.base(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -258,6 +273,14 @@ func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	backupID := chi.URLParam(r, "backupId")
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validatePathID(backupID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	src, err := h.base(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -275,6 +298,14 @@ func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 func (h *BackupHandlers) DownloadBackup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	backupID := chi.URLParam(r, "backupId")
+	if err := validatePathID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validatePathID(backupID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	src, err := h.base(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
