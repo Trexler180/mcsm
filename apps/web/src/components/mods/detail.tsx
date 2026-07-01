@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -59,34 +59,34 @@ function envLabel(side?: string): string | null {
 // Markdown element overrides so mod bodies match the app theme (no typography
 // plugin needed). Links/images open externally and safely.
 const mdComponents = {
-  h1: (p: any) => <h1 className="text-lg font-semibold text-text-primary mt-4 mb-2" {...p} />,
-  h2: (p: any) => <h2 className="text-base font-semibold text-text-primary mt-4 mb-2" {...p} />,
-  h3: (p: any) => <h3 className="text-sm font-semibold text-text-primary mt-3 mb-1.5" {...p} />,
-  p: (p: any) => <p className="text-sm text-text-secondary leading-relaxed my-2" {...p} />,
-  a: (p: any) => (
+  h1: (p: ComponentProps<"h1">) => <h1 className="text-lg font-semibold text-text-primary mt-4 mb-2" {...p} />,
+  h2: (p: ComponentProps<"h2">) => <h2 className="text-base font-semibold text-text-primary mt-4 mb-2" {...p} />,
+  h3: (p: ComponentProps<"h3">) => <h3 className="text-sm font-semibold text-text-primary mt-3 mb-1.5" {...p} />,
+  p: (p: ComponentProps<"p">) => <p className="text-sm text-text-secondary leading-relaxed my-2" {...p} />,
+  a: (p: ComponentProps<"a">) => (
     <a className="text-accent hover:underline" target="_blank" rel="noreferrer noopener" {...p} />
   ),
-  ul: (p: any) => <ul className="list-disc pl-5 my-2 text-sm text-text-secondary space-y-1" {...p} />,
-  ol: (p: any) => <ol className="list-decimal pl-5 my-2 text-sm text-text-secondary space-y-1" {...p} />,
-  code: (p: any) => (
+  ul: (p: ComponentProps<"ul">) => <ul className="list-disc pl-5 my-2 text-sm text-text-secondary space-y-1" {...p} />,
+  ol: (p: ComponentProps<"ol">) => <ol className="list-decimal pl-5 my-2 text-sm text-text-secondary space-y-1" {...p} />,
+  code: (p: ComponentProps<"code">) => (
     <code className="px-1 py-0.5 rounded bg-surface-2 text-xs font-mono text-text-primary" {...p} />
   ),
-  pre: (p: any) => (
+  pre: (p: ComponentProps<"pre">) => (
     <pre className="p-3 rounded bg-surface-2 overflow-x-auto text-xs my-2" {...p} />
   ),
-  img: (p: any) => (
+  img: (p: ComponentProps<"img">) => (
     <img className="max-w-full rounded my-2 border border-border" loading="lazy" {...p} />
   ),
-  blockquote: (p: any) => (
+  blockquote: (p: ComponentProps<"blockquote">) => (
     <blockquote className="border-l-2 border-border pl-3 italic text-text-secondary my-2" {...p} />
   ),
-  table: (p: any) => (
+  table: (p: ComponentProps<"table">) => (
     <div className="overflow-x-auto my-2">
       <table className="min-w-full text-xs border-collapse" {...p} />
     </div>
   ),
-  th: (p: any) => <th className="border border-border px-2 py-1 text-left" {...p} />,
-  td: (p: any) => <td className="border border-border px-2 py-1" {...p} />,
+  th: (p: ComponentProps<"th">) => <th className="border border-border px-2 py-1 text-left" {...p} />,
+  td: (p: ComponentProps<"td">) => <td className="border border-border px-2 py-1" {...p} />,
 };
 
 export function ModDetailDialog({
