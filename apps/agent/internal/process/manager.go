@@ -116,13 +116,29 @@ func (m *Manager) Restart(id string) error {
 		return fmt.Errorf("server not found")
 	}
 	cfg := inst.Config
-	_ = inst.stop(true, 30*time.Second)
-
-	m.mu.Lock()
-	delete(m.instances, id)
-	m.mu.Unlock()
-
+	if err := inst.stop(true, 30*time.Second); err != nil {
+		return fmt.Errorf("restart: stop failed: %w", err)
+	}
+	// stop() can return nil without the process having finalized (kill's exit
+	// wait is bounded). Starting a second JVM on the same port/world would be
+	// worse than failing the restart, so require the old process to be gone.
+	if !inst.exited() {
+		return fmt.Errorf("restart: server did not exit in time")
+	}
+	m.removeInstance(id, inst)
 	return m.Start(id, cfg)
+}
+
+// removeInstance drops id from the instance map only if it still maps to inst.
+// The identity check keeps Restart from deleting a fresh instance that a
+// concurrent Start registered after our stop; the loser of that race then gets
+// "server already running" from Start instead of orphaning the new process.
+func (m *Manager) removeInstance(id string, inst *Instance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.instances[id]; ok && cur == inst {
+		delete(m.instances, id)
+	}
 }
 
 func (m *Manager) Status(id string) StatusInfo {
