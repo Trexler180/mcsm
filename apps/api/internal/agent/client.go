@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -137,12 +138,7 @@ func (c *Client) StartServer(ctx context.Context, serverID string, cfg map[strin
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		var e map[string]string
-		json.NewDecoder(resp.Body).Decode(&e)
-		return fmt.Errorf("agent error: %s", e["error"])
-	}
-	return nil
+	return checkError(resp)
 }
 
 // Reinstall asks the agent to wipe and re-fetch the server runtime for the given
@@ -153,12 +149,7 @@ func (c *Client) Reinstall(ctx context.Context, serverID string, cfg map[string]
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		var e map[string]string
-		json.NewDecoder(resp.Body).Decode(&e)
-		return fmt.Errorf("agent error: %s", e["error"])
-	}
-	return nil
+	return checkError(resp)
 }
 
 func (c *Client) StopServer(ctx context.Context, serverID string, graceful bool, timeoutSec int) error {
@@ -197,8 +188,13 @@ func (c *Client) GetStatus(ctx context.Context, serverID string) (map[string]any
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("agent status: %w", err)
+	}
 	return result, nil
 }
 
@@ -212,10 +208,8 @@ func (c *Client) DisableConflictMods(ctx context.Context, serverID string, modID
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		var e map[string]string
-		json.NewDecoder(resp.Body).Decode(&e)
-		return nil, fmt.Errorf("agent: %s", e["error"])
+	if err := checkError(resp); err != nil {
+		return nil, err
 	}
 	var out struct {
 		Disabled []string `json:"disabled"`
@@ -275,10 +269,8 @@ func (c *Client) Backup(ctx context.Context, serverID, backupID string) (*Backup
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		var e map[string]string
-		json.NewDecoder(resp.Body).Decode(&e)
-		return nil, fmt.Errorf("agent backup: %s", e["error"])
+	if err := checkError(resp); err != nil {
+		return nil, err
 	}
 	var out BackupResult
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -532,7 +524,11 @@ func (c *Client) ProxyHTTP(ctx context.Context, w http.ResponseWriter, r *http.R
 		w.Header()[k] = v
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		// Headers are already sent, so the client can't be told; without this
+		// log a truncated download or interrupted stream vanishes silently.
+		log.Printf("agent proxy: copy response body: %v", err)
+	}
 }
 
 // WebSocketURL returns the agent WS URL for a given path.
@@ -547,10 +543,13 @@ func (c *Client) WebSocketURL(path string) string {
 }
 
 func checkError(resp *http.Response) error {
-	if resp.StatusCode >= 400 {
-		var e map[string]string
-		json.NewDecoder(resp.Body).Decode(&e)
-		return fmt.Errorf("agent: %s", e["error"])
+	if resp.StatusCode < 400 {
+		return nil
 	}
-	return nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var e map[string]string
+	if err := json.Unmarshal(body, &e); err != nil || e["error"] == "" {
+		return fmt.Errorf("agent: HTTP %d", resp.StatusCode)
+	}
+	return fmt.Errorf("agent: %s", e["error"])
 }
