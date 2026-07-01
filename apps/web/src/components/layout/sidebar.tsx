@@ -7,15 +7,18 @@ import {
   LogOut,
   ScrollText,
   Settings,
+  Bell,
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
+import { useNotificationFeed } from '@/store/notification-feed'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
   { to: '/servers', label: 'Servers', icon: Server },
+  { to: '/notifications', label: 'Notifications', icon: Bell, badge: true },
   { to: '/nodes', label: 'Nodes', icon: Layers },
   { to: '/users', label: 'Users', icon: Users, adminOnly: true },
   { to: '/audit', label: 'Audit Log', icon: ScrollText, adminOnly: true },
@@ -27,6 +30,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuthStore()
   const router = useRouterState()
   const currentPath = router.location.pathname
+  const unread = useNotificationFeed((s) => s.unread)
 
   return (
     <>
@@ -40,7 +44,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {nav.map(({ to, label, icon: Icon, exact, adminOnly }) => {
+        {nav.map(({ to, label, icon: Icon, exact, adminOnly, badge }) => {
           if (adminOnly && user?.role !== 'admin') return null
           const active = exact ? currentPath === to : currentPath.startsWith(to) && to !== '/'
           return (
@@ -56,7 +60,12 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               )}
             >
               <Icon className="h-4 w-4 flex-shrink-0" />
-              {label}
+              <span className="flex-1">{label}</span>
+              {badge && unread > 0 && (
+                <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-xs font-semibold text-black">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
             </Link>
           )
         })}

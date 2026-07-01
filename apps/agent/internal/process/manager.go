@@ -2,12 +2,15 @@ package process
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 )
 
 type Manager struct {
+	serverRoot string
+
 	mu        sync.RWMutex
 	instances map[string]*Instance
 	dirs      map[string]string
@@ -26,11 +29,40 @@ type rosterCache struct {
 	state       playerState
 }
 
-func NewManager() *Manager {
+func NewManager(serverRoot string) *Manager {
 	return &Manager{
-		instances: make(map[string]*Instance),
-		dirs:      make(map[string]string),
-		roster:    make(map[string]rosterCache),
+		serverRoot: serverRoot,
+		instances:  make(map[string]*Instance),
+		dirs:       make(map[string]string),
+		roster:     make(map[string]rosterCache),
+	}
+}
+
+// Reattach adopts Minecraft servers that kept running across an agent restart.
+// For each persisted run state whose process is still alive and rooted in the
+// recorded directory, it rebuilds an Instance and resumes monitoring; dead or
+// unidentifiable entries (incl. PID reuse) are cleaned up. No-op on platforms
+// without detached spawning (Windows/local dev).
+func (m *Manager) Reattach() {
+	if !supportsReattach {
+		return
+	}
+	for _, st := range listRunStates(m.serverRoot) {
+		if !processAlive(st.PID) || !processMatchesDir(st.PID, st.Directory) {
+			clearRunState(m.serverRoot, st.ID)
+			continue
+		}
+		inst, err := reattachInstance(m.serverRoot, st)
+		if err != nil {
+			log.Printf("reattach %s: %v", st.ID, err)
+			clearRunState(m.serverRoot, st.ID)
+			continue
+		}
+		m.mu.Lock()
+		m.instances[st.ID] = inst
+		m.dirs[st.ID] = st.Directory
+		m.mu.Unlock()
+		log.Printf("reattached to running server %s (pid %d)", st.ID, st.PID)
 	}
 }
 
@@ -47,7 +79,7 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 		}
 	}
 
-	inst := newInstance(id, cfg)
+	inst := newInstance(m.serverRoot, id, cfg)
 	if err := inst.start(); err != nil {
 		return err
 	}
@@ -141,6 +173,9 @@ func (m *Manager) Unregister(id string) {
 	m.rosterMu.Lock()
 	delete(m.roster, id)
 	m.rosterMu.Unlock()
+
+	// Drop any persisted runtime state so a purged server is never reattached.
+	clearRunState(m.serverRoot, id)
 }
 
 func (m *Manager) Players(id string) []Player {
@@ -277,8 +312,24 @@ func (m *Manager) PlayerDetail(id, uuid string) (*PlayerDetail, error) {
 	return d, nil
 }
 
+// DetachAll stops tracking every running server WITHOUT stopping the processes,
+// so an agent restart or upgrade leaves Minecraft servers running for the next
+// agent to reattach to. This is the default on graceful shutdown.
+func (m *Manager) DetachAll() {
+	m.mu.RLock()
+	insts := make([]*Instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		insts = append(insts, inst)
+	}
+	m.mu.RUnlock()
+	for _, inst := range insts {
+		inst.detach()
+	}
+}
+
 // StopAll gracefully stops every running instance, in parallel, bounded by
-// timeout per instance. Called on agent shutdown so MC children aren't orphaned.
+// timeout per instance. Used on shutdown only when the operator opts in to
+// stopping servers with the agent (AGENT_STOP_SERVERS_ON_EXIT=1).
 func (m *Manager) StopAll(timeout time.Duration) {
 	m.mu.RLock()
 	insts := make([]*Instance, 0, len(m.instances))

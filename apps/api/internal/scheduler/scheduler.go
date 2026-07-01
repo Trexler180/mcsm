@@ -14,6 +14,7 @@ import (
 
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/backups"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -27,6 +28,7 @@ type Scheduler struct {
 	cron       *cron.Cron
 	store      *store.Store
 	updater    ModUpdater
+	engine     *notify.Engine
 	refreshInt time.Duration
 
 	mu      sync.Mutex
@@ -39,12 +41,13 @@ type registration struct {
 	action   string
 }
 
-func New(s *store.Store, updater ModUpdater) *Scheduler {
+func New(s *store.Store, updater ModUpdater, engine *notify.Engine) *Scheduler {
 	return &Scheduler{
 		// SecondField off; we use 5-field cron expressions like "0 4 * * *".
 		cron:       cron.New(),
 		store:      s,
 		updater:    updater,
+		engine:     engine,
 		refreshInt: 30 * time.Second,
 		entries:    map[string]registration{},
 	}
@@ -260,10 +263,12 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 		if berr != nil {
 			_ = s.store.UpdateBackupResult(ctx, created.ID, "failed", nil, berr.Error())
 			log.Printf("scheduler: task %s backup: %v", task.Name, berr)
+			s.engine.Emit(notify.BackupFailed(srv.ID, srv.Name, berr.Error()))
 			return
 		}
 		_ = s.store.UpdateBackupResult(ctx, created.ID, "success", &result.SizeBytes, "")
 		backups.Enforce(ctx, s.store, srv.ID)
+		s.engine.Emit(notify.BackupSuccess(srv.ID, srv.Name))
 
 	default:
 		log.Printf("scheduler: task %s unknown action %q", task.Name, task.Action)

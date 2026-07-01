@@ -10,15 +10,17 @@ import (
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/backups"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
 type BackupHandlers struct {
-	store *store.Store
+	store    *store.Store
+	notifier *notify.Engine
 }
 
-func NewBackupHandlers(s *store.Store) *BackupHandlers {
-	return &BackupHandlers{store: s}
+func NewBackupHandlers(s *store.Store, notifier *notify.Engine) *BackupHandlers {
+	return &BackupHandlers{store: s, notifier: notifier}
 }
 
 func (h *BackupHandlers) ListBackups(w http.ResponseWriter, r *http.Request) {
@@ -85,15 +87,18 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		if err := c.RegisterDir(ctx, b.ServerID, dir); err != nil {
 			_ = h.store.UpdateBackupResult(ctx, b.ID, "failed", nil, err.Error())
+			h.notifier.Emit(notify.BackupFailed(srv.ID, srv.Name, err.Error()))
 			return
 		}
 		result, err := c.Backup(ctx, b.ServerID, b.ID)
 		if err != nil {
 			_ = h.store.UpdateBackupResult(ctx, b.ID, "failed", nil, err.Error())
+			h.notifier.Emit(notify.BackupFailed(srv.ID, srv.Name, err.Error()))
 			return
 		}
 		_ = h.store.UpdateBackupResult(ctx, b.ID, "success", &result.SizeBytes, "")
 		backups.Enforce(ctx, h.store, b.ServerID)
+		h.notifier.Emit(notify.BackupSuccess(srv.ID, srv.Name))
 	}(created, srv.DirectoryPath)
 
 	writeJSON(w, http.StatusCreated, created)

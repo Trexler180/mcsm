@@ -19,6 +19,7 @@ import (
 
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/mods/modrinth"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -48,6 +49,7 @@ type Engine struct {
 	store    *store.Store
 	modrinth modSource
 	newAgent func(n *store.Node) agentAPI
+	notifier *notify.Engine
 
 	mu     sync.Mutex
 	active map[string]bool // serverID -> run in flight
@@ -73,6 +75,10 @@ func New(s *store.Store) *Engine {
 		runTimeout:   2 * time.Hour,
 	}
 }
+
+// SetNotifier wires in the notification engine so completed/failed auto-update
+// runs raise alerts. Optional; a nil engine makes Emit a no-op.
+func (e *Engine) SetNotifier(n *notify.Engine) { e.notifier = n }
 
 // ── Run progress document (stored as mod_update_runs.detail) ─────────
 
@@ -201,6 +207,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		save("failed", true)
 		log.Error("autoupdate: run failed", "message", msg)
 		e.audit(srv.ID, "mod.autoupdate_failed", map[string]any{"run_id": runID, "message": msg})
+		e.notifier.Emit(notify.ModUpdateFailed(srv.ID, srv.Name, msg))
 	}
 
 	c := e.newAgent(node)
@@ -399,6 +406,14 @@ func (e *Engine) finishHealthy(ctx context.Context, c agentAPI, srv *store.Serve
 	}
 	d.Message = strings.Join(parts, ", ")
 	save(status, true)
+
+	// Alert on the run outcome. A run that updated nothing (already current) is
+	// not worth a notification.
+	if failed > 0 {
+		e.notifier.Emit(notify.ModUpdateFailed(srv.ID, srv.Name, d.Message))
+	} else if updated > 0 {
+		e.notifier.Emit(notify.ModUpdateApplied(srv.ID, srv.Name, updated))
+	}
 }
 
 func countStatus(steps []*modStep, status string) int {

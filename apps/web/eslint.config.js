@@ -51,4 +51,11 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
   },
+  {
+    // Dedicated Web Push service worker (static asset, runs in the SW global).
+    files: ["public/push-sw.js"],
+    languageOptions: {
+      globals: { ...globals.serviceworker, ...globals.browser },
+    },
+  },
 );

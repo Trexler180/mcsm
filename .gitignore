@@ -70,3 +70,7 @@ apps/web/tsconfig.tsbuildinfo
 
 # Local Claude Code memory (machine-specific ops notes; never commit)
 /CLAUDE.local.md
+
+# Exported MFA recovery codes / other local secrets (never commit)
+/r-ecovery c-odes.txt
+*ecovery*odes*.txt

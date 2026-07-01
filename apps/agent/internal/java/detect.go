@@ -73,6 +73,36 @@ func parseVersion(output string) string {
 	return "unknown"
 }
 
+// MajorFromPath extracts the Java feature release encoded in an install path,
+// e.g. `…\jdk-25.0.3.9-hotspot\bin\java.exe` → 25, `…\Java\jdk-21\bin` → 21,
+// `…\Amazon Corretto\21.0.5.11.1\bin` → 21. It scans path segments, strips the
+// common vendor/distro prefix, and parses the leading number as the feature
+// version. Returns 0 when no plausible version is found. Used to keep a server
+// on the same major version when its configured launcher has gone missing.
+func MajorFromPath(path string) int {
+	segs := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
+	prefixes := []string{
+		"jdk-", "jdk_", "jdk", "jre-", "jre_", "jre",
+		"java-", "java", "temurin-", "zulu-", "corretto-", "graalvm-",
+	}
+	for _, seg := range segs {
+		low := strings.ToLower(seg)
+		for _, p := range prefixes {
+			if strings.HasPrefix(low, p) {
+				low = low[len(p):]
+				break
+			}
+		}
+		low = strings.TrimLeft(low, "-_")
+		// Java feature releases realistically fall in 6..99; the bound keeps stray
+		// small numbers in a path from being mistaken for a version.
+		if m := majorVersion(low); m >= 6 && m <= 99 {
+			return m
+		}
+	}
+	return 0
+}
+
 // majorVersion turns a Java version string into its feature release: "21.0.5" →
 // 21, "17" → 17, "1.8.0_392" → 8 (the legacy 1.x scheme), "25-ea" → 25. Returns
 // 0 when it can't be parsed.

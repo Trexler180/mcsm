@@ -12,10 +12,11 @@ import (
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/migrate"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
-func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine) http.Handler {
+func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine, notifier *notify.Service) http.Handler {
 	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
 	// top of the single-use ticket auth). APP_ORIGIN unset => any origin, which
 	// keeps local dev working; production sets it to the panel's URL.
@@ -43,9 +44,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s, updater)
+	modH := handlers.NewModHandlers(s, updater, notifier.Engine)
 	migrateH := handlers.NewMigrationHandlers(s, migrate.New(s))
-	backupH := handlers.NewBackupHandlers(s)
+	backupH := handlers.NewBackupHandlers(s, notifier.Engine)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
 	consoleH := handlers.NewConsoleHandlers(s)
@@ -56,6 +57,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	overviewH := handlers.NewOverviewHandlers(s)
 	mfaH := handlers.NewMFAHandlers(s)
 	sessionH := handlers.NewSessionHandlers(s)
+	notifyH := handlers.NewNotificationHandlers(s, notifier)
 
 	// Per-caller rate limit on authenticated traffic (generous for interactive
 	// and polling use; trips only on pathological hammering).
@@ -96,6 +98,32 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Overview aggregate (scoped to the caller's servers)
 			r.Get("/overview", overviewH.Overview)
+
+			// Notifications — per-user alert subscriptions, channels, feed, and
+			// the live WebSocket stream. All scoped to the caller.
+			r.Route("/notifications", func(r chi.Router) {
+				r.Get("/events", notifyH.Events)
+				r.Get("/vapid", notifyH.VAPID)
+				r.Get("/stream", notifyH.Stream)
+
+				r.Get("/subscriptions", notifyH.ListSubscriptions)
+				r.Put("/subscriptions", notifyH.UpsertSubscription)
+				r.Delete("/subscriptions/{id}", notifyH.DeleteSubscription)
+
+				r.Get("/channels", notifyH.ListChannels)
+				r.Post("/channels", notifyH.CreateChannel)
+				r.Put("/channels/{id}", notifyH.UpdateChannel)
+				r.Delete("/channels/{id}", notifyH.DeleteChannel)
+				r.Post("/channels/{id}/test", notifyH.TestChannel)
+
+				r.Post("/push", notifyH.RegisterPush)
+				r.Delete("/push", notifyH.UnregisterPush)
+
+				r.Get("/feed", notifyH.Feed)
+				r.Get("/unread-count", notifyH.UnreadCount)
+				r.Post("/{id}/read", notifyH.MarkRead)
+				r.Post("/read-all", notifyH.MarkAllRead)
+			})
 
 			// Nodes (admin only)
 			r.Route("/nodes", func(r chi.Router) {

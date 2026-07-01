@@ -725,3 +725,61 @@ export interface ImportCandidate {
 export interface TokenResponse {
   access_token: string;
 }
+
+// ── Notifications ────────────────────────────────────────────────
+
+export type NotificationSeverity = "info" | "warning" | "critical";
+export type NotificationScope = "server" | "node" | "global";
+
+export interface NotificationEventDef {
+  type: string;
+  label: string;
+  description: string;
+  default_severity: NotificationSeverity;
+  scope: NotificationScope;
+}
+
+// A channel selector is "inapp", "webpush", or "webhook:<channel_id>".
+export interface NotificationSubscription {
+  id: string;
+  user_id: string;
+  event_type: string;
+  server_id: string | null;
+  min_severity: NotificationSeverity;
+  channels: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationChannelConfig {
+  url: string;
+  format: "generic" | "discord" | "slack";
+  secret_set: boolean;
+}
+
+export interface NotificationChannel {
+  id: string;
+  user_id: string;
+  kind: string;
+  label: string;
+  config: NotificationChannelConfig;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  event_type: string;
+  severity: NotificationSeverity;
+  server_id: string | null;
+  node_id: string | null;
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+  dedupe_key: string;
+  created_at: string;
+  read_at: string | null;
+}

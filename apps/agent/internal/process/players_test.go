@@ -52,7 +52,7 @@ func TestParsePlayerListLine(t *testing.T) {
 }
 
 func TestReplacePlayersUsesListAsAuthoritativeRoster(t *testing.T) {
-	inst := newInstance("server", StartConfig{})
+	inst := newInstance(t.TempDir(), "server", StartConfig{})
 	joined := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 	refreshed := joined.Add(10 * time.Minute)
 
