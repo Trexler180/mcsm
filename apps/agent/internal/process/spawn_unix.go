@@ -50,7 +50,21 @@ func launch(java string, args []string, dir, logPath, fifoPath string) (*launche
 	// The child has dup'd the log fd; the agent doesn't write it. Keep the FIFO
 	// fd (stdin) open — that's how we send console commands.
 	logFile.Close()
-	_ = cmd.Process.Release()
+
+	// Reap the child in the background once it exits. Setsid only detaches the
+	// session/process group — this agent process remains the child's real OS
+	// parent, so nothing else will ever wait() on this pid. Previously we called
+	// cmd.Process.Release() here, which stops Go from tracking the process but
+	// does NOT reap it: a dead child sits as a zombie in the process table
+	// forever. Zombies still answer kill(pid, 0) as "alive", so watchExit's
+	// liveness poll (processAlive) never observed the exit, finalize() never
+	// ran, and the instance got stuck reporting "stopping" forever — which also
+	// blocked Manager.Start from ever starting the server again. Waiting here
+	// (in a goroutine, so it doesn't block launch/reattach) fixes that while
+	// keeping cmd nil in `launched`, so watchExit still uses the PID-polling
+	// path (needed for reattach after an agent restart, where the new agent
+	// process isn't the child's parent and can't Wait() on it anyway).
+	go func() { _, _ = cmd.Process.Wait() }()
 
 	return &launched{pid: pid, pgid: pid, stdin: stdin, cmd: nil}, nil
 }
