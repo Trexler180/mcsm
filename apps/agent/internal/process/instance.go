@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,7 +426,11 @@ func (inst *Instance) tailLog(start int64) {
 	}
 	defer f.Close()
 	if start > 0 {
-		_, _ = f.Seek(start, io.SeekStart)
+		if _, err := f.Seek(start, io.SeekStart); err != nil {
+			// Tailing from 0 replays old console lines into the ring, which
+			// beats silently dropping the tail altogether.
+			log.Printf("[%s] tail: seek to %d failed (%v); replaying from start", inst.ID, start, err)
+		}
 	}
 
 	reader := bufio.NewReader(f)
