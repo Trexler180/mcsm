@@ -42,6 +42,11 @@ import type {
   MyServerPermissions,
   TokenResponse,
   User,
+  NotificationEventDef,
+  NotificationSubscription,
+  NotificationChannel,
+  NotificationItem,
+  NotificationSeverity,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -763,5 +768,65 @@ export const api = {
         put(`/settings/integrations/${key}`, { value }),
       remove: (key: string) => del(`/settings/integrations/${key}`),
     },
+  },
+
+  notifications: {
+    events: () => get<NotificationEventDef[]>("/notifications/events"),
+
+    subscriptions: {
+      list: () =>
+        get<NotificationSubscription[]>("/notifications/subscriptions"),
+      upsert: (data: {
+        event_type: string;
+        server_id?: string | null;
+        min_severity: NotificationSeverity;
+        channels: string[];
+        enabled: boolean;
+      }) => put<NotificationSubscription>("/notifications/subscriptions", data),
+      remove: (id: string) => del(`/notifications/subscriptions/${id}`),
+    },
+
+    channels: {
+      list: () => get<NotificationChannel[]>("/notifications/channels"),
+      create: (data: {
+        label: string;
+        url: string;
+        format: string;
+        secret?: string;
+      }) => post<NotificationChannel>("/notifications/channels", data),
+      update: (
+        id: string,
+        data: {
+          label: string;
+          url: string;
+          format: string;
+          secret?: string;
+          enabled: boolean;
+        },
+      ) => put<NotificationChannel>(`/notifications/channels/${id}`, data),
+      remove: (id: string) => del(`/notifications/channels/${id}`),
+      test: (id: string) =>
+        post<{ ok: boolean }>(`/notifications/channels/${id}/test`),
+    },
+
+    vapid: () => get<{ public_key: string }>("/notifications/vapid"),
+    registerPush: (data: { endpoint: string; p256dh: string; auth: string }) =>
+      post<{ id: string }>("/notifications/push", data),
+    unregisterPush: (endpoint: string) =>
+      request<void>("DELETE", "/notifications/push", { endpoint }),
+
+    feed: (opts?: { unread?: boolean; limit?: number }) => {
+      const params = new URLSearchParams();
+      if (opts?.unread) params.set("unread", "1");
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      const qs = params.toString();
+      return get<NotificationItem[]>(
+        `/notifications/feed${qs ? `?${qs}` : ""}`,
+      );
+    },
+    unreadCount: () =>
+      get<{ count: number }>("/notifications/unread-count"),
+    markRead: (id: string) => post(`/notifications/${id}/read`),
+    markAllRead: () => post(`/notifications/read-all`),
   },
 };

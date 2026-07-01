@@ -607,7 +607,24 @@ func (s *Store) EnsureAdminUser(ctx context.Context, email, password string) (*U
 	return s.CreateUser(ctx, email, hash, "admin")
 }
 
+// ErrUserOwnsServers is returned by DeleteUser when the user still owns one or
+// more servers. Rather than cascade-delete real server data out from under an
+// admin, we refuse and let the caller reassign or delete those servers first.
+var ErrUserOwnsServers = errors.New("user still owns servers")
+
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
+	// servers.owner_id is NOT NULL with no ON DELETE action, so a user who owns
+	// servers can't be removed. Turn that raw FK failure into a clear, typed
+	// error the handler can surface as a 409. Other user references are handled
+	// by ON DELETE actions (SET NULL for audit_log/backups, CASCADE for
+	// scheduled_tasks/refresh_tokens/api_keys/server_permissions/notifications).
+	var owned int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE owner_id = ?`, id).Scan(&owned); err != nil {
+		return err
+	}
+	if owned > 0 {
+		return fmt.Errorf("%w (%d)", ErrUserOwnsServers, owned)
+	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	return err
 }

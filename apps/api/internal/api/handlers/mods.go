@@ -29,6 +29,7 @@ import (
 	"github.com/mcsm/api/internal/mods/hangar"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/mods/spigotmc"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -40,9 +41,10 @@ type ModHandlers struct {
 	spigotmc   *spigotmc.Client
 	mc         *mc.Client
 	updater    *autoupdate.Engine
+	notifier   *notify.Engine
 }
 
-func NewModHandlers(s *store.Store, updater *autoupdate.Engine) *ModHandlers {
+func NewModHandlers(s *store.Store, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {
 	return &ModHandlers{
 		store:    s,
 		modrinth: modrinth.New(),
@@ -59,6 +61,7 @@ func NewModHandlers(s *store.Store, updater *autoupdate.Engine) *ModHandlers {
 		spigotmc: spigotmc.New(),
 		mc:       mc.New(),
 		updater:  updater,
+		notifier: notifier,
 	}
 }
 
@@ -1888,6 +1891,11 @@ func (h *ModHandlers) RecordConflict(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	serverName := ""
+	if srv, err := h.store.GetServer(r.Context(), serverID); err == nil {
+		serverName = srv.Name
+	}
+	h.notifier.Emit(notify.ModConflict(serverID, serverName, body.Summary))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 

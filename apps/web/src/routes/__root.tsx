@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/layout/sidebar'
 import { CommandPalette } from '@/components/layout/command-palette'
 import { Toaster } from '@/components/ui/toast'
 import { useAuthStore } from '@/store/auth'
+import { notificationStream } from '@/lib/notify-stream'
 
 function RootLayout() {
   const { isAuthenticated, isLoading, init } = useAuthStore()
@@ -12,6 +13,16 @@ function RootLayout() {
   useEffect(() => {
     init()
   }, [])
+
+  // Maintain the live notification stream for the duration of an authenticated
+  // session. It seeds the feed/unread badge, then pushes new alerts in real
+  // time (no polling) and mirrors them as toasts.
+  useEffect(() => {
+    if (isAuthenticated) {
+      notificationStream.start()
+      return () => notificationStream.stop()
+    }
+  }, [isAuthenticated])
 
   useEffect(() => {
     // navigate() is basepath-aware; the guard must compare against the

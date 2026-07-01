@@ -15,9 +15,16 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 	"github.com/mcsm/api/migrations"
 )
+
+// testNotifier builds a notification service with no VAPID keys, enough for
+// router wiring in tests (Web Push is simply inert).
+func testNotifier(s *store.Store) *notify.Service {
+	return notify.NewServiceWithKeys(s, notify.VAPIDKeys{})
+}
 
 func accessTestStore(t *testing.T) (*store.Store, string, string, string, string) {
 	t.Helper()
@@ -198,7 +205,7 @@ func TestRequireServerPermissionLeafGranularity(t *testing.T) {
 func TestPlayerActionPermissionIsEnforced(t *testing.T) {
 	s, serverID, _, otherID, _ := accessTestStore(t)
 	secret := "secret"
-	r := NewRouter(s, secret, "", nil)
+	r := NewRouter(s, secret, "", nil, testNotifier(s))
 	token, err := auth.IssueAccessToken(secret, otherID, "other@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +240,7 @@ func TestPlayerActionPermissionIsEnforced(t *testing.T) {
 func TestServerMembersFlowAndStaleUpdate(t *testing.T) {
 	s, serverID, ownerID, otherID, _ := accessTestStore(t)
 	secret := "secret"
-	r := NewRouter(s, secret, "", nil)
+	r := NewRouter(s, secret, "", nil, testNotifier(s))
 	ownerToken, err := auth.IssueAccessToken(secret, ownerID, "owner@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +332,7 @@ func TestServerMembersFlowAndStaleUpdate(t *testing.T) {
 func TestServerMemberSecurityEdges(t *testing.T) {
 	s, serverID, ownerID, _, _ := accessTestStore(t)
 	secret := "secret"
-	r := NewRouter(s, secret, "", nil)
+	r := NewRouter(s, secret, "", nil, testNotifier(s))
 	ownerToken, err := auth.IssueAccessToken(secret, ownerID, "owner@example.com", "user")
 	if err != nil {
 		t.Fatal(err)

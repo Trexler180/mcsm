@@ -85,9 +85,13 @@ func main() {
 		log.Fatalf("refusing to bind agent to non-loopback %q without TLS: set AGENT_TLS_CERT/AGENT_TLS_KEY, bind AGENT_HOST=127.0.0.1, or set AGENT_ALLOW_INSECURE=1 to override", host)
 	}
 
-	mgr := process.NewManager()
-	collector := metrics.NewCollector()
 	serverRoot := defaultServerRoot()
+	mgr := process.NewManager(serverRoot)
+	collector := metrics.NewCollector()
+
+	// Adopt any Minecraft servers that kept running across a previous agent
+	// restart or upgrade, so a deploy doesn't take servers down (P0).
+	mgr.Reattach()
 
 	router := agentapi.NewRouter(token, mgr, collector, serverRoot)
 
@@ -128,8 +132,16 @@ func main() {
 	<-stop
 	log.Println("shutting down agent...")
 
-	// Gracefully stop running MC children so they aren't orphaned (P2 #18).
-	mgr.StopAll(30 * time.Second)
+	// By default, leave Minecraft servers running across the restart so deploys
+	// and agent upgrades don't take servers down — the next agent reattaches to
+	// them on boot. Operators who want the old "stop everything with the agent"
+	// behavior can opt in.
+	if os.Getenv("AGENT_STOP_SERVERS_ON_EXIT") == "1" {
+		log.Println("AGENT_STOP_SERVERS_ON_EXIT=1: stopping all servers")
+		mgr.StopAll(30 * time.Second)
+	} else {
+		mgr.DetachAll()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

@@ -202,7 +202,7 @@ func TestDeletePlayerData(t *testing.T) {
 	otherDat := filepath.Join(dir, "world", "playerdata", other+".dat")
 	writeFile(t, otherDat, "x")
 
-	m := NewManager()
+	m := NewManager(t.TempDir())
 	const id = "srv1"
 	m.RegisterDir(id, dir)
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -165,6 +166,10 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.store.DeleteUser(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrUserOwnsServers) {
+			writeError(w, http.StatusConflict, "this user still owns one or more servers; reassign or delete those servers before removing the user")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

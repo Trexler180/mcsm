@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -20,27 +21,31 @@ const (
 	// between stop and start; tolerate that window before calling an offline a
 	// crash. Also covers a stop/kill whose audit row lands just after the poll.
 	crashGrace = 2 * time.Minute
+	// nodeFreshWindow mirrors the overview's notion of a live node: not heard
+	// from within this window means offline. Used to detect up/down transitions.
+	nodeFreshWindow = 45 * time.Second
 )
 
-// Run blocks until ctx is done. Spawn it in its own goroutine.
-func Run(ctx context.Context, s *store.Store) {
+// Run blocks until ctx is done. Spawn it in its own goroutine. engine may be nil
+// (notifications disabled), in which case Emit is a no-op.
+func Run(ctx context.Context, s *store.Store, engine *notify.Engine) {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 
 	// First sweep immediately so the UI is correct on boot.
-	pollAll(ctx, s)
+	pollAll(ctx, s, engine)
 	for {
 		select {
 		case <-t.C:
-			pollAll(ctx, s)
+			pollAll(ctx, s, engine)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func pollAll(ctx context.Context, s *store.Store) {
-	pollNodes(ctx, s)
+func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
+	pollNodes(ctx, s, engine)
 
 	servers, err := s.ListServers(ctx)
 	if err != nil {
@@ -94,7 +99,14 @@ func pollAll(ctx context.Context, s *store.Store) {
 					msg := "Server went offline unexpectedly (possible crash)"
 					s.LogAction(ctx, "", srv.ID, "server.crash", "", map[string]any{"detail": msg})
 					_ = s.InsertLogEvent(ctx, srv.ID, "error", msg, "poller")
+					engine.Emit(notify.ServerCrash(srv.ID, srv.Name))
+				} else {
+					engine.Emit(notify.ServerOffline(srv.ID, srv.Name))
 				}
+			}
+			// A clean transition into the online state.
+			if desired == "online" && srv.Status != "online" {
+				engine.Emit(notify.ServerOnline(srv.ID, srv.Name))
 			}
 			// Conversely, a server reaching "online" booted cleanly, so any stored
 			// mod conflict is now resolved — whether the operator disabled the
@@ -115,17 +127,24 @@ func pollAll(ctx context.Context, s *store.Store) {
 	}
 }
 
-func pollNodes(ctx context.Context, s *store.Store) {
+func pollNodes(ctx context.Context, s *store.Store, engine *notify.Engine) {
 	nodes, err := s.ListNodes(ctx)
 	if err != nil {
 		return
 	}
 	for _, node := range nodes {
+		// Prior liveness, derived from the last heartbeat, lets us alert only on
+		// the up→down / down→up edges rather than every poll.
+		wasOnline := node.LastSeen != nil && time.Since(*node.LastSeen) < nodeFreshWindow
+
 		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 		callCtx, cancel := context.WithTimeout(ctx, perCallBudget)
 		info, err := c.Info(callCtx)
 		cancel()
 		if err != nil {
+			if wasOnline {
+				engine.Emit(notify.NodeOffline(node.ID, node.Name))
+			}
 			continue
 		}
 		memoryMb := intFromInfo(info, "memory_mb")
@@ -133,6 +152,9 @@ func pollNodes(ctx context.Context, s *store.Store) {
 		cpuCores := intFromInfo(info, "cpu_cores")
 		if err := s.UpdateNodeHeartbeat(ctx, node.ID, memoryMb, diskGb, cpuCores); err != nil {
 			log.Printf("poller: update node heartbeat %s: %v", node.ID, err)
+		}
+		if !wasOnline {
+			engine.Emit(notify.NodeOnline(node.ID, node.Name))
 		}
 	}
 }

@@ -24,6 +24,7 @@ import (
 	panelapi "github.com/mcsm/api/internal/api"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/poller"
 	"github.com/mcsm/api/internal/scheduler"
 	"github.com/mcsm/api/internal/store"
@@ -207,7 +208,21 @@ func main() {
 	}
 
 	updater := autoupdate.New(s)
-	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater)
+
+	// Background workers run on a cancelable context torn down on shutdown.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
+	// Notifications: provision VAPID keys (first run), build the engine/dispatcher,
+	// and start the durable-outbox dispatcher. The engine is handed to detection
+	// points so crashes/backups/etc. raise per-user alerts.
+	notifier, err := notify.NewService(ctx, s, notifySubscriber())
+	if err != nil {
+		log.Fatalf("notifications init: %v", err)
+	}
+	updater.SetNotifier(notifier.Engine)
+	go notifier.Run(bgCtx)
+
+	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf("%s:%s", host, port),
@@ -220,13 +235,12 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Background workers: cron-driven scheduled tasks + status synchronization
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-
-	sched := scheduler.New(s, updater)
+	// Background workers: cron-driven scheduled tasks + status synchronization.
+	// bgCtx/bgCancel are created above (the dispatcher already runs on bgCtx).
+	sched := scheduler.New(s, updater, notifier.Engine)
 	sched.Start(bgCtx)
 
-	go poller.Run(bgCtx, s)
+	go poller.Run(bgCtx, s, notifier.Engine)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -262,6 +276,19 @@ func randomHex(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// notifySubscriber returns the contact identity sent to push services in the
+// VAPID JWT. Push providers want a stable mailto: or origin URL; we derive one
+// from APP_ORIGIN when set, falling back to a generic mailto for local dev.
+func notifySubscriber() string {
+	if origin := os.Getenv("APP_ORIGIN"); origin != "" {
+		return origin
+	}
+	if contact := os.Getenv("PUSH_CONTACT"); contact != "" {
+		return contact
+	}
+	return "mailto:admin@localhost"
 }
 
 func defaultServerRoot() string {

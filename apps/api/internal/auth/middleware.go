@@ -43,6 +43,7 @@ func queryTokenAllowed(r *http.Request) bool {
 	path := r.URL.Path
 	return strings.HasSuffix(path, "/console") ||
 		strings.HasSuffix(path, "/metrics") ||
+		strings.HasSuffix(path, "/notifications/stream") ||
 		strings.HasSuffix(path, "/files/download")
 }
 
