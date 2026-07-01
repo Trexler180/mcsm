@@ -4,6 +4,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { registerSW } from 'virtual:pwa-register'
 import { routeTree } from './routeTree'
+import { AppErrorBoundary, RouteErrorFallback } from './components/error-boundary'
 import './index.css'
 
 // Auto-update service worker: new deployments activate on the next load
@@ -26,6 +27,9 @@ const router = createRouter({
   // Defaults to '/' for local dev.
   basepath: import.meta.env.BASE_URL,
   context: { queryClient },
+  // A render error inside a route replaces that route's outlet instead of
+  // blanking the whole app.
+  defaultErrorComponent: RouteErrorFallback,
 })
 
 declare module '@tanstack/react-router' {
@@ -36,8 +40,10 @@ declare module '@tanstack/react-router' {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <AppErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </AppErrorBoundary>
   </React.StrictMode>,
 )
