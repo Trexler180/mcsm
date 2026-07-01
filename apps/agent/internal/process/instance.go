@@ -47,7 +47,27 @@ type Player struct {
 	Bedrock bool `json:"bedrock,omitempty"`
 }
 
-const ringCapacity = 500
+const (
+	// ringCapacity bounds the in-memory console history replayed to new
+	// subscribers.
+	ringCapacity = 500
+	// consoleBufSize is the channel buffer for the tailer→broadcaster hop and
+	// for each subscriber; a full subscriber buffer drops events rather than
+	// blocking the broadcast loop.
+	consoleBufSize = 512
+	// exitPollInterval is how often watchExit probes a PID-polled (detached)
+	// process for liveness.
+	exitPollInterval = 1 * time.Second
+	// killFinalizeWait bounds how long kill() waits for the exit watcher to
+	// observe the death and finalize, so callers see consistent state.
+	killFinalizeWait = 5 * time.Second
+	// defaultStopTimeout is how long a graceful stop waits before escalating
+	// to kill.
+	defaultStopTimeout = 30 * time.Second
+	// playerRefreshTimeout bounds how long a roster refresh waits for `/list`
+	// output on the console before returning the cached roster.
+	playerRefreshTimeout = 750 * time.Millisecond
+)
 
 type Status string
 
@@ -162,7 +182,7 @@ func newInstance(serverRoot, id string, cfg StartConfig) *Instance {
 		serverRoot:     serverRoot,
 		logPath:        consoleLogPath(serverRoot, id),
 		status:         StatusStarting,
-		broadcastCh:    make(chan ConsoleEvent, 512),
+		broadcastCh:    make(chan ConsoleEvent, consoleBufSize),
 		done:           make(chan struct{}),
 		detaching:      make(chan struct{}),
 		subs:           make(map[chan ConsoleEvent]struct{}),
@@ -687,7 +707,7 @@ func (inst *Instance) watchExit() {
 		return
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(exitPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -804,7 +824,7 @@ func (inst *Instance) kill() error {
 	// (stop, Restart) see consistent state rather than racing the 1s poll.
 	select {
 	case <-inst.done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(killFinalizeWait):
 	}
 	return nil
 }
@@ -821,7 +841,7 @@ func (inst *Instance) sendCommand(cmd string) error {
 }
 
 func (inst *Instance) subscribe() (<-chan ConsoleEvent, func()) {
-	ch := make(chan ConsoleEvent, 512)
+	ch := make(chan ConsoleEvent, consoleBufSize)
 
 	// Dead instance: hand back an already-closed channel so the consumer ends.
 	if inst.exited() {

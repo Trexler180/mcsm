@@ -116,7 +116,7 @@ func (m *Manager) Restart(id string) error {
 		return fmt.Errorf("server not found")
 	}
 	cfg := inst.Config
-	if err := inst.stop(true, 30*time.Second); err != nil {
+	if err := inst.stop(true, defaultStopTimeout); err != nil {
 		return fmt.Errorf("restart: stop failed: %w", err)
 	}
 	// stop() can return nil without the process having finalized (kill's exit
@@ -220,7 +220,7 @@ func (m *Manager) RefreshPlayers(id string, timeout time.Duration) []Player {
 // offline .dat for someone currently online is dropped so each player appears
 // once.
 func (m *Manager) AllPlayers(id string) []Player {
-	online := m.RefreshPlayers(id, 750*time.Millisecond)
+	online := m.RefreshPlayers(id, playerRefreshTimeout)
 
 	dir, ok := m.GetDir(id)
 	if !ok {
@@ -302,7 +302,7 @@ func (m *Manager) PlayerDetail(id, uuid string) (*PlayerDetail, error) {
 	} else {
 		d.Name = uuid
 	}
-	for _, p := range m.RefreshPlayers(id, 750*time.Millisecond) {
+	for _, p := range m.RefreshPlayers(id, playerRefreshTimeout) {
 		if strings.EqualFold(p.Name, d.Name) {
 			d.Online = true
 			break
