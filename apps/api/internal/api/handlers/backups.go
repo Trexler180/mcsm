@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/backups"
 	"github.com/mcsm/api/internal/notify"
@@ -42,14 +41,8 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	claims := auth.ClaimsFrom(r.Context())
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
@@ -74,7 +67,6 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(r.Context(), srv.ID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -120,21 +112,14 @@ func (h *BackupHandlers) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -163,21 +148,14 @@ func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if backup.Status == "success" {
-		srv, err := h.store.GetServer(r.Context(), serverID)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "server not found")
-			return
-		}
-		node, err := h.store.GetNode(r.Context(), srv.NodeID)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "node not found")
+		srv, c, ok := serverAgent(w, r, h.store, serverID)
+		if !ok {
 			return
 		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
 
-		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 		if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 			writeError(w, http.StatusBadGateway, "failed to register server directory")
 			return

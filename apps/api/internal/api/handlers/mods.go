@@ -188,8 +188,8 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 	if err != nil {
 		return
 	}
-
 	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	// The agent forgets registered directories on restart; (re)register so the
@@ -751,21 +751,14 @@ func (h *ModHandlers) Install(w http.ResponseWriter, r *http.Request) {
 		body.Source = "modrinth"
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -790,14 +783,8 @@ const customModUploadLimit = 512 << 20
 func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
@@ -826,7 +813,6 @@ func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -1026,14 +1012,8 @@ func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
@@ -1058,7 +1038,6 @@ func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(packPath)
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -1629,21 +1608,14 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mod has no source project")
 		return
 	}
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -1753,14 +1725,8 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
@@ -1771,7 +1737,6 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		newName = mod.FileName + disabledSuffix
 	}
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
@@ -1811,21 +1776,14 @@ func (h *ModHandlers) DisableConflict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	// Make sure the agent knows the directory even if the instance was lost.
 	if err := c.RegisterDir(ctx, serverID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
@@ -1909,18 +1867,11 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, err := h.store.GetServer(r.Context(), serverID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, serverID)
+	if !ok {
 		return
 	}
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
