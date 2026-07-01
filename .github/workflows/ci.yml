@@ -21,10 +21,10 @@ jobs:
             apps/agent/go.sum
       - name: Test API
         working-directory: apps/api
-        run: go test ./...
+        run: go test -race ./...
       - name: Test agent
         working-directory: apps/agent
-        run: go test ./...
+        run: go test -race ./...
       - name: Build API
         working-directory: apps/api
         run: go build ./cmd/server
@@ -51,6 +51,9 @@ jobs:
       - name: Lint
         working-directory: apps/web
         run: pnpm lint
+      - name: Typecheck
+        working-directory: apps/web
+        run: pnpm typecheck
       - name: Build
         working-directory: apps/web
         run: pnpm build
