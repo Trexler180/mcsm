@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -20,17 +19,10 @@ func NewFileHandlers(s *store.Store) *FileHandlers {
 
 func (h *FileHandlers) proxyToAgent(w http.ResponseWriter, r *http.Request, agentSuffix string) {
 	id := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+	srv, c, ok := serverAgent(w, r, h.store, id)
+	if !ok {
 		return
 	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
-		return
-	}
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()

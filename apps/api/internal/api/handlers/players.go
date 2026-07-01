@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 )
@@ -42,18 +41,11 @@ func NewPlayersHandlers(s *store.Store) *PlayersHandlers {
 // given agent path.
 func (h *PlayersHandlers) proxy(w http.ResponseWriter, r *http.Request, agentSuffix string) {
 	id := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
-	}
-	node, err := h.store.GetNode(r.Context(), srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+	srv, c, ok := serverAgent(w, r, h.store, id)
+	if !ok {
 		return
 	}
 
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
