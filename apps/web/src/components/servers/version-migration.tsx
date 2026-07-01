@@ -14,7 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Panel } from "@/components/servers/shared";
-import { SoftwareOptionsPanel } from "@/components/servers/options-properties";
+import { SoftwareOptionsPanel } from "@/components/servers/options/software-panel";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
