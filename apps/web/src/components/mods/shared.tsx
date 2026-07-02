@@ -2,8 +2,22 @@ import type {
   ModProjectType,
   ModSearchHit,
   ModSortIndex,
+  ModSource,
   ModVersion,
 } from "@/lib/types";
+
+// DetailTarget identifies the project whose detail dialog is open. hit and
+// projectType are only present when the dialog was opened from a browse
+// result; they carry the context needed to gate an install on compatibility.
+export interface DetailTarget {
+  source: ModSource;
+  projectId: string;
+  slug?: string;
+  isModpack: boolean;
+  installed: boolean;
+  hit?: ModSearchHit;
+  projectType?: ModProjectType;
+}
 
 export const PROJECT_TYPES: { value: ModProjectType; label: string }[] = [
   { value: "mod", label: "Mods" },
