@@ -17,6 +17,7 @@ import type {
   MfaEnableResponse,
   Session,
   LogEvent,
+  MetricsHistory,
   ModCategory,
   Overview,
   ServerConflict,
@@ -357,6 +358,8 @@ export const api = {
   servers: {
     list: (signal?: AbortSignal) => get<Server[]>("/servers", signal),
     get: (id: string) => get<Server>(`/servers/${id}`),
+    metricsHistory: (id: string, hours: number) =>
+      get<MetricsHistory>(`/servers/${id}/metrics/history?hours=${hours}`),
     create: (
       data: Partial<Server> & { import_existing?: boolean; jar_file?: string },
     ) => post<Server>("/servers", data),

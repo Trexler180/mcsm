@@ -50,6 +50,7 @@ const (
 	EventBackupFailed       = "backup.failed"
 	EventNodeOffline        = "node.offline"
 	EventNodeOnline         = "node.online"
+	EventServerPerformance  = "server.performance"
 )
 
 // EventDef is the static description of an event type, surfaced to the frontend
@@ -73,6 +74,7 @@ var Catalog = []EventDef{
 	{EventModUpdateFailed, "Mod update failed", "An auto-update run failed.", SeverityWarning, ScopeServer},
 	{EventBackupSuccess, "Backup succeeded", "A backup completed successfully.", SeverityInfo, ScopeServer},
 	{EventBackupFailed, "Backup failed", "A backup did not complete.", SeverityWarning, ScopeServer},
+	{EventServerPerformance, "Server under sustained load", "CPU or memory stayed above the alert threshold for several consecutive samples.", SeverityWarning, ScopeServer},
 	{EventNodeOffline, "Node offline", "An agent node stopped responding to heartbeats.", SeverityWarning, ScopeNode},
 	{EventNodeOnline, "Node online", "An agent node started responding again.", SeverityInfo, ScopeNode},
 }

@@ -192,6 +192,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// Console & metrics (WebSocket)
 					r.With(consoleAccess).Get("/console", consoleH.Console)
 					r.With(viewAccess).Get("/metrics", consoleH.Metrics)
+					// Sampled resource history (JSON, bucket-averaged)
+					r.With(viewAccess).Get("/metrics/history", serverH.MetricsHistory)
 
 					// Players. Roster reads need any players access; the specific
 					// action (whitelist/kick/ban/op) is enforced in the handler.

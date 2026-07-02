@@ -130,6 +130,21 @@ export interface AgentStatus {
   mod_conflict?: ModConflict;
 }
 
+// One bucket-averaged resource sample from the panel's history sampler.
+export interface MetricPoint {
+  ts: number; // unix seconds (bucket start)
+  cpu_percent: number;
+  ram_used_mb: number;
+  ram_total_mb: number;
+  players: number;
+}
+
+export interface MetricsHistory {
+  hours: number;
+  bucket_seconds: number;
+  points: MetricPoint[];
+}
+
 export interface Server {
   id: string;
   node_id: string;

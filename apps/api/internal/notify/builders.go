@@ -99,6 +99,16 @@ func NodeOnline(nodeID, nodeName string) Event {
 	}
 }
 
+// ServerPerformance reports sustained high resource usage. detail names the
+// resource and the observed level (e.g. "CPU at 96% for 10 minutes").
+func ServerPerformance(serverID, serverName, detail string) Event {
+	return Event{
+		Type: EventServerPerformance, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s is under sustained load", display(serverName, serverID)),
+		Body:  detail,
+	}
+}
+
 func display(name, id string) string {
 	if name != "" {
 		return name

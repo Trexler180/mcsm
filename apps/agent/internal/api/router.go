@@ -61,6 +61,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 
 			r.Get("/console", ch.Console)
 			r.Get("/metrics", mh.ServerMetrics)
+			r.Get("/stats", mh.Stats)
 
 			r.Get("/files", fh.List)
 			r.Get("/files/tree", fh.Tree)

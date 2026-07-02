@@ -182,6 +182,38 @@ func (c *Client) KillServer(ctx context.Context, serverID string) error {
 	return checkError(resp)
 }
 
+// ServerStats is the one-shot runtime snapshot the history sampler collects:
+// process resource usage plus the passively-tracked online roster. Fields are
+// zero when the process is down or the collector has no baseline yet.
+type ServerStats struct {
+	Status     string      `json:"status"`
+	CPUPercent float64     `json:"cpu_percent"`
+	RAMUsedMB  int64       `json:"ram_used_mb"`
+	RAMTotalMB int64       `json:"ram_total_mb"`
+	Players    []PlayerRef `json:"players"`
+}
+
+type PlayerRef struct {
+	Name string `json:"name"`
+	UUID string `json:"uuid"`
+}
+
+func (c *Client) GetServerStats(ctx context.Context, serverID string) (*ServerStats, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/servers/"+serverID+"/stats", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
+	var out ServerStats
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("agent stats: %w", err)
+	}
+	return &out, nil
+}
+
 func (c *Client) GetStatus(ctx context.Context, serverID string) (map[string]any, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/servers/"+serverID+"/status", nil)
 	if err != nil {

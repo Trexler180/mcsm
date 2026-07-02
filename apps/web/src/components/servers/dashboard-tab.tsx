@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ResourceChart } from "@/components/charts/resource-chart";
+import { MetricsHistoryChart } from "@/components/charts/history-chart";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -405,11 +406,17 @@ export function DashboardTab({
           title="Resources"
           description="Live agent metrics for this server."
         >
-          <ResourceChart
-            serverId={server.id}
-            ramMaxMb={server.ram_mb_max}
-            status={server.status}
-          />
+          <div className="space-y-3">
+            <ResourceChart
+              serverId={server.id}
+              ramMaxMb={server.ram_mb_max}
+              status={server.status}
+            />
+            <MetricsHistoryChart
+              serverId={server.id}
+              ramMaxMb={server.ram_mb_max}
+            />
+          </div>
         </Panel>
         <Panel title="Quick Actions">
           <div className="space-y-2">

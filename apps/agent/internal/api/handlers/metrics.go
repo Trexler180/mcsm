@@ -20,6 +20,38 @@ func NewMetricsHandlers(mgr *process.Manager, collector *metrics.Collector) *Met
 	return &MetricsHandlers{mgr: mgr, collector: collector}
 }
 
+// Stats returns a one-shot snapshot of a server's runtime stats plus its live
+// online-player roster, for the panel's history sampler. Unlike ServerMetrics
+// (a WebSocket stream for a watching browser), this costs one request and reads
+// only passively-tracked state — no console command is sent.
+func (h *MetricsHandlers) Stats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	info := h.mgr.Status(id)
+
+	out := map[string]any{"status": info.Status}
+	if info.PID > 0 {
+		if stats, err := h.collector.Process(int32(info.PID)); err == nil {
+			out["cpu_percent"] = stats.CPUPct
+			out["ram_used_mb"] = stats.RAMMb
+		}
+	}
+	if host, err := h.collector.Host("/"); err == nil {
+		out["ram_total_mb"] = host.RAMTotalMb
+	}
+
+	players := h.mgr.Players(id)
+	list := make([]map[string]string, 0, len(players))
+	for _, p := range players {
+		if !p.Online {
+			continue
+		}
+		list = append(list, map[string]string{"name": p.Name, "uuid": p.UUID})
+	}
+	out["players"] = list
+
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *MetricsHandlers) ServerMetrics(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 

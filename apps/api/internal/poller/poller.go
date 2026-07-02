@@ -32,12 +32,23 @@ func Run(ctx context.Context, s *store.Store, engine *notify.Engine) {
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 
+	sm := newSampler()
+	tick := 0
+	sweep := func() {
+		pollAll(ctx, s, engine)
+		// Sample resource history on a slower cadence than status polling.
+		if tick%sampleEvery == 0 {
+			sm.sampleAll(ctx, s, engine, nil)
+		}
+		tick++
+	}
+
 	// First sweep immediately so the UI is correct on boot.
-	pollAll(ctx, s, engine)
+	sweep()
 	for {
 		select {
 		case <-t.C:
-			pollAll(ctx, s, engine)
+			sweep()
 		case <-ctx.Done():
 			return
 		}
