@@ -94,7 +94,7 @@ paths, and starting the services again.
 ```bash
 cd apps/api && go test ./...
 cd apps/agent && go test ./...
-cd apps/web && pnpm lint && pnpm build
+cd apps/web && pnpm lint && pnpm test && pnpm build
 ```
 
 See `docs/` for architecture, deployment, security, and operations notes.
