@@ -200,6 +200,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(playersRead).Get("/players", playersH.List)
 					r.With(playersRead).Get("/players/meta", playersH.Meta)
 					r.With(playersRead).Get("/players/bans", playersH.Bans)
+					// Panel-tracked visit history (opened/closed by the poller).
+					r.With(playersRead).Get("/players/sessions", playersH.Sessions)
 					r.With(playersRead).Post("/players/action", playersH.Action)
 					r.With(playersRead).Get("/players/{uuid}", playersH.Detail)
 					r.With(playersDelete).Delete("/players/{uuid}", playersH.Delete)

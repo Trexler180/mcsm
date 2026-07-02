@@ -33,12 +33,16 @@ func Run(ctx context.Context, s *store.Store, engine *notify.Engine) {
 	defer t.Stop()
 
 	sm := newSampler()
+	sessions := newSessionTracker(s)
 	tick := 0
 	sweep := func() {
 		pollAll(ctx, s, engine)
-		// Sample resource history on a slower cadence than status polling.
+		// Sample resource history on a slower cadence than status polling; each
+		// snapshot's roster also drives player-session tracking.
 		if tick%sampleEvery == 0 {
-			sm.sampleAll(ctx, s, engine, nil)
+			sm.sampleAll(ctx, s, engine, func(srv *store.Server, stats *agent.ServerStats) {
+				sessions.observe(ctx, srv, stats)
+			})
 		}
 		tick++
 	}

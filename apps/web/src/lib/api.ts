@@ -34,6 +34,7 @@ import type {
   Player,
   PlayerActionKind,
   PlayerDetail,
+  PlayerSessionsResponse,
   ScheduledTask,
   Server,
   ServerBans,
@@ -537,6 +538,15 @@ export const api = {
 
   players: {
     list: (serverId: string) => get<Player[]>(`/servers/${serverId}/players`),
+    sessions: (serverId: string, opts?: { name?: string; hours?: number }) => {
+      const params = new URLSearchParams();
+      if (opts?.name) params.set("name", opts.name);
+      if (opts?.hours) params.set("hours", String(opts.hours));
+      const qs = params.toString();
+      return get<PlayerSessionsResponse>(
+        `/servers/${serverId}/players/sessions${qs ? `?${qs}` : ""}`,
+      );
+    },
     meta: (serverId: string) =>
       get<GeyserInfo>(`/servers/${serverId}/players/meta`),
     bans: (serverId: string) =>

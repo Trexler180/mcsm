@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { useNotifications } from '@/store/notifications'
-import type { ItemStack, PlayerDetail, PlayerStats } from '@/lib/types'
+import type { ItemStack, PlayerDetail, PlayerSession, PlayerStats } from '@/lib/types'
 import {
   itemLabel,
   itemAbbr,
@@ -264,6 +264,88 @@ function StatsSection({ stats }: { stats?: PlayerStats | null }) {
   )
 }
 
+// formatSessionSpan renders one visit: "Jul 2, 18:04 – 19:32" (same-day end
+// keeps just the time) or "… – now" while the session is open.
+function formatSessionSpan(s: PlayerSession): string {
+  const start = new Date(s.started_at)
+  const startText = start.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  if (!s.ended_at) return `${startText} – now`
+  const end = new Date(s.ended_at)
+  const sameDay = start.toDateString() === end.toDateString()
+  const endText = sameDay
+    ? end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : end.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return `${startText} – ${endText}`
+}
+
+function formatSeconds(total: number): string {
+  const h = Math.floor(total / 3600)
+  const m = Math.round((total % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+// SessionsSection lists the player's panel-tracked visits over the last week,
+// with their summed playtime. Complements the world's lifetime play_time stat:
+// this one answers "when were they on recently".
+function SessionsSection({ serverId, name }: { serverId: string; name: string }) {
+  const { data } = useQuery({
+    queryKey: ['player-sessions', serverId, name],
+    queryFn: () => api.players.sessions(serverId, { name, hours: 24 * 7 }),
+    staleTime: 60_000,
+  })
+
+  const sessions = data?.sessions ?? []
+  return (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <h4 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+          Sessions (7 days)
+        </h4>
+        {data && data.playtime_seconds !== undefined && data.playtime_seconds > 0 && (
+          <span className="text-xs text-text-secondary">
+            {formatSeconds(data.playtime_seconds)} played
+          </span>
+        )}
+      </div>
+      {sessions.length === 0 ? (
+        <p className="text-xs text-text-secondary">
+          No visits recorded this week. Visits are tracked while the panel is
+          running, at about one-minute resolution.
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {sessions.slice(0, 8).map((s) => {
+            const end = s.ended_at ? new Date(s.ended_at).getTime() : Date.now()
+            const secs = Math.max(0, (end - new Date(s.started_at).getTime()) / 1000)
+            return (
+              <li
+                key={s.id}
+                className="flex items-center justify-between gap-3 rounded border border-border bg-surface-2/40 px-2.5 py-1.5 text-xs"
+              >
+                <span className="text-text-primary">
+                  {formatSessionSpan(s)}
+                  {!s.ended_at && (
+                    <span className="ml-2 inline-block h-1.5 w-1.5 rounded-full bg-green-500 align-middle" />
+                  )}
+                </span>
+                <span className="tabular-nums text-text-secondary">
+                  {formatSeconds(secs)}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function StalenessBanner({
   d,
   serverOnline,
@@ -482,6 +564,8 @@ function DetailBody({
 
       {/* Lifetime stats */}
       <StatsSection stats={d.stats} />
+
+      <SessionsSection serverId={serverId} name={d.name} />
     </div>
   )
 }

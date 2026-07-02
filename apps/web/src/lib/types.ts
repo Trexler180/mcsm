@@ -651,6 +651,24 @@ export interface PlayerStats {
   walked_cm?: number;
 }
 
+// One panel-tracked player visit (opened/closed by the API's poller at about
+// one-minute resolution). ended_at null means the player is on right now.
+export interface PlayerSession {
+  id: string;
+  server_id: string;
+  player_name: string;
+  player_uuid?: string;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface PlayerSessionsResponse {
+  hours: number;
+  sessions: PlayerSession[];
+  // Present when the request was filtered to one player.
+  playtime_seconds?: number;
+}
+
 export interface PlayerDetail {
   name: string;
   uuid: string;

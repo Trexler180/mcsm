@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -81,6 +82,41 @@ func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {
 // access only — applying a ban goes through Action, which enforces players.ban.
 func (h *PlayersHandlers) Bans(w http.ResponseWriter, r *http.Request) {
 	h.proxy(w, r, "/players/bans")
+}
+
+// Sessions returns the panel-tracked play sessions for a server: recent visits
+// across everyone, or one player's history plus their summed in-window playtime
+// when ?name= is given. ?hours= selects the window (default 7 days).
+func (h *PlayersHandlers) Sessions(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	name := r.URL.Query().Get("name")
+
+	hours := 24 * 7
+	if v := r.URL.Query().Get("hours"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 24*90 {
+			writeError(w, http.StatusBadRequest, "hours must be between 1 and 2160")
+			return
+		}
+		hours = n
+	}
+
+	now := time.Now()
+	since := now.Add(-time.Duration(hours) * time.Hour)
+	sessions, err := h.store.ListPlayerSessions(r.Context(), serverID, name, since, 200)
+	if err != nil {
+		writeServerError(w, r, "player sessions", err)
+		return
+	}
+
+	out := map[string]any{
+		"hours":    hours,
+		"sessions": sessions,
+	}
+	if name != "" {
+		out["playtime_seconds"] = store.PlaytimeFromSessions(sessions, since, now)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Action proxies a player administration action (op/ban/whitelist/etc.). Since
