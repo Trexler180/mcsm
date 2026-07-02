@@ -3,11 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      Baseline CSP safe for both the Vite dev server and a production build:
-      blocks plugin/object execution and <base> hijacking. A full policy that
-      also constrains script-src/connect-src belongs at the reverse proxy that
-      serves this bundle in production (it would break Vite HMR if set here);
-      see docs/deployment.md.
+      Baseline CSP safe for the Vite dev server (HMR needs inline scripts).
+      `vite build` replaces this content with the full production policy — see
+      buildCSPPlugin in vite.config.ts. The exact string below is the plugin's
+      replacement anchor; keep them in sync.
     -->
     <meta
       http-equiv="Content-Security-Policy"

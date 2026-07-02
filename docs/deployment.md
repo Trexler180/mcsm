@@ -211,8 +211,12 @@ add_header Content-Security-Policy "default-src 'self'; img-src 'self' https: da
 ```
 
 Adjust `connect-src`/`img-src` if you front the API or mod-thumbnail CDNs from
-other origins. Do not put the full `script-src 'self'` policy in the bundled
-`index.html` — it would break the Vite dev server; it belongs at the proxy.
+other origins. The built `index.html` also carries an equivalent policy in a
+`<meta>` tag (injected at build time — see `buildCSPPlugin` in
+`apps/web/vite.config.ts`), so the bundle is protected even behind a proxy
+without these headers. The proxy header remains worth setting: `<meta>` CSP
+cannot express `frame-ancestors`, and a header covers every response, not just
+the document.
 
 ## State
 

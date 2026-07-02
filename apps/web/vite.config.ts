@@ -20,6 +20,43 @@ const base = process.env.VITE_BASE ?? '/'
 // production builds keep the full PWA behaviour.
 const pwaSelfDestroy = process.env.VITE_PWA_SELF_DESTROY === '1'
 
+// Full CSP for the built bundle, injected at build time only — the dev server
+// needs inline scripts for HMR/react-refresh, so index.html ships a minimal
+// baseline and this replaces it in `vite build` output. Notes:
+//  - script-src 'self': the bundle has no inline scripts (SW registration is
+//    in-bundle via virtual:pwa-register).
+//  - style-src 'unsafe-inline': xterm.js and recharts inject <style> elements.
+//  - img-src https:: player heads (mc-heads.net) and mod icons come from
+//    third-party CDNs that vary by source.
+//  - connect-src 'self' covers the same-origin API and its WebSockets.
+//  - frame-ancestors is not valid in a <meta> policy; the proxy sets it (and
+//    the API sets X-Frame-Options) — see docs/deployment.md.
+const buildCSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ')
+
+const devCSP = "object-src 'none'; base-uri 'self'"
+
+function buildCSPPlugin() {
+  return {
+    name: 'mcsm:build-csp',
+    apply: 'build' as const,
+    transformIndexHtml(html: string) {
+      return html.replace(devCSP, buildCSP)
+    },
+  }
+}
+
 function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
   if (!res || res.destroyed) return
 
@@ -35,6 +72,7 @@ function writeProxyUnavailable(res: ServerResponse | Socket | undefined) {
 export default defineConfig({
   base,
   plugins: [
+    buildCSPPlugin(),
     react(),
     VitePWA({
       selfDestroying: pwaSelfDestroy,
