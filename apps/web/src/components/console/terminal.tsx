@@ -1,12 +1,103 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { ServerConsole } from "@/lib/ws";
+import { api } from "@/lib/api";
+import { matchCommands } from "./commands";
 
 interface TerminalProps {
   serverId: string;
+}
+
+const HISTORY_KEY = (serverId: string) => `mcsm.console.history.${serverId}`;
+const HISTORY_MAX = 50;
+
+function loadHistory(serverId: string): string[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY(serverId));
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(serverId: string, history: string[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY(serverId), JSON.stringify(history.slice(-HISTORY_MAX)));
+  } catch {
+    // Storage full/unavailable: history just doesn't persist.
+  }
+}
+
+// RecentWarnings surfaces the server's indexed log warnings (the same events
+// the audit view lists) right where the operator is already looking when
+// something misbehaves. Collapsed by default to a one-line summary.
+function RecentWarnings({ serverId }: { serverId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const { data: events = [] } = useQuery({
+    queryKey: ["log-events", serverId],
+    queryFn: () => api.servers.logEvents(serverId, { limit: 20 }),
+    refetchInterval: 30_000,
+  });
+
+  // Only surface events from the last hour — older warnings belong to a
+  // previous run and would cry wolf forever.
+  const recent = useMemo(() => {
+    const cutoff = Date.now() - 60 * 60_000;
+    return events.filter((e) => new Date(e.created_at).getTime() >= cutoff);
+  }, [events]);
+
+  if (recent.length === 0) return null;
+  const errors = recent.filter((e) => e.level === "error").length;
+
+  return (
+    <div className="flex-shrink-0 border-b border-border bg-surface">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+      >
+        <AlertTriangle
+          className={`h-3.5 w-3.5 ${errors > 0 ? "text-red-400" : "text-yellow-400"}`}
+        />
+        <span>
+          {recent.length} warning{recent.length === 1 ? "" : "s"} in the last hour
+          {errors > 0 && ` (${errors} error${errors === 1 ? "" : "s"})`}
+        </span>
+        {expanded ? (
+          <ChevronUp className="ml-auto h-3.5 w-3.5" />
+        ) : (
+          <ChevronDown className="ml-auto h-3.5 w-3.5" />
+        )}
+      </button>
+      {expanded && (
+        <ul className="max-h-40 overflow-y-auto border-t border-border/50 px-3 py-2 space-y-1">
+          {recent.slice(0, 10).map((e) => (
+            <li key={e.id} className="flex items-start gap-2 text-xs">
+              <span
+                className={`mt-0.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                  e.level === "error" ? "bg-red-400" : "bg-yellow-400"
+                }`}
+              />
+              <span className="min-w-0 flex-1 truncate text-text-primary" title={e.message}>
+                {e.message}
+              </span>
+              <span className="flex-shrink-0 tabular-nums text-text-secondary">
+                {new Date(e.created_at).toLocaleTimeString(undefined, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function ServerTerminal({ serverId }: TerminalProps) {
@@ -17,6 +108,17 @@ export function ServerTerminal({ serverId }: TerminalProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [input, setInput] = useState("");
   const [connected, setConnected] = useState(false);
+
+  // Command history: ↑/↓ cycles through past commands; the in-progress draft
+  // is kept at position -1 so cycling down past the newest entry restores it.
+  const historyRef = useRef<string[]>([]);
+  const historyPosRef = useRef(-1);
+  const draftRef = useRef("");
+
+  useEffect(() => {
+    historyRef.current = loadHistory(serverId);
+    historyPosRef.current = -1;
+  }, [serverId]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -80,20 +182,90 @@ export function ServerTerminal({ serverId }: TerminalProps) {
     };
   }, [serverId]);
 
+  const suggestions = useMemo(
+    () => (connected ? matchCommands(input).slice(0, 5) : []),
+    [input, connected],
+  );
+
   const sendCommand = () => {
     const cmd = input.trim();
     if (!cmd || !connected || !consoleRef.current) return;
     consoleRef.current.send(cmd);
+    // Record into history, deduping an immediate repeat.
+    const h = historyRef.current;
+    if (h[h.length - 1] !== cmd) {
+      h.push(cmd);
+      saveHistory(serverId, h);
+    }
+    historyPosRef.current = -1;
+    draftRef.current = "";
     setInput("");
   };
 
+  const cycleHistory = (dir: -1 | 1) => {
+    const h = historyRef.current;
+    if (h.length === 0) return;
+    let pos = historyPosRef.current;
+    if (pos === -1) {
+      if (dir === 1) return; // nothing newer than the draft
+      draftRef.current = input;
+      pos = h.length - 1;
+    } else {
+      pos += dir;
+    }
+    if (pos >= h.length) {
+      historyPosRef.current = -1;
+      setInput(draftRef.current);
+      return;
+    }
+    if (pos < 0) pos = 0;
+    historyPosRef.current = pos;
+    setInput(h[pos]);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") sendCommand();
+    if (e.key === "Enter") {
+      sendCommand();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cycleHistory(-1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cycleHistory(1);
+    } else if (e.key === "Tab" && suggestions.length > 0) {
+      e.preventDefault();
+      setInput(suggestions[0].cmd + " ");
+    }
   };
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0f0f0f] rounded-lg border border-border overflow-hidden">
+      <RecentWarnings serverId={serverId} />
       <div ref={containerRef} className="flex-1 min-h-0 p-2" />
+      {suggestions.length > 0 && (
+        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-t border-border bg-surface px-3 py-1.5">
+          {suggestions.map((s, i) => (
+            <button
+              key={s.cmd}
+              onClick={() => {
+                setInput(s.cmd + " ");
+                inputRef.current?.focus();
+              }}
+              className={`rounded border px-2 py-0.5 font-mono text-xs transition-colors ${
+                i === 0
+                  ? "border-accent/40 bg-accent/10 text-accent"
+                  : "border-border bg-surface-2 text-text-secondary hover:text-text-primary"
+              }`}
+              title={s.hint ?? s.cmd}
+            >
+              {s.cmd}
+            </button>
+          ))}
+          <span className="ml-auto hidden text-[10px] text-text-secondary sm:block">
+            Tab completes · ↑↓ history
+          </span>
+        </div>
+      )}
       <div className="flex flex-shrink-0 items-center gap-2 px-3 py-2 border-t border-border bg-surface">
         <span className="text-text-secondary text-sm font-mono flex-shrink-0">
           {connected ? (
@@ -113,7 +285,10 @@ export function ServerTerminal({ serverId }: TerminalProps) {
               : "Server offline — start it to send commands"
           }
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            historyPosRef.current = -1;
+          }}
           onKeyDown={handleKeyDown}
           disabled={!connected}
           aria-label="Server console command"
