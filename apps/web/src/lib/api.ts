@@ -38,6 +38,7 @@ import type {
   ScheduledTask,
   Server,
   ServerBans,
+  ServerTime,
   ServerMember,
   ServerMembersResponse,
   ServerPermission,
@@ -302,6 +303,7 @@ const del = <T>(path: string) => request<T>("DELETE", path);
 
 export const api = {
   health: () => get<{ status: string; version?: string }>("/health"),
+  time: () => get<ServerTime>("/time"),
 
   auth: {
     login: async (

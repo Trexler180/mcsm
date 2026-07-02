@@ -92,6 +92,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.Post("/auth/sessions/revoke-others", sessionH.RevokeOthers)
 			r.Delete("/auth/sessions/{id}", sessionH.Revoke)
 
+			// Panel wall-clock + timezone (scheduled tasks fire on this clock).
+			r.Get("/time", handlers.Time)
+
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)
 			r.Get("/minecraft/loaders", mcH.LoaderVersions)

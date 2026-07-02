@@ -708,6 +708,14 @@ export interface ScheduledTask {
   created_at: string;
 }
 
+// Panel wall-clock, used to show scheduled-task times in the timezone cron
+// actually fires in (the API process's), independent of the viewer's browser.
+export interface ServerTime {
+  now: string; // RFC3339 with the server's numeric offset
+  zone: string; // abbreviation, e.g. "UTC"
+  offset_seconds: number; // east-of-UTC
+}
+
 export interface LoginResponse {
   access_token?: string;
   user?: User;
