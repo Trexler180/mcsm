@@ -4,6 +4,9 @@ import path from 'path'
 // Test config lives in its own file so vite.config.ts (PWA manifest, base-path
 // handling, build chunking — all deploy-sensitive) stays untouched by tooling.
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify('test'),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

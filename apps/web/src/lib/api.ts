@@ -299,6 +299,8 @@ const put = <T>(path: string, body?: unknown) => request<T>("PUT", path, body);
 const del = <T>(path: string) => request<T>("DELETE", path);
 
 export const api = {
+  health: () => get<{ status: string; version?: string }>("/health"),
+
   auth: {
     login: async (
       email: string,

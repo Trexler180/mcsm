@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	panelapi "github.com/mcsm/api/internal/api"
+	"github.com/mcsm/api/internal/api/handlers"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/notify"
@@ -68,8 +70,44 @@ func (slogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// version can be pinned with -ldflags "-X main.version=..."; when left empty,
+// resolveVersion falls back to the git revision Go embeds in the binary.
+var version = ""
+
+// resolveVersion returns the build identity: the explicit -X value, else the
+// VCS revision baked in by `go build` from a git checkout ("-dirty" when the
+// tree had uncommitted changes), else "dev".
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		var rev, dirty string
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				if s.Value == "true" {
+					dirty = "-dirty"
+				}
+			}
+		}
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			return rev + dirty
+		}
+	}
+	return "dev"
+}
+
 func main() {
 	setupLogging()
+
+	handlers.Version = resolveVersion()
+	log.Printf("mcsm-api %s starting", handlers.Version)
 
 	dbPath := envOr("DATABASE_PATH", "mcsm.db")
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -225,8 +263,8 @@ func main() {
 	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier)
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf("%s:%s", host, port),
-		Handler: router,
+		Addr:        fmt.Sprintf("%s:%s", host, port),
+		Handler:     router,
 		ReadTimeout: 30 * time.Second,
 		// Bound how long a client may take to send request headers, so a slow-drip
 		// (slowloris) connection can't hold a goroutine open indefinitely.

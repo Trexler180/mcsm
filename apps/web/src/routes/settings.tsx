@@ -109,6 +109,25 @@ function IntegrationCard({ meta }: { meta: IntegrationMeta }) {
   )
 }
 
+function AboutCard() {
+  const { data: health } = useQuery({
+    queryKey: ['health'],
+    queryFn: api.health,
+    staleTime: 60 * 60_000,
+  })
+
+  return (
+    <div className="rounded-lg border border-border bg-surface px-5 py-4 text-xs text-text-secondary flex flex-wrap gap-x-6 gap-y-1">
+      <span>
+        Web <code className="text-text-primary">{__APP_VERSION__}</code>
+      </span>
+      <span>
+        API <code className="text-text-primary">{health?.version ?? '…'}</code>
+      </span>
+    </div>
+  )
+}
+
 function SettingsPage() {
   const { data: integrations = [], isLoading } = useQuery({
     queryKey: ['integrations'],
@@ -126,6 +145,7 @@ function SettingsPage() {
         ) : (
           integrations.map((meta) => <IntegrationCard key={meta.key} meta={meta} />)
         )}
+        <AboutCard />
       </div>
     </div>
   )

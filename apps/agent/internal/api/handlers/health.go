@@ -14,10 +14,14 @@ import (
 
 var startTime = time.Now()
 
+// Version identifies the running build (git revision or "dev"). Set once from
+// main at startup; read-only afterwards.
+var Version = "dev"
+
 func Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
-		"version": "0.1.0",
+		"version": Version,
 	})
 }
 
@@ -42,14 +46,15 @@ func Info(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"hostname":        hostname,
-		"os":              runtime.GOOS,
-		"arch":            runtime.GOARCH,
-		"memory_mb":       memTotal,
-		"disk_gb":         diskTotal,
-		"cpu_cores":       runtime.NumCPU(),
-		"uptime_seconds":  uptime,
+		"hostname":         hostname,
+		"os":               runtime.GOOS,
+		"arch":             runtime.GOARCH,
+		"memory_mb":        memTotal,
+		"disk_gb":          diskTotal,
+		"cpu_cores":        runtime.NumCPU(),
+		"uptime_seconds":   uptime,
 		"agent_uptime_sec": int(time.Since(startTime).Seconds()),
+		"version":          Version,
 	})
 }
 

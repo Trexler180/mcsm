@@ -2,8 +2,21 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
+import { execSync } from 'node:child_process'
 import type { ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
+
+// Build identity baked into the bundle as __APP_VERSION__: the git revision
+// when building from a checkout, else "dev" (e.g. a source tarball).
+function appVersion(): string {
+  try {
+    return execSync('git rev-parse --short=12 HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim() || 'dev'
+  } catch {
+    return 'dev'
+  }
+}
 
 const apiPort = process.env.VITE_API_PORT ?? '8081'
 const apiHost = process.env.VITE_API_HOST ?? '127.0.0.1'
@@ -111,6 +124,9 @@ export default defineConfig({
       },
     }),
   ],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion()),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

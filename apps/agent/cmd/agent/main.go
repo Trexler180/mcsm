@@ -10,14 +10,49 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
 	agentapi "github.com/mcsm/agent/internal/api"
+	"github.com/mcsm/agent/internal/api/handlers"
 	"github.com/mcsm/agent/internal/metrics"
 	"github.com/mcsm/agent/internal/process"
 )
+
+// version can be pinned with -ldflags "-X main.version=..."; when left empty,
+// resolveVersion falls back to the git revision Go embeds in the binary.
+var version = ""
+
+// resolveVersion returns the build identity: the explicit -X value, else the
+// VCS revision baked in by `go build` from a git checkout ("-dirty" when the
+// tree had uncommitted changes), else "dev".
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		var rev, dirty string
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.modified":
+				if s.Value == "true" {
+					dirty = "-dirty"
+				}
+			}
+		}
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			return rev + dirty
+		}
+	}
+	return "dev"
+}
 
 // setupLogging mirrors the API: slog as default, stdlib log bridged through it.
 func setupLogging() {
@@ -53,6 +88,9 @@ func (slogWriter) Write(p []byte) (int, error) {
 
 func main() {
 	setupLogging()
+
+	handlers.Version = resolveVersion()
+	log.Printf("mcsm-agent %s starting", handlers.Version)
 
 	token := os.Getenv("AGENT_TOKEN")
 	if token == "" {
