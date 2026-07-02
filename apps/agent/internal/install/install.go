@@ -10,10 +10,16 @@ package install
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"hash"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -92,15 +98,18 @@ func paperJar(ctx context.Context, dir, mcVersion string) error {
 		"https://fill.papermc.io/v3/projects/paper/versions/%s/builds", mcVersion), &builds); err != nil {
 		return fmt.Errorf("paper version lookup: %w", err)
 	}
-	url, ok := selectPaperDownloadURL(builds)
+	url, sha, ok := selectPaperDownloadURL(builds)
 	if !ok {
 		return fmt.Errorf("paper has no downloadable build for mc %s", mcVersion)
 	}
-	return download(ctx, url, filepath.Join(dir, JarName))
+	return download(ctx, url, filepath.Join(dir, JarName), integrity{algo: "sha256", hex: sha})
 }
 
 type paperFillDownload struct {
-	URL string `json:"url"`
+	URL       string `json:"url"`
+	Checksums struct {
+		SHA256 string `json:"sha256"`
+	} `json:"checksums"`
 }
 
 type paperFillBuild struct {
@@ -117,30 +126,38 @@ func (b paperFillBuild) buildDownloadURL() string {
 	}
 	return b.Downloads["server:default"].URL
 }
+func (b paperFillBuild) buildSHA256() string {
+	if b.Downloads == nil {
+		return ""
+	}
+	return b.Downloads["server:default"].Checksums.SHA256
+}
 
 type paperDownloadBuild interface {
 	buildChannel() string
 	buildID() int
 	buildDownloadURL() string
+	buildSHA256() string
 }
 
-func selectPaperDownloadURL[T paperDownloadBuild](builds []T) (string, bool) {
+func selectPaperDownloadURL[T paperDownloadBuild](builds []T) (url, sha256 string, ok bool) {
 	bestPriority := -1
 	bestID := -1
-	var bestURL string
+	var bestURL, bestSHA string
 	for _, build := range builds {
-		url := build.buildDownloadURL()
-		if url == "" {
+		u := build.buildDownloadURL()
+		if u == "" {
 			continue
 		}
 		priority := paperChannelPriority(build.buildChannel())
 		if priority > bestPriority || (priority == bestPriority && build.buildID() > bestID) {
 			bestPriority = priority
 			bestID = build.buildID()
-			bestURL = url
+			bestURL = u
+			bestSHA = build.buildSHA256()
 		}
 	}
-	return bestURL, bestURL != ""
+	return bestURL, bestSHA, bestURL != ""
 }
 
 func paperChannelPriority(channel string) int {
@@ -159,8 +176,23 @@ func paperChannelPriority(channel string) int {
 // ── Purpur ───────────────────────────────────────────────────────────────────
 
 func purpurJar(ctx context.Context, dir, mcVersion string) error {
-	url := fmt.Sprintf("https://api.purpurmc.org/v2/purpur/%s/latest/download", mcVersion)
-	return download(ctx, url, filepath.Join(dir, JarName))
+	// The /latest/download shortcut skips build metadata; fetch the latest
+	// build info first so the published md5 can be verified. Integrity check
+	// against a corrupted/tampered transfer, not cryptographic trust — the
+	// hash comes from the same API that serves the file.
+	var build struct {
+		Build string `json:"build"`
+		MD5   string `json:"md5"`
+	}
+	if err := getJSON(ctx, fmt.Sprintf(
+		"https://api.purpurmc.org/v2/purpur/%s/latest", mcVersion), &build); err != nil {
+		return fmt.Errorf("purpur build lookup: %w", err)
+	}
+	if build.Build == "" {
+		return fmt.Errorf("no purpur build for mc %s", mcVersion)
+	}
+	url := fmt.Sprintf("https://api.purpurmc.org/v2/purpur/%s/%s/download", mcVersion, build.Build)
+	return download(ctx, url, filepath.Join(dir, JarName), integrity{algo: "md5", hex: build.MD5})
 }
 
 // ── Vanilla ──────────────────────────────────────────────────────────────────
@@ -176,7 +208,9 @@ func vanillaJar(ctx context.Context, dir, mcVersion string) error {
 	type versionInfo struct {
 		Downloads struct {
 			Server struct {
-				URL string `json:"url"`
+				URL  string `json:"url"`
+				SHA1 string `json:"sha1"`
+				Size int64  `json:"size"`
 			} `json:"server"`
 		} `json:"downloads"`
 	}
@@ -204,7 +238,13 @@ func vanillaJar(ctx context.Context, dir, mcVersion string) error {
 	if info.Downloads.Server.URL == "" {
 		return fmt.Errorf("vanilla %s has no server download", mcVersion)
 	}
-	return download(ctx, info.Downloads.Server.URL, filepath.Join(dir, JarName))
+	// Verify Mojang's published sha1+size. Meaningful here: the metadata comes
+	// from piston-meta.mojang.com while the jar is served from a different host.
+	return download(ctx, info.Downloads.Server.URL, filepath.Join(dir, JarName), integrity{
+		algo: "sha1",
+		hex:  info.Downloads.Server.SHA1,
+		size: info.Downloads.Server.Size,
+	})
 }
 
 // ── Fabric ───────────────────────────────────────────────────────────────────
@@ -255,7 +295,8 @@ func fabricJar(ctx context.Context, dir, mcVersion string) error {
 
 	url := fmt.Sprintf("https://meta.fabricmc.net/v2/versions/loader/%s/%s/%s/server/jar",
 		mcVersion, loader, installer)
-	return download(ctx, url, filepath.Join(dir, JarName))
+	// meta.fabricmc.net publishes no checksum for the bundled server jar.
+	return download(ctx, url, filepath.Join(dir, JarName), integrity{})
 }
 
 // ── Quilt ────────────────────────────────────────────────────────────────────
@@ -292,7 +333,8 @@ func quiltJar(ctx context.Context, dir, mcVersion string) error {
 
 	url := fmt.Sprintf("https://meta.quiltmc.org/v3/versions/loader/%s/%s/%s/server/jar",
 		mcVersion, loader, installer)
-	return download(ctx, url, filepath.Join(dir, JarName))
+	// meta.quiltmc.org publishes no checksum for the bundled server jar.
+	return download(ctx, url, filepath.Join(dir, JarName), integrity{})
 }
 
 // ── Spigot (BuildTools — slow, ~5–10 min) ────────────────────────────────────
@@ -305,9 +347,10 @@ func spigotJar(ctx context.Context, dir, mcVersion, javaBinary string) error {
 	defer os.RemoveAll(tmpDir)
 
 	btJar := filepath.Join(tmpDir, "BuildTools.jar")
+	// Jenkins' lastSuccessfulBuild artifact has no stable published checksum.
 	if err := download(ctx,
 		"https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar",
-		btJar); err != nil {
+		btJar, integrity{}); err != nil {
 		return fmt.Errorf("download BuildTools: %w", err)
 	}
 
@@ -349,7 +392,7 @@ func forgeInstall(ctx context.Context, dir, mcVersion, javaBinary string) error 
 	url := fmt.Sprintf(
 		"https://maven.minecraftforge.net/net/minecraftforge/forge/%s/forge-%s-installer.jar",
 		fullVer, fullVer)
-	if err := download(ctx, url, installerJar); err != nil {
+	if err := download(ctx, url, installerJar, mavenChecksum(ctx, url)); err != nil {
 		return fmt.Errorf("download forge installer: %w", err)
 	}
 	defer os.Remove(installerJar)
@@ -403,7 +446,7 @@ func neoforgeInstall(ctx context.Context, dir, mcVersion, javaBinary string) err
 	url := fmt.Sprintf(
 		"https://maven.neoforged.net/releases/net/neoforged/neoforge/%s/neoforge-%s-installer.jar",
 		latest, latest)
-	if err := download(ctx, url, installerJar); err != nil {
+	if err := download(ctx, url, installerJar, mavenChecksum(ctx, url)); err != nil {
 		return fmt.Errorf("download neoforge installer: %w", err)
 	}
 	defer os.Remove(installerJar)
@@ -498,7 +541,32 @@ func httpRequest(ctx context.Context, url string) (*http.Response, error) {
 	return resp, nil
 }
 
-func download(ctx context.Context, url, dst string) error {
+// integrity describes the expected digest (and optionally size) of a download.
+// The zero value disables verification, for upstreams that publish no checksum.
+type integrity struct {
+	algo string // "sha256" | "sha1" | "md5"
+	hex  string // lowercase hex digest; "" = no verification
+	size int64  // expected byte count; 0 = unknown
+}
+
+func (i integrity) enabled() bool { return i.hex != "" }
+
+func (i integrity) newHash() (hash.Hash, error) {
+	switch i.algo {
+	case "sha256":
+		return sha256.New(), nil
+	case "sha1":
+		return sha1.New(), nil
+	case "md5":
+		return md5.New(), nil
+	}
+	return nil, fmt.Errorf("unsupported checksum algorithm %q", i.algo)
+}
+
+// download fetches url into dst via a temporary .part file. When want carries a
+// checksum and/or size, the payload is verified before it replaces dst, so a
+// corrupted or tampered transfer never lands as a runnable server jar.
+func download(ctx context.Context, url, dst string, want integrity) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
@@ -515,7 +583,20 @@ func download(ctx context.Context, url, dst string) error {
 		resp.Body.Close()
 		return err
 	}
-	_, copyErr := io.Copy(f, resp.Body)
+
+	var h hash.Hash
+	w := io.Writer(f)
+	if want.enabled() {
+		if h, err = want.newHash(); err != nil {
+			f.Close()
+			resp.Body.Close()
+			os.Remove(tmp)
+			return err
+		}
+		w = io.MultiWriter(f, h)
+	}
+
+	n, copyErr := io.Copy(w, resp.Body)
 	closeErr := f.Close()
 	bodyErr := resp.Body.Close()
 	if copyErr != nil {
@@ -530,11 +611,71 @@ func download(ctx context.Context, url, dst string) error {
 		os.Remove(tmp)
 		return bodyErr
 	}
+	if want.size > 0 && n != want.size {
+		os.Remove(tmp)
+		return fmt.Errorf("download size mismatch for %s: got %d bytes, want %d", url, n, want.size)
+	}
+	if want.enabled() {
+		got := hex.EncodeToString(h.Sum(nil))
+		if !strings.EqualFold(got, want.hex) {
+			os.Remove(tmp)
+			return fmt.Errorf("download %s mismatch for %s: got %s, want %s", want.algo, url, got, want.hex)
+		}
+	}
 	if err := replaceFile(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return err
 	}
 	return nil
+}
+
+// mavenChecksum fetches the checksum sidecar Maven publishes next to jarURL
+// (.sha256, falling back to .sha1). Best-effort: the sidecar lives on the same
+// origin as the jar, so this protects against corrupted or CDN-tampered
+// transfers, not a compromised upstream. A missing sidecar logs and returns no
+// verification rather than failing the install.
+func mavenChecksum(ctx context.Context, jarURL string) integrity {
+	for _, c := range []struct {
+		ext, algo string
+		hexLen    int
+	}{
+		{".sha256", "sha256", 64},
+		{".sha1", "sha1", 40},
+	} {
+		sum, err := fetchChecksumFile(ctx, jarURL+c.ext, c.hexLen)
+		if err != nil {
+			continue
+		}
+		return integrity{algo: c.algo, hex: sum}
+	}
+	log.Printf("install: no checksum sidecar for %s; skipping verification", jarURL)
+	return integrity{}
+}
+
+// fetchChecksumFile reads a Maven-style checksum file: the hex digest, possibly
+// followed by whitespace and a filename.
+func fetchChecksumFile(ctx context.Context, url string, hexLen int) (string, error) {
+	resp, err := httpRequest(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty checksum file")
+	}
+	sum := strings.ToLower(fields[0])
+	if len(sum) != hexLen {
+		return "", fmt.Errorf("checksum length %d, want %d", len(sum), hexLen)
+	}
+	if _, err := hex.DecodeString(sum); err != nil {
+		return "", fmt.Errorf("checksum is not hex: %w", err)
+	}
+	return sum, nil
 }
 
 func replaceFile(src, dst string) error {
