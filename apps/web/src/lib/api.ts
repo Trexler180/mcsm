@@ -830,3 +830,12 @@ export const api = {
     markAllRead: () => post(`/notifications/read-all`),
   },
 };
+
+// Test-only seam: exposes the module-private auth/refresh machinery to the
+// vitest suite without widening the public API. Not for application use.
+export const __test = {
+  tokenExpiresSoon,
+  refreshAccessToken,
+  fetchWithAuth,
+  request,
+};

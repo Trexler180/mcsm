@@ -39,12 +39,9 @@ export const useNotifications = create<NotificationState>()((set, get) => ({
       )
     }
 
-    // TODO(you): decide when an incoming toast should MERGE into an existing
-    // one (bumping its count) vs. appear as a new card. Return the matching
-    // toast, or undefined to add a fresh one.
-    //   - match on title only?  -> spammy installs collapse aggressively
-    //   - match on title+variant? -> keeps errors separate from successes
-    //   - never match?           -> original behavior (every event = a card)
+    // Merge rule: same title AND variant collapses into one card with a
+    // bumped count, so spammy repeats (bulk installs) stack while an error
+    // never merges into a success for the same action.
     const match = (existing: Toast): boolean =>
       existing.title === t.title && existing.variant === t.variant
 
