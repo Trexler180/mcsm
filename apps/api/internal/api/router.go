@@ -44,7 +44,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s, updater, notifier.Engine)
+	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine)
 	migrateH := handlers.NewMigrationHandlers(s, migrate.New(s))
 	backupH := handlers.NewBackupHandlers(s, notifier.Engine)
 	taskH := handlers.NewTaskHandlers(s)
@@ -176,6 +176,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(viewAccess).Get("/", serverH.Get)
 					r.With(settingsAccess).Put("/", serverH.Update)
 					r.With(serverAdminAccess).Delete("/", serverH.Delete)
+					// Clone into a new server (admin only, like Create — it sets
+					// host-executed config on the new server).
+					r.With(requireAdmin(s)).Post("/clone", modH.Clone)
 
 					r.With(startAccess).Post("/start", serverH.Start)
 					r.With(settingsAccess).Post("/reinstall", serverH.Reinstall)

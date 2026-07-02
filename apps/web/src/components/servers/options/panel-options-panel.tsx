@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Copy,
   FolderTree,
 
   MemoryStick,
@@ -12,7 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -27,6 +28,11 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
   const [showDelete, setShowDelete] = useState(false);
   const [purgeFiles, setPurgeFiles] = useState(false);
   const [purgeBackups, setPurgeBackups] = useState(false);
+
+  const [showClone, setShowClone] = useState(false);
+  const [cloneName, setCloneName] = useState("");
+  const [cloneDir, setCloneDir] = useState("");
+  const [cloneMods, setCloneMods] = useState(true);
 
   const [form, setForm] = useState({
     name: server.name,
@@ -72,6 +78,40 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
     setPurgeFiles(false);
     setPurgeBackups(false);
     setShowDelete(true);
+  };
+
+  const cloneMutation = useMutation({
+    mutationFn: () =>
+      api.servers.clone(server.id, {
+        name: cloneName.trim(),
+        directory_path: cloneDir.trim() || undefined,
+        copy_mods: cloneMods,
+      }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["servers"] });
+      setShowClone(false);
+      const modNote =
+        res.mods_queued > 0
+          ? `Installing ${res.mods_queued} mod${res.mods_queued === 1 ? "" : "s"} in the background.`
+          : "";
+      const skipNote =
+        res.mods_skipped > 0
+          ? ` ${res.mods_skipped} custom jar${res.mods_skipped === 1 ? "" : "s"} skipped (re-upload manually).`
+          : "";
+      success("Server cloned", (modNote + skipNote).trim() || undefined);
+      navigate({
+        to: "/servers/$id/$section",
+        params: { id: res.server.id, section: "dashboard" },
+      });
+    },
+    onError: (e: Error) => error("Clone failed", e.message),
+  });
+
+  const openClone = () => {
+    setCloneName(`${server.name} (copy)`);
+    setCloneDir("");
+    setCloneMods(true);
+    setShowClone(true);
   };
 
   const f =
@@ -215,6 +255,28 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
         </div>
       </section>
 
+      {/* Clone — reuse this server's platform/version/config as the starting
+          point for a new one. */}
+      <div className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3.5 py-2.5">
+        <Copy className="h-4 w-4 flex-shrink-0 text-accent" />
+        <div className="min-w-0 flex-1">
+          <span className="text-sm font-medium text-text-primary">
+            Clone server
+          </span>
+          <span className="ml-2 text-xs text-text-secondary">
+            New server with this one's config and mods — not its world.
+          </span>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={openClone}
+          className="flex-shrink-0"
+        >
+          <Copy className="h-3.5 w-3.5" /> Clone
+        </Button>
+      </div>
+
       {/* Danger zone — a compact red-tinted strip so it reads as its own place
           without claiming a full card. */}
       <div className="flex items-center gap-3 rounded-lg border border-red-900/40 bg-red-950/10 px-3.5 py-2.5">
@@ -234,6 +296,55 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
           <Trash2 className="h-3.5 w-3.5" /> Delete
         </Button>
       </div>
+
+      <Dialog
+        open={showClone}
+        onClose={() => setShowClone(false)}
+        title="Clone server"
+        titleIcon={<Copy className="h-5 w-5 text-accent" />}
+        description={`Creates a new ${server.platform} ${server.mc_version} server with the same Java, memory, and mod list. The world and player data are not copied.`}
+      >
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>New server name</Label>
+            <Input
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              placeholder="My Survival Server (copy)"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>Directory (optional)</Label>
+            <Input
+              value={cloneDir}
+              onChange={(e) => setCloneDir(e.target.value)}
+              className="font-mono"
+              placeholder="Leave blank to auto-name from the server name"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cloneMods}
+              onChange={(e) => setCloneMods(e.target.checked)}
+            />
+            Re-install the mod list (source-tracked mods; custom jars skipped)
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="outline" size="sm" onClick={() => setShowClone(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => cloneMutation.mutate()}
+              loading={cloneMutation.isPending}
+              disabled={!cloneName.trim()}
+            >
+              <Copy className="h-3.5 w-3.5" /> Clone
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       <ConfirmDialog
         open={showDelete}

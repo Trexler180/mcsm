@@ -361,6 +361,19 @@ export const api = {
     get: (id: string) => get<Server>(`/servers/${id}`),
     metricsHistory: (id: string, hours: number) =>
       get<MetricsHistory>(`/servers/${id}/metrics/history?hours=${hours}`),
+    clone: (
+      id: string,
+      data: {
+        name: string;
+        directory_path?: string;
+        port?: number;
+        copy_mods?: boolean;
+      },
+    ) =>
+      post<{ server: Server; mods_queued: number; mods_skipped: number }>(
+        `/servers/${id}/clone`,
+        data,
+      ),
     create: (
       data: Partial<Server> & { import_existing?: boolean; jar_file?: string },
     ) => post<Server>("/servers", data),

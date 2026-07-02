@@ -18,6 +18,7 @@ import (
 
 type ModHandlers struct {
 	store      *store.Store
+	serverRoot string
 	modrinth   *modrinth.Client
 	curseforge *curseforge.Client
 	hangar     *hangar.Client
@@ -27,9 +28,10 @@ type ModHandlers struct {
 	notifier   *notify.Engine
 }
 
-func NewModHandlers(s *store.Store, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {
+func NewModHandlers(s *store.Store, serverRoot string, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {
 	return &ModHandlers{
-		store:    s,
+		store:      s,
+		serverRoot: serverRoot,
 		modrinth: modrinth.New(),
 		// Resolve the CurseForge key lazily from the encrypted secret store,
 		// falling back to the legacy env var, so a key pasted in Settings →
