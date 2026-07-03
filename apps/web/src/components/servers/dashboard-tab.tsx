@@ -18,6 +18,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ResourceChart } from "@/components/charts/resource-chart";
 import { MetricsHistoryChart } from "@/components/charts/history-chart";
+import { TaskTimeline } from "./task-timeline";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -264,6 +265,16 @@ export function DashboardTab({
   const canSafeUpdate = can("mods.update");
   const canBackup = can("backups.create");
   const canConsole = can("console");
+  const canTasks = can("tasks");
+
+  // Scheduled tasks power the dashboard timeline card. Shares the query key
+  // with the Tasks tab so both stay in sync.
+  const { data: tasks = [] } = useQuery({
+    queryKey: ["tasks", server.id],
+    queryFn: () => api.tasks.list(server.id),
+    enabled: canTasks,
+    staleTime: 30_000,
+  });
 
   const latestBackup = backups[0];
   // A backup runs as a detached job on the agent, so the create call returns
@@ -518,6 +529,16 @@ export function DashboardTab({
           </div>
         </Panel>
       </div>
+
+      {canTasks && tasks.length > 0 && (
+        <Panel
+          title="Scheduled Tasks"
+          description="Upcoming and recent runs. Manage in Tasks."
+          onClick={() => onSection("tasks")}
+        >
+          <TaskTimeline tasks={tasks} maxLanes={5} compact />
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Panel

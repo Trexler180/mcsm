@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock,
@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { TaskTimeline } from "./task-timeline";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
@@ -318,19 +319,6 @@ function formatCountdown(ms: number): string {
   return `${d}d ${h % 24}h`;
 }
 
-// Coarse "time ago" for past runs (the exact timestamp is shown alongside).
-function formatAgo(ms: number): string {
-  if (ms < 0) return "just now";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
-}
-
 const CLOCK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // Render the server's wall-clock components from a true UTC epoch plus the
@@ -389,8 +377,6 @@ function ServerClock() {
     </div>
   );
 }
-
-type TaskView = "all" | "upcoming" | "recent";
 
 function TaskDetailsDialog({
   task,
@@ -482,45 +468,12 @@ export function TasksTab({ serverId }: { serverId: string }) {
     queryFn: () => api.tasks.list(serverId),
   });
 
-  const [view, setView] = useState<TaskView>("all");
-
   // Ticking clock so the "executes in" countdown stays live.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-
-  // Upcoming: enabled tasks with a next run, soonest first. Recent: tasks that
-  // have run, most recent first. All: the management list in name order.
-  const upcoming = useMemo(
-    () =>
-      tasks
-        .filter((t) => t.enabled && t.next_run)
-        .sort(
-          (a, b) =>
-            new Date(a.next_run!).getTime() - new Date(b.next_run!).getTime(),
-        ),
-    [tasks],
-  );
-  const recent = useMemo(
-    () =>
-      tasks
-        .filter((t) => t.last_run)
-        .sort(
-          (a, b) =>
-            new Date(b.last_run!).getTime() - new Date(a.last_run!).getTime(),
-        ),
-    [tasks],
-  );
-  const displayed =
-    view === "upcoming" ? upcoming : view === "recent" ? recent : tasks;
-
-  const VIEWS: { value: TaskView; label: string; count: number }[] = [
-    { value: "all", label: "All", count: tasks.length },
-    { value: "upcoming", label: "Upcoming", count: upcoming.length },
-    { value: "recent", label: "Recent", count: recent.length },
-  ];
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -548,23 +501,10 @@ export function TasksTab({ serverId }: { serverId: string }) {
         </Button>
       </div>
 
-      {/* Upcoming / Recent lenses over the same tasks. */}
+      {/* Timeline: past runs left of "now", upcoming runs to the right. */}
       {tasks.length > 0 && (
-        <div className="mb-3 inline-flex rounded-lg border border-border bg-surface-2/40 p-0.5 text-xs">
-          {VIEWS.map((v) => (
-            <button
-              key={v.value}
-              onClick={() => setView(v.value)}
-              className={`rounded-md px-3 py-1 transition-colors ${
-                view === v.value
-                  ? "bg-accent/15 text-accent"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              {v.label}{" "}
-              <span className="tabular-nums opacity-70">({v.count})</span>
-            </button>
-          ))}
+        <div className="mb-4 rounded-lg border border-border bg-surface p-4 pt-6">
+          <TaskTimeline tasks={tasks} />
         </div>
       )}
 
@@ -583,18 +523,12 @@ export function TasksTab({ serverId }: { serverId: string }) {
             </Button>
           }
         />
-      ) : displayed.length === 0 ? (
-        <div className="rounded-lg border border-border bg-surface-2/30 px-4 py-8 text-center text-sm text-text-secondary">
-          {view === "upcoming"
-            ? "No upcoming runs — every task is disabled."
-            : "No tasks have run yet."}
-        </div>
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
-          {displayed.map((task, i) => (
+          {tasks.map((task, i) => (
             <div
               key={task.id}
-              className={`flex items-center gap-3 px-4 py-3 ${i < displayed.length - 1 ? "border-b border-border/50" : ""}`}
+              className={`flex items-center gap-3 px-4 py-3 ${i < tasks.length - 1 ? "border-b border-border/50" : ""}`}
             >
               <button
                 type="button"
@@ -628,44 +562,25 @@ export function TasksTab({ serverId }: { serverId: string }) {
                   {describeAction(task.action, task.payload)}
                 </p>
               </button>
-              {/* Compact, always-visible chip carrying the time that matters for
-                  the current lens: countdown when looking at upcoming runs, "x
-                  ago" when looking at past ones. */}
-              {view === "recent" ? (
-                task.last_run && (
-                  <span
-                    className="flex-shrink-0 text-xs text-text-secondary"
-                    title={`Last run: ${new Date(task.last_run).toLocaleString()}`}
-                  >
-                    {formatAgo(now - new Date(task.last_run).getTime())}
-                  </span>
-                )
-              ) : task.next_run ? (
-                <span
-                  className="flex-shrink-0 text-xs text-text-secondary"
-                  title={`Next run: ${new Date(task.next_run).toLocaleString()}`}
-                >
-                  {task.enabled ? (
-                    <>
-                      in{" "}
-                      <span className="font-mono text-text-primary">
-                        {formatCountdown(
-                          new Date(task.next_run).getTime() - now,
-                        )}
-                      </span>
-                    </>
-                  ) : (
-                    "paused"
-                  )}
-                </span>
-              ) : null}
-
               {/* The verbose next/last timestamps eat the row's width. Inside the
                   server view two sidebars already claim ~448px, so the content
                   pane stays cramped until the viewport is wide — only surface
                   these at xl (still shown in the details dialog otherwise). The
                   name/schedule above truncate so they can never overlap this. */}
               <div className="hidden text-right text-xs text-text-secondary flex-shrink-0 xl:block">
+                {task.next_run &&
+                  (task.enabled ? (
+                    <p>
+                      In{" "}
+                      <span className="font-mono text-text-primary">
+                        {formatCountdown(
+                          new Date(task.next_run).getTime() - now,
+                        )}
+                      </span>
+                    </p>
+                  ) : (
+                    <p>Disabled</p>
+                  ))}
                 {task.next_run && (
                   <p>Next: {new Date(task.next_run).toLocaleString()}</p>
                 )}
