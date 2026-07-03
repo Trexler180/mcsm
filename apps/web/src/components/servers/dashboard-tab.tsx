@@ -530,72 +530,93 @@ export function DashboardTab({
         </Panel>
       </div>
 
-      {canTasks && tasks.length > 0 && (
-        <Panel
-          title="Scheduled Tasks"
-          description="Upcoming and recent runs. Manage in Tasks."
-          onClick={() => onSection("tasks")}
-        >
-          <TaskTimeline tasks={tasks} compact />
-        </Panel>
-      )}
-
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Panel
-          title="Server Details"
-          description="Edit name, directory, and runtime in Options."
-          onClick={() => onSection("options")}
-        >
-          <dl className="grid grid-cols-[100px_minmax(0,1fr)] gap-y-2 text-sm sm:grid-cols-[120px_minmax(0,1fr)]">
-            <dt className="text-text-secondary">Name</dt>
-            <dd className="truncate text-text-primary">{server.name}</dd>
-            <dt className="text-text-secondary">Directory</dt>
-            <dd className="truncate font-mono text-text-primary">
-              {server.directory_path}
-            </dd>
-            <dt className="text-text-secondary">Java</dt>
-            <dd className="truncate font-mono text-text-primary">
-              {server.java_binary}
-            </dd>
-            <dt className="text-text-secondary">Auto Start</dt>
-            <dd className="text-text-primary">
-              {server.auto_start ? "Enabled" : "Disabled"}
-            </dd>
-          </dl>
-        </Panel>
-        <Panel
-          title="Latest Backup"
-          description="View and manage all backups."
-          onClick={() => onSection("backups")}
-        >
-          {latestBackup ? (
-            <div className="space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-text-secondary">Status</span>
-                <Badge
-                  variant={
-                    latestBackup.status === "success"
-                      ? "success"
-                      : latestBackup.status === "failed"
-                        ? "error"
-                        : "warning"
-                  }
-                >
-                  {latestBackup.status}
-                </Badge>
+      {(() => {
+        const serverDetails = (
+          <Panel
+            title="Server Details"
+            description="Edit name, directory, and runtime in Options."
+            onClick={() => onSection("options")}
+          >
+            <dl className="grid grid-cols-[100px_minmax(0,1fr)] gap-y-2 text-sm sm:grid-cols-[120px_minmax(0,1fr)]">
+              <dt className="text-text-secondary">Name</dt>
+              <dd className="truncate text-text-primary">{server.name}</dd>
+              <dt className="text-text-secondary">Directory</dt>
+              <dd className="truncate font-mono text-text-primary">
+                {server.directory_path}
+              </dd>
+              <dt className="text-text-secondary">Java</dt>
+              <dd className="truncate font-mono text-text-primary">
+                {server.java_binary}
+              </dd>
+              <dt className="text-text-secondary">Auto Start</dt>
+              <dd className="text-text-primary">
+                {server.auto_start ? "Enabled" : "Disabled"}
+              </dd>
+            </dl>
+          </Panel>
+        );
+        const latestBackupPanel = (
+          <Panel
+            title="Latest Backup"
+            description="View and manage all backups."
+            onClick={() => onSection("backups")}
+          >
+            {latestBackup ? (
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">Status</span>
+                  <Badge
+                    variant={
+                      latestBackup.status === "success"
+                        ? "success"
+                        : latestBackup.status === "failed"
+                          ? "error"
+                          : "warning"
+                    }
+                  >
+                    {latestBackup.status}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">Started</span>
+                  <span>
+                    {new Date(latestBackup.started_at).toLocaleString()}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-text-secondary">Started</span>
-                <span>
-                  {new Date(latestBackup.started_at).toLocaleString()}
-                </span>
+            ) : (
+              <p className="text-sm text-text-secondary">No backups yet.</p>
+            )}
+          </Panel>
+        );
+
+        // With a tasks timeline, pair it beside the two info cards (stacked) so
+        // the timeline occupies about half the width rather than stretching
+        // edge to edge. Without it, the info cards keep the original 2-up row.
+        if (canTasks && tasks.length > 0) {
+          return (
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <Panel
+                title="Scheduled Tasks"
+                description="Upcoming and recent runs. Manage in Tasks."
+                onClick={() => onSection("tasks")}
+              >
+                <TaskTimeline tasks={tasks} compact />
+              </Panel>
+              <div className="grid gap-5">
+                {serverDetails}
+                {latestBackupPanel}
               </div>
             </div>
-          ) : (
-            <p className="text-sm text-text-secondary">No backups yet.</p>
-          )}
-        </Panel>
-      </div>
+          );
+        }
+        return (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            {serverDetails}
+            {latestBackupPanel}
+          </div>
+        );
+      })()}
 
       <WhitelistQuickAddDialog
         open={whitelistOpen}
