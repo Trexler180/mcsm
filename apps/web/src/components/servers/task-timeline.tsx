@@ -4,6 +4,7 @@ import { describeAction } from "@/lib/cron";
 
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
+const ROW_H = 16; // px between stacked dots in a small cluster
 
 // relLabel renders a signed, coarse offset from now: "now", "-2h", "+3d".
 function relLabel(deltaMs: number): string {
@@ -40,17 +41,15 @@ interface Ev {
 }
 
 interface Cluster {
-  id: number;
   x: number; // percent
   future: boolean;
   items: Ev[];
 }
 
-// clusterEvents groups markers within `threshold` percent of each other so many
-// tasks sharing a cron time collapse into one badge instead of a pile of dots.
-function clusterEvents(evs: Ev[], xOf: (t: number) => number, threshold: number): Omit<Cluster, "id">[] {
+// clusterEvents groups markers within `threshold` percent of each other.
+function clusterEvents(evs: Ev[], xOf: (t: number) => number, threshold: number): Cluster[] {
   const sorted = [...evs].sort((a, b) => a.time - b.time);
-  const out: Omit<Cluster, "id">[] = [];
+  const out: Cluster[] = [];
   for (const e of sorted) {
     const x = xOf(e.time);
     const last = out[out.length - 1];
@@ -64,52 +63,50 @@ function clusterEvents(evs: Ev[], xOf: (t: number) => number, threshold: number)
   return out;
 }
 
-// ClusterPopover is the detail card shown when a marker is tapped or hovered.
-function ClusterPopover({ cluster, now }: { cluster: Cluster; now: number }) {
-  // Anchor to the marker's x; align the card so it never runs off either edge.
-  const anchor: React.CSSProperties =
-    cluster.x < 24
-      ? { left: 0 }
-      : cluster.x > 76
-        ? { right: 0 }
-        : { left: `${cluster.x}%`, transform: "translateX(-50%)" };
+function Detail({ ev, now }: { ev: Ev; now: number }) {
+  return (
+    <li className="text-xs">
+      <p className="truncate font-medium text-text-primary" title={ev.task.name}>
+        {ev.task.name}
+      </p>
+      <p className="text-text-secondary">
+        {ev.future ? "Next" : "Ran"}{" "}
+        <span className="text-text-primary">{new Date(ev.time).toLocaleString()}</span>{" "}
+        ({ev.future ? `in ${dur(ev.time - now)}` : relLabel(ev.time - now)})
+      </p>
+      <p className="truncate text-text-secondary">
+        {describeAction(ev.task.action, ev.task.payload)}
+      </p>
+    </li>
+  );
+}
 
+// Popover shown when a marker is tapped or hovered. Anchored to `x`, clamped so
+// it never runs off either edge.
+function Popover({ x, items, now }: { x: number; items: Ev[]; now: number }) {
+  const anchor: React.CSSProperties =
+    x < 24
+      ? { left: 0 }
+      : x > 76
+        ? { right: 0 }
+        : { left: `${x}%`, transform: "translateX(-50%)" };
   return (
     <div
-      className="absolute bottom-full z-30 mb-2 w-60 max-w-[80vw] rounded-lg border border-border bg-surface p-3 shadow-xl"
+      className="absolute bottom-full z-40 mb-2 w-60 max-w-[80vw] rounded-lg border border-border bg-surface p-3 shadow-xl"
       style={anchor}
       onClick={(e) => e.stopPropagation()}
     >
-      {cluster.items.length > 1 && (
+      {items.length > 1 && (
         <p className="mb-1.5 text-xs font-medium text-text-primary">
-          {cluster.items.length} {cluster.future ? "upcoming runs" : "past runs"}
+          {items.length} {items[0].future ? "upcoming runs" : "past runs"}
         </p>
       )}
       <ul className="space-y-1.5">
-        {cluster.items.slice(0, 8).map((it, i) => (
-          <li key={i} className="text-xs">
-            <p className="truncate font-medium text-text-primary" title={it.task.name}>
-              {it.task.name}
-            </p>
-            <p className="text-text-secondary">
-              {it.future ? "Next" : "Ran"}{" "}
-              <span className="text-text-primary">
-                {new Date(it.time).toLocaleString()}
-              </span>{" "}
-              <span className="text-text-secondary">
-                ({it.future ? `in ${dur(it.time - now)}` : relLabel(it.time - now)}
-                )
-              </span>
-            </p>
-            <p className="truncate text-text-secondary">
-              {describeAction(it.task.action, it.task.payload)}
-            </p>
-          </li>
+        {items.slice(0, 8).map((it, i) => (
+          <Detail key={i} ev={it} now={now} />
         ))}
-        {cluster.items.length > 8 && (
-          <li className="text-xs text-text-secondary">
-            +{cluster.items.length - 8} more
-          </li>
+        {items.length > 8 && (
+          <li className="text-xs text-text-secondary">+{items.length - 8} more</li>
         )}
       </ul>
     </div>
@@ -122,9 +119,9 @@ interface TaskTimelineProps {
 }
 
 // TaskTimeline lays scheduled runs on a single left→right axis: last runs left
-// of "now", next runs to the right, with co-scheduled markers clustered into a
-// count badge. Markers are tap/click targets (with a hover assist on desktop)
-// that open a detail popover, so it works on touch. It ticks its own clock.
+// of "now", next runs to the right. When only a couple of tasks share a slot
+// they render as stacked, labelled dots; bigger pile-ups collapse into a count
+// badge. Every marker taps/hovers open a detail popover. Ticks its own clock.
 export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -132,8 +129,8 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
     return () => clearInterval(t);
   }, []);
 
-  const [activeId, setActiveId] = useState<number | null>(null); // tapped/pinned
-  const [hoverId, setHoverId] = useState<number | null>(null); // desktop hover
+  const [activeId, setActiveId] = useState<string | null>(null); // tapped/pinned
+  const [hoverId, setHoverId] = useState<string | null>(null); // desktop hover
 
   const events = useMemo<Ev[]>(() => {
     const evs: Ev[] = [];
@@ -163,15 +160,23 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
   const pct = (t: number) => Math.max(1.5, Math.min(98.5, rawPct(t)));
   const xNow = rawPct(now);
 
-  const clusters = useMemo<Cluster[]>(() => {
+  const clusters = useMemo(() => {
     const thr = compact ? 5 : 3;
     const p = clusterEvents(events.filter((e) => !e.future), pct, thr);
     const f = clusterEvents(events.filter((e) => e.future), pct, thr);
-    return [...p, ...f].map((c, i) => ({ ...c, id: i }));
+    return [...p, ...f];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, t0, t1, compact]);
 
-  const shownId = activeId ?? hoverId;
+  // Labels stay legible only on a sparse timeline; a busy one keeps to dots and
+  // badges (tap for detail). Small clusters (≤3) get stacked, labelled dots.
+  const sparse = clusters.length <= 8;
+  let maxStack = 1;
+  const labelFlags = clusters.map((c) => {
+    const labelled = sparse && c.items.length <= 3;
+    if (labelled) maxStack = Math.max(maxStack, c.items.length);
+    return labelled;
+  });
 
   const soonest = useMemo(
     () => events.filter((e) => e.future).sort((a, b) => a.time - b.time)[0] ?? null,
@@ -196,12 +201,18 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
     );
   }
 
+  const trackH = Math.max(compact ? 36 : 44, maxStack * ROW_H + 12);
+
+  const dotClass = (future: boolean, active: boolean) =>
+    `h-3 w-3 rounded-full transition-transform ${active ? "scale-125" : ""} ${
+      future ? "bg-accent ring-2 ring-accent/25" : "border border-border bg-surface-2"
+    }`;
+
   return (
     <div className="pt-4 text-xs">
-      {/* Dismiss layer for a pinned popover (tap outside to close). */}
       {activeId !== null && (
         <div
-          className="fixed inset-0 z-20"
+          className="fixed inset-0 z-30"
           onClick={(e) => {
             e.stopPropagation();
             setActiveId(null);
@@ -210,10 +221,8 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
       )}
 
       <div className="relative">
-        {/* Track */}
-        <div className={`relative ${compact ? "h-8" : "h-10"}`}>
+        <div className="relative" style={{ height: trackH }}>
           <div className="absolute top-1/2 h-px w-full -translate-y-1/2 bg-border/40" />
-          {/* now marker */}
           <div
             className="pointer-events-none absolute inset-y-0 z-10 w-px bg-accent"
             style={{ left: `${xNow}%` }}
@@ -223,32 +232,76 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
             </span>
           </div>
 
-          {clusters.map((c) => {
+          {clusters.map((c, ci) => {
+            const labelled = labelFlags[ci];
+
+            // Stacked, labelled dots for small clusters on a sparse timeline.
+            if (labelled) {
+              const labelLeft = c.x > 60;
+              return c.items.map((it, j) => {
+                const id = `${ci}-${j}`;
+                const active = (activeId ?? hoverId) === id;
+                const y = (j - (c.items.length - 1) / 2) * ROW_H;
+                return (
+                  <div
+                    key={id}
+                    className="absolute z-20"
+                    style={{
+                      left: `${c.x}%`,
+                      top: "50%",
+                      transform: `translate(${labelLeft ? "-100%" : "0"}, calc(-50% + ${y}px))`,
+                    }}
+                  >
+                    {active && <Popover x={c.x} items={[it]} now={now} />}
+                    <button
+                      type="button"
+                      className={`flex items-center gap-1 ${labelLeft ? "flex-row-reverse" : ""}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveId((cur) => (cur === id ? null : id));
+                      }}
+                      onMouseEnter={() => setHoverId(id)}
+                      onMouseLeave={() => setHoverId((cur) => (cur === id ? null : cur))}
+                    >
+                      <span className={dotClass(it.future, active)} />
+                      <span
+                        className="max-w-[84px] truncate text-[10px] leading-none text-text-primary"
+                        title={it.task.name}
+                      >
+                        {it.task.name}
+                      </span>
+                    </button>
+                  </div>
+                );
+              });
+            }
+
+            // Otherwise a single dot (size 1) or a count badge (bigger pile-up).
+            const id = `${ci}`;
+            const active = (activeId ?? hoverId) === id;
             const multi = c.items.length > 1;
-            const isOpen = shownId === c.id;
             return (
               <div
-                key={c.id}
+                key={id}
                 className="absolute top-1/2 z-20 -translate-x-1/2 -translate-y-1/2"
                 style={{ left: `${c.x}%` }}
               >
-                {isOpen && <ClusterPopover cluster={c} now={now} />}
-                {/* Oversized transparent hit area for comfortable tapping. */}
+                {active && <Popover x={c.x} items={c.items} now={now} />}
                 <button
                   type="button"
                   aria-label={`${c.items.length} scheduled run${c.items.length === 1 ? "" : "s"}`}
                   className="grid h-8 w-8 place-items-center"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setActiveId((cur) => (cur === c.id ? null : c.id));
+                    setActiveId((cur) => (cur === id ? null : id));
                   }}
-                  onMouseEnter={() => setHoverId(c.id)}
-                  onMouseLeave={() => setHoverId((cur) => (cur === c.id ? null : cur))}
+                  onMouseEnter={() => setHoverId(id)}
+                  onMouseLeave={() => setHoverId((cur) => (cur === id ? null : cur))}
                 >
                   {multi ? (
                     <span
                       className={`grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-medium transition-transform ${
-                        isOpen ? "scale-110" : ""
+                        active ? "scale-110" : ""
                       } ${
                         c.future
                           ? "bg-accent text-black ring-2 ring-accent/25"
@@ -258,15 +311,7 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
                       {c.items.length}
                     </span>
                   ) : (
-                    <span
-                      className={`h-3 w-3 rounded-full transition-transform ${
-                        isOpen ? "scale-125" : ""
-                      } ${
-                        c.future
-                          ? "bg-accent ring-2 ring-accent/25"
-                          : "border border-border bg-surface-2"
-                      }`}
-                    />
+                    <span className={dotClass(c.future, active)} />
                   )}
                 </button>
               </div>
@@ -280,11 +325,7 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
             <span
               key={tk.p}
               className={`absolute top-0.5 whitespace-nowrap ${
-                tk.p === 0
-                  ? "left-0"
-                  : tk.p === 100
-                    ? "right-0"
-                    : "-translate-x-1/2"
+                tk.p === 0 ? "left-0" : tk.p === 100 ? "right-0" : "-translate-x-1/2"
               } ${tk.label === "now" ? "text-accent" : "text-text-secondary"}`}
               style={tk.p === 0 || tk.p === 100 ? undefined : { left: `${tk.p}%` }}
             >
@@ -294,14 +335,11 @@ export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
         </div>
       </div>
 
-      {/* Caption: the two facts people want, in words. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-secondary">
         {soonest && (
           <span>
             Next <span className="text-text-primary">{soonest.task.name}</span> in{" "}
-            <span className="font-mono text-text-primary">
-              {dur(soonest.time - now)}
-            </span>
+            <span className="font-mono text-text-primary">{dur(soonest.time - now)}</span>
           </span>
         )}
         {latest && (
