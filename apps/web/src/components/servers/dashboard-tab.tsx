@@ -536,7 +536,7 @@ export function DashboardTab({
           description="Upcoming and recent runs. Manage in Tasks."
           onClick={() => onSection("tasks")}
         >
-          <TaskTimeline tasks={tasks} maxLanes={5} compact />
+          <TaskTimeline tasks={tasks} compact />
         </Panel>
       )}
 

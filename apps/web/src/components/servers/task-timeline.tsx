@@ -18,72 +18,142 @@ function relLabel(deltaMs: number): string {
   return `${sign}${Math.round(h / 24)}d`;
 }
 
+// magnitude of a positive duration, e.g. "3h 20m", "2d".
+function dur(absMs: number): string {
+  const m = Math.max(0, Math.round(absMs / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
 function ms(iso: string | null): number | null {
   if (!iso) return null;
   const t = Date.parse(iso);
   return Number.isNaN(t) ? null : t;
 }
 
+interface Ev {
+  task: ScheduledTask;
+  time: number;
+  future: boolean;
+}
+
+interface Cluster {
+  x: number; // percent
+  future: boolean;
+  items: Ev[];
+}
+
+// clusterEvents groups markers whose positions fall within `threshold` percent
+// of each other into one badge, so many tasks sharing a cron time (e.g. every
+// task at midnight) collapse to a single "N" instead of a pile of dots.
+function clusterEvents(evs: Ev[], xOf: (t: number) => number, threshold: number): Cluster[] {
+  const sorted = [...evs].sort((a, b) => a.time - b.time);
+  const out: Cluster[] = [];
+  for (const e of sorted) {
+    const x = xOf(e.time);
+    const last = out[out.length - 1];
+    if (last && Math.abs(x - last.x) <= threshold) {
+      last.items.push(e);
+      // Track the cluster at the mean of its members for stable placement.
+      last.x = last.items.reduce((s, i) => s + xOf(i.time), 0) / last.items.length;
+    } else {
+      out.push({ x, future: e.future, items: [e] });
+    }
+  }
+  return out;
+}
+
+function clusterTitle(c: Cluster): string {
+  return c.items
+    .slice(0, 12)
+    .map(
+      (i) =>
+        `${i.task.name} — ${i.future ? "next" : "last"} ${new Date(i.time).toLocaleString()}`,
+    )
+    .join("\n");
+}
+
 interface TaskTimelineProps {
   tasks: ScheduledTask[];
-  // Cap the number of task lanes; the rest collapse into a "+N more" note.
-  maxLanes?: number;
   compact?: boolean;
 }
 
-// TaskTimeline lays scheduled tasks along a left→right time axis: each task is
-// a lane, its last run a muted dot on the left of the "now" line and its next
-// run an accent dot on the right, with a faint connector spanning the gap. The
-// window auto-fits the data (capped at ±7 days) so recurring tasks stay
-// readable. It ticks its own clock so callers don't have to.
-export function TaskTimeline({ tasks, maxLanes = 8, compact }: TaskTimelineProps) {
+// TaskTimeline lays scheduled runs on a single left→right axis: each task's
+// last run is a hollow dot left of the "now" line and its next run an accent
+// dot to the right. Markers at (nearly) the same time collapse into a count
+// badge, so the view stays legible from a few tasks to dozens. The window
+// auto-fits the data, capped at ±7 days. It ticks its own clock.
+export function TaskTimeline({ tasks, compact }: TaskTimelineProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    // The markers drift slowly; a 30s tick keeps the axis honest cheaply.
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
 
-  const lanes = useMemo(() => {
-    // Show tasks that have something to plot (a past run or an upcoming one),
-    // upcoming-soonest first, then most-recently-run.
-    const withTimes = tasks
-      .map((t) => ({ task: t, last: ms(t.last_run), next: t.enabled ? ms(t.next_run) : null }))
-      .filter((l) => l.last !== null || l.next !== null);
-    withTimes.sort((a, b) => {
-      if (a.next !== null && b.next !== null) return a.next - b.next;
-      if (a.next !== null) return -1;
-      if (b.next !== null) return 1;
-      return (b.last ?? 0) - (a.last ?? 0);
-    });
-    return withTimes;
+  const events = useMemo<Ev[]>(() => {
+    const evs: Ev[] = [];
+    for (const task of tasks) {
+      const last = ms(task.last_run);
+      if (last !== null) evs.push({ task, time: last, future: false });
+      const next = task.enabled ? ms(task.next_run) : null;
+      if (next !== null) evs.push({ task, time: next, future: true });
+    }
+    return evs;
   }, [tasks]);
 
   const { t0, t1 } = useMemo(() => {
     let pastMax = HOUR;
     let futureMax = HOUR;
-    for (const l of lanes) {
-      if (l.last !== null) pastMax = Math.max(pastMax, now - l.last);
-      if (l.next !== null) futureMax = Math.max(futureMax, l.next - now);
+    for (const e of events) {
+      if (e.future) futureMax = Math.max(futureMax, e.time - now);
+      else pastMax = Math.max(pastMax, now - e.time);
     }
-    // Keep the scale legible when a distant monthly task would otherwise
-    // compress everything: cap the visible window at a week each way.
     pastMax = Math.min(pastMax, 7 * DAY);
     futureMax = Math.min(futureMax, 7 * DAY);
     return { t0: now - pastMax * 1.08, t1: now + futureMax * 1.08 };
-  }, [lanes, now]);
+  }, [events, now]);
 
   const span = Math.max(t1 - t0, 1);
-  const pct = (t: number) => ((t - t0) / span) * 100;
-  const clampPct = (p: number) => Math.max(1.5, Math.min(98.5, p));
-  const xNow = pct(now);
+  const rawPct = (t: number) => ((t - t0) / span) * 100;
+  const pct = (t: number) => Math.max(1.5, Math.min(98.5, rawPct(t)));
+  const xNow = rawPct(now);
+
+  const future = useMemo(
+    () => clusterEvents(events.filter((e) => e.future), pct, compact ? 4 : 3),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, t0, t1, compact],
+  );
+  const past = useMemo(
+    () => clusterEvents(events.filter((e) => !e.future), pct, compact ? 4 : 3),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, t0, t1, compact],
+  );
+
+  // Caption context: soonest upcoming and most recent past run.
+  const soonest = useMemo(
+    () =>
+      events
+        .filter((e) => e.future)
+        .sort((a, b) => a.time - b.time)[0] ?? null,
+    [events],
+  );
+  const latest = useMemo(
+    () =>
+      events
+        .filter((e) => !e.future)
+        .sort((a, b) => b.time - a.time)[0] ?? null,
+    [events],
+  );
 
   const ticks = [0, 25, 50, 75, 100].map((p) => ({
     p,
     label: relLabel(t0 + (span * p) / 100 - now),
   }));
 
-  if (lanes.length === 0) {
+  if (events.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-text-secondary">
         Nothing scheduled to show yet. Enabled tasks appear here with their next
@@ -92,101 +162,93 @@ export function TaskTimeline({ tasks, maxLanes = 8, compact }: TaskTimelineProps
     );
   }
 
-  const shown = lanes.slice(0, maxLanes);
-  const overflow = lanes.length - shown.length;
-  const laneH = compact ? "h-6" : "h-7";
-  const nameW = compact ? 92 : 116;
+  const renderCluster = (c: Cluster, key: number) => {
+    const multi = c.items.length > 1;
+    const base = "absolute top-1/2 -translate-x-1/2 -translate-y-1/2";
+    if (multi) {
+      return (
+        <span
+          key={key}
+          className={`${base} z-20 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-medium ${
+            c.future
+              ? "bg-accent text-black ring-2 ring-accent/25"
+              : "border border-border bg-surface-2 text-text-secondary"
+          }`}
+          style={{ left: `${c.x}%` }}
+          title={clusterTitle(c)}
+        >
+          {c.items.length}
+        </span>
+      );
+    }
+    const only = c.items[0];
+    return (
+      <span
+        key={key}
+        className={`${base} h-2.5 w-2.5 rounded-full ${
+          c.future
+            ? "z-20 bg-accent ring-2 ring-accent/25"
+            : "border border-border bg-surface-2"
+        }`}
+        style={{ left: `${c.x}%` }}
+        title={`${only.task.name} — ${only.future ? "next" : "last"} ${describeAction(only.task.action, only.task.payload)} ${new Date(only.time).toLocaleString()}`}
+      />
+    );
+  };
 
   return (
-    <div className="text-xs">
-      <div className="flex">
-        {/* Task name gutter */}
-        <div className="flex-shrink-0" style={{ width: nameW }}>
-          {shown.map((l) => (
-            <div key={l.task.id} className={`flex items-center pr-2 ${laneH}`}>
-              <span className="truncate text-text-primary" title={l.task.name}>
-                {l.task.name}
-              </span>
-            </div>
-          ))}
+    <div className="pt-4 text-xs">
+      <div className="relative">
+        {/* Track */}
+        <div className={`relative ${compact ? "h-7" : "h-9"}`}>
+          <div className="absolute top-1/2 h-px w-full -translate-y-1/2 bg-border/40" />
+          {/* now marker */}
+          <div
+            className="absolute inset-y-0 z-10 w-px bg-accent"
+            style={{ left: `${xNow}%` }}
+          >
+            <span className="absolute -top-4 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium text-accent">
+              now
+            </span>
+          </div>
+          {past.map(renderCluster)}
+          {future.map(renderCluster)}
         </div>
 
-        {/* Time track */}
-        <div className="relative flex-1">
-          <div className="relative">
-            {/* now marker line spanning every lane */}
-            <div
-              className="absolute inset-y-0 z-10 w-px bg-accent"
-              style={{ left: `${xNow}%` }}
+        {/* Relative axis */}
+        <div className="relative mt-1 h-4 border-t border-border/50">
+          {ticks.map((tk) => (
+            <span
+              key={tk.p}
+              className={`absolute top-0.5 -translate-x-1/2 whitespace-nowrap ${
+                tk.label === "now" ? "text-accent" : "text-text-secondary"
+              }`}
+              style={{ left: `${tk.p}%` }}
             >
-              <span className="absolute -top-4 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium text-accent">
-                now
-              </span>
-            </div>
-
-            {shown.map((l) => {
-              const xLast = l.last !== null ? clampPct(pct(l.last)) : null;
-              const xNext = l.next !== null ? clampPct(pct(l.next)) : null;
-              return (
-                <div key={l.task.id} className={`relative ${laneH}`}>
-                  {/* baseline */}
-                  <div className="absolute top-1/2 h-px w-full -translate-y-1/2 bg-border/40" />
-                  {/* connector from last→next through now */}
-                  {xLast !== null && xNext !== null && (
-                    <div
-                      className="absolute top-1/2 h-0.5 -translate-y-1/2 rounded bg-accent/25"
-                      style={{
-                        left: `${Math.min(xLast, xNext)}%`,
-                        width: `${Math.abs(xNext - xLast)}%`,
-                      }}
-                    />
-                  )}
-                  {xLast !== null && (
-                    <span
-                      className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border bg-surface-2"
-                      style={{ left: `${xLast}%` }}
-                      title={`${l.task.name} — last ran ${new Date(l.last!).toLocaleString()}`}
-                    />
-                  )}
-                  {xNext !== null && (
-                    <span
-                      className="absolute top-1/2 z-20 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent ring-2 ring-accent/25"
-                      style={{ left: `${xNext}%` }}
-                      title={`${l.task.name} — next ${describeAction(l.task.action, l.task.payload)} at ${new Date(l.next!).toLocaleString()}`}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Relative time axis */}
-          <div className="relative mt-1 h-4 border-t border-border/50">
-            {ticks.map((tk) => (
-              <span
-                key={tk.p}
-                className={`absolute top-0.5 -translate-x-1/2 whitespace-nowrap ${
-                  tk.label === "now" ? "text-accent" : "text-text-secondary"
-                }`}
-                style={{ left: `${tk.p}%` }}
-              >
-                {tk.label}
-              </span>
-            ))}
-          </div>
+              {tk.label}
+            </span>
+          ))}
         </div>
       </div>
 
-      <div className="mt-2 flex items-center gap-4 text-[10px] text-text-secondary">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-accent ring-2 ring-accent/25" />
-          Next run
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full border border-border bg-surface-2" />
-          Last run
-        </span>
-        {overflow > 0 && <span className="ml-auto">+{overflow} more</span>}
+      {/* Caption: the two facts people actually want, in words. */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-secondary">
+        {soonest && (
+          <span>
+            Next{" "}
+            <span className="text-text-primary">{soonest.task.name}</span> in{" "}
+            <span className="font-mono text-text-primary">
+              {dur(soonest.time - now)}
+            </span>
+          </span>
+        )}
+        {latest && (
+          <span>
+            Last{" "}
+            <span className="text-text-primary">{latest.task.name}</span>{" "}
+            {relLabel(latest.time - now)}
+          </span>
+        )}
       </div>
     </div>
   );

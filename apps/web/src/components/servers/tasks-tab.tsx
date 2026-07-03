@@ -503,7 +503,7 @@ export function TasksTab({ serverId }: { serverId: string }) {
 
       {/* Timeline: past runs left of "now", upcoming runs to the right. */}
       {tasks.length > 0 && (
-        <div className="mb-4 rounded-lg border border-border bg-surface p-4 pt-6">
+        <div className="mb-4 rounded-lg border border-border bg-surface p-4">
           <TaskTimeline tasks={tasks} />
         </div>
       )}
