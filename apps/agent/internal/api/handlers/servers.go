@@ -91,7 +91,7 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	// and must not be overwritten.
 	if cfg.Platform != "" && !cfg.NoInstall {
 		dlCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		err := install.EnsureRuntime(dlCtx, cfg.Directory, cfg.Platform, cfg.MCVersion, cfg.JavaBinary)
+		err := install.EnsureRuntime(dlCtx, cfg.Directory, cfg.Platform, cfg.MCVersion, cfg.LoaderVersion, cfg.JavaBinary)
 		cancel()
 		if err != nil {
 			log.Printf("install runtime (%s %s): %v", cfg.Platform, cfg.MCVersion, err)
@@ -132,7 +132,7 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	if err := install.Reinstall(ctx, dir, cfg.Platform, cfg.MCVersion, cfg.JavaBinary); err != nil {
+	if err := install.Reinstall(ctx, dir, cfg.Platform, cfg.MCVersion, cfg.LoaderVersion, cfg.JavaBinary); err != nil {
 		log.Printf("reinstall (%s %s): %v", cfg.Platform, cfg.MCVersion, err)
 		writeError(w, http.StatusBadGateway, "reinstall: "+err.Error())
 		return

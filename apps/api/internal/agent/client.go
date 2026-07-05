@@ -494,7 +494,7 @@ func (c *Client) RenameFile(ctx context.Context, serverID, from, to string) erro
 
 // StartConfig builds the /start payload for a server. When no explicit -Xmx is
 // present in jvmArgs, the panel's RAM settings are translated to -Xms/-Xmx.
-func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVersion string, ramMbMin, ramMbMax int) map[string]any {
+func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVersion string, loaderVersion *string, ramMbMin, ramMbMax int) map[string]any {
 	hasXmx := false
 	for _, a := range jvmArgs {
 		if strings.HasPrefix(a, "-Xmx") {
@@ -508,7 +508,7 @@ func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVer
 			"-Xmx"+ramArg(ramMbMax),
 		)
 	}
-	return map[string]any{
+	cfg := map[string]any{
 		"directory":   directory,
 		"java_binary": javaBinary,
 		"jvm_args":    jvmArgs,
@@ -516,6 +516,10 @@ func StartConfig(directory, javaBinary string, jvmArgs []string, platform, mcVer
 		"platform":    platform,
 		"mc_version":  mcVersion,
 	}
+	if loaderVersion != nil && strings.TrimSpace(*loaderVersion) != "" {
+		cfg["loader_version"] = strings.TrimSpace(*loaderVersion)
+	}
+	return cfg
 }
 
 func ramArg(mb int) string {

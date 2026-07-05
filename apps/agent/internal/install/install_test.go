@@ -12,6 +12,86 @@ import (
 	"testing"
 )
 
+func TestSelectFabricLoader(t *testing.T) {
+	loaders := []fabricLoaderEntry{
+		{Loader: fabricLoader{Version: "0.19.3", Stable: true}},
+		{Loader: fabricLoader{Version: "0.19.2", Stable: false}},
+	}
+
+	got, err := selectFabricLoader(loaders, "0.19.2")
+	if err != nil {
+		t.Fatalf("select requested loader: %v", err)
+	}
+	if got != "0.19.2" {
+		t.Fatalf("requested loader = %q, want 0.19.2", got)
+	}
+
+	got, err = selectFabricLoader(loaders, "")
+	if err != nil {
+		t.Fatalf("select stable loader: %v", err)
+	}
+	if got != "0.19.3" {
+		t.Fatalf("stable loader = %q, want 0.19.3", got)
+	}
+
+	if _, err := selectFabricLoader(loaders, "0.18.0"); err == nil {
+		t.Fatal("missing requested loader was accepted")
+	}
+}
+
+func quiltEntry(version string) quiltLoaderEntry {
+	var e quiltLoaderEntry
+	e.Loader.Version = version
+	return e
+}
+
+func TestSelectQuiltLoader(t *testing.T) {
+	loaders := []quiltLoaderEntry{quiltEntry("0.29.1"), quiltEntry("0.29.0")}
+
+	got, err := selectQuiltLoader(loaders, "0.29.0")
+	if err != nil {
+		t.Fatalf("select requested loader: %v", err)
+	}
+	if got != "0.29.0" {
+		t.Fatalf("requested loader = %q, want 0.29.0", got)
+	}
+
+	got, err = selectQuiltLoader(loaders, "")
+	if err != nil {
+		t.Fatalf("select default loader: %v", err)
+	}
+	if got != "0.29.1" {
+		t.Fatalf("default loader = %q, want 0.29.1", got)
+	}
+
+	if _, err := selectQuiltLoader(loaders, "0.28.0"); err == nil {
+		t.Fatal("missing requested loader was accepted")
+	}
+	if _, err := selectQuiltLoader(nil, ""); err == nil {
+		t.Fatal("empty loader list was accepted")
+	}
+}
+
+func TestReinstallFailurePreservesExistingRuntime(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, JarName)
+	if err := os.WriteFile(dst, []byte("working runtime"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Reinstall(context.Background(), dir, "unsupported", "26.1.2", "", "java")
+	if err == nil {
+		t.Fatal("unsupported reinstall unexpectedly succeeded")
+	}
+	got, readErr := os.ReadFile(dst)
+	if readErr != nil {
+		t.Fatalf("working runtime was removed: %v", readErr)
+	}
+	if string(got) != "working runtime" {
+		t.Fatalf("working runtime changed to %q", got)
+	}
+}
+
 func TestExtractJavaArgs(t *testing.T) {
 	cases := []struct {
 		name string

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,74 @@ func withImportSettings(settings json.RawMessage, jarFile string) json.RawMessag
 		return settings
 	}
 	return out
+}
+
+// withoutImportSettings converts a successfully reinstalled imported server
+// into a managed runtime while preserving every unrelated settings key.
+func withoutImportSettings(settings json.RawMessage) (json.RawMessage, bool) {
+	if len(settings) == 0 {
+		return settings, false
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(settings, &m); err != nil {
+		return settings, false
+	}
+	if _, ok := m["import"]; !ok {
+		return settings, false
+	}
+	delete(m, "import")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return settings, false
+	}
+	return out, true
+}
+
+// processDead reports whether an agent status means the JVM has exited.
+// crashed and startup_failure are terminal: the agent keeps them (instead of
+// offline) so the panel can surface diagnostics, and nothing resets them until
+// the next start — so waiting for "offline" on such a server would never end.
+func processDead(status any) bool {
+	switch status {
+	case "offline", "crashed", "startup_failure":
+		return true
+	}
+	return false
+}
+
+func stopForRuntimeChange(ctx context.Context, c *agent.Client, serverID string) error {
+	info, err := c.GetStatus(ctx, serverID)
+	if err != nil {
+		return fmt.Errorf("check server status: %w", err)
+	}
+	if processDead(info["status"]) {
+		return nil
+	}
+	if err := c.StopServer(ctx, serverID, true, 30); err != nil {
+		// The process may have exited between the status check and stop request.
+		info, statusErr := c.GetStatus(ctx, serverID)
+		if statusErr == nil && processDead(info["status"]) {
+			return nil
+		}
+		return fmt.Errorf("stop server: %w", err)
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for server to stop: %w", ctx.Err())
+		case <-ticker.C:
+			info, err := c.GetStatus(ctx, serverID)
+			if err != nil {
+				return fmt.Errorf("check stopped server status: %w", err)
+			}
+			if processDead(info["status"]) {
+				return nil
+			}
+		}
+	}
 }
 
 // applyImportConfig threads a server's import metadata into the agent start
@@ -474,7 +543,7 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
+	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
 	// Imported servers carry their existing jar + a no-install flag, so the agent
 	// runs what's already on disk instead of fetching a runtime over it.
 	applyImportConfig(cfg, srv.Settings)
@@ -534,8 +603,9 @@ func (h *ServerHandlers) JavaInstallations(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, info)
 }
 
-// Reinstall stops the server and re-fetches its runtime jar for the currently
-// configured platform/version, so a version change actually applies.
+// Reinstall stops the server, installs the requested runtime, and only then
+// commits its version metadata. A successful reinstall also converts an
+// imported launcher to managed server.jar semantics.
 func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
@@ -543,8 +613,52 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
+	var body struct {
+		Platform      string  `json:"platform"`
+		MCVersion     string  `json:"mc_version"`
+		LoaderVersion *string `json:"loader_version"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	platform := strings.TrimSpace(body.Platform)
+	mcVersion := strings.TrimSpace(body.MCVersion)
+	loaderVersion := ""
+	if body.LoaderVersion != nil {
+		loaderVersion = strings.TrimSpace(*body.LoaderVersion)
+	}
 
-	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
+	// A version change must name the complete target runtime; rejecting partial
+	// targets beats silently reinstalling the old version.
+	if platform == "" && (mcVersion != "" || loaderVersion != "") {
+		writeError(w, http.StatusBadRequest, "platform required when specifying a target version")
+		return
+	}
+
+	target := *srv
+	if platform != "" {
+		if mcVersion == "" {
+			writeError(w, http.StatusBadRequest, "mc_version required")
+			return
+		}
+		// Only fabric and quilt runtimes take a pinned loader version; accepting
+		// one for other platforms would store metadata the install never honors.
+		if loaderVersion != "" && platform != "fabric" && platform != "quilt" {
+			writeError(w, http.StatusBadRequest, "loader_version is only supported for fabric and quilt")
+			return
+		}
+		target.Platform = platform
+		target.MCVersion = mcVersion
+		target.LoaderVersion = nil
+		if loaderVersion != "" {
+			target.LoaderVersion = &loaderVersion
+		}
+	}
+
+	c, err := h.agentClient(r.Context(), h.store, target.NodeID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "node not found")
 		return
@@ -557,21 +671,37 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
 	}
-	// Stop first so we don't swap the jar under a running process.
-	_ = c.StopServer(ctx, id, true, 30)
+	// Confirm the JVM has exited before swapping any runtime artifacts.
+	stopCtx, stopCancel := context.WithTimeout(ctx, 45*time.Second)
+	if err := stopForRuntimeChange(stopCtx, c, id); err != nil {
+		stopCancel()
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	stopCancel()
 
 	cfg := map[string]any{
-		"directory":   srv.DirectoryPath,
-		"platform":    srv.Platform,
-		"mc_version":  srv.MCVersion,
-		"java_binary": srv.JavaBinary,
+		"directory":   target.DirectoryPath,
+		"platform":    target.Platform,
+		"mc_version":  target.MCVersion,
+		"java_binary": target.JavaBinary,
+	}
+	if target.LoaderVersion != nil {
+		cfg["loader_version"] = *target.LoaderVersion
 	}
 	if err := c.Reinstall(ctx, id, cfg); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	target.Settings, _ = withoutImportSettings(target.Settings)
+	if err := h.store.UpdateServer(r.Context(), id, &target); err != nil {
+		writeError(w, http.StatusInternalServerError, "runtime installed but server metadata could not be updated")
+		return
+	}
 	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
-	audit(h.store, r, id, "server.reinstall", map[string]any{"platform": srv.Platform, "mc_version": srv.MCVersion})
+	audit(h.store, r, id, "server.reinstall", map[string]any{
+		"platform": target.Platform, "mc_version": target.MCVersion, "loader_version": target.LoaderVersion,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reinstalled"})
 }
 

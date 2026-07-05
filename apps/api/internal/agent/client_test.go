@@ -15,6 +15,19 @@ func clientFor(t *testing.T, handler http.HandlerFunc) *Client {
 	return &Client{BaseURL: srv.URL, Token: "test", HTTP: srv.Client()}
 }
 
+func TestStartConfigIncludesSelectedLoader(t *testing.T) {
+	loader := " 0.19.3 "
+	cfg := StartConfig("server", "java", nil, "fabric", "26.1.2", &loader, 1024, 2048)
+	if got := cfg["loader_version"]; got != "0.19.3" {
+		t.Fatalf("loader_version = %#v, want 0.19.3", got)
+	}
+
+	cfg = StartConfig("server", "java", nil, "vanilla", "26.1.2", nil, 1024, 2048)
+	if _, ok := cfg["loader_version"]; ok {
+		t.Fatal("nil loader_version was included")
+	}
+}
+
 func TestCheckErrorMessages(t *testing.T) {
 	cases := []struct {
 		name    string

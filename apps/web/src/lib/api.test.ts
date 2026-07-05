@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test } from "./api";
+import { __test, api } from "./api";
 
 const { tokenExpiresSoon, request } = __test;
 
@@ -148,5 +148,39 @@ describe("request auth retry", () => {
 
     await expect(request("GET", "/servers")).rejects.toThrow("Unauthorized");
     expect(localStorage.getItem("access_token")).toBeNull();
+  });
+});
+
+describe("server runtime repair", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("sends the complete target runtime in one reinstall request", async () => {
+    localStorage.setItem("access_token", makeToken({ exp: nowSec() + 3600 }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "reinstalled" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.servers.reinstall("server-1", {
+      platform: "fabric",
+      mc_version: "26.1.2",
+      loader_version: "0.19.3",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/servers\/server-1\/reinstall$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      platform: "fabric",
+      mc_version: "26.1.2",
+      loader_version: "0.19.3",
+    });
   });
 });

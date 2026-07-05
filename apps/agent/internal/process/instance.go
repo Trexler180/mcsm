@@ -92,6 +92,9 @@ type StartConfig struct {
 	// directory is empty (paper, purpur, vanilla supported).
 	Platform  string `json:"platform,omitempty"`
 	MCVersion string `json:"mc_version,omitempty"`
+	// LoaderVersion pins Fabric installs to the version selected in the panel
+	// instead of silently resolving a different latest version.
+	LoaderVersion string `json:"loader_version,omitempty"`
 	// NoInstall is set for imported servers: the directory already holds the
 	// user's own runtime, so the agent must run it as-is and never auto-download
 	// or run an installer over it.

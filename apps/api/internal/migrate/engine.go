@@ -289,6 +289,9 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		"mc_version":  target,
 		"java_binary": srv.JavaBinary,
 	}
+	if srv.LoaderVersion != nil {
+		reinstallCfg["loader_version"] = *srv.LoaderVersion
+	}
 	if err := c.Reinstall(ctx, srv.ID, reinstallCfg); err != nil {
 		e.rollback(ctx, c, srv, prevMC, prevLoader, snapshots, bid, d, save, "reinstall for "+target+" failed: "+err.Error())
 		return
@@ -575,7 +578,7 @@ func (e *Engine) stopServer(ctx context.Context, c agentAPI, serverID string) {
 // startAndWatch boots the server and classifies the result: healthy means it
 // reached "online" and stayed there for stableFor.
 func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Server) health {
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
+	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
 	e.setStatus(srv.ID, "starting")
 	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
 		e.setStatus(srv.ID, "offline")

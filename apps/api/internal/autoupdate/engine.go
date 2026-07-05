@@ -611,7 +611,7 @@ func (e *Engine) stopServer(ctx context.Context, c agentAPI, serverID string) {
 // the caller can surface live boot progress (notably the stable-for countdown
 // once the server reaches "online"). It is invoked from this goroutine only.
 func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Server, onProgress func(string)) health {
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.RAMMbMin, srv.RAMMbMax)
+	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
 	e.setStatus(srv.ID, "starting")
 	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
 		e.setStatus(srv.ID, "offline")

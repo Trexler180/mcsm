@@ -397,7 +397,14 @@ export const api = {
     stop: (id: string, graceful = true) =>
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),
     restart: (id: string) => post(`/servers/${id}/restart`),
-    reinstall: (id: string) => post(`/servers/${id}/reinstall`),
+    reinstall: (
+      id: string,
+      target: {
+        platform: string;
+        mc_version: string;
+        loader_version: string | null;
+      },
+    ) => post(`/servers/${id}/reinstall`, target),
     // Change the server's Minecraft version (upgrade or downgrade), moving mods
     // and disabling incompatible ones behind a backup. Async; poll migration().
     migrate: (id: string, mcVersion: string) =>

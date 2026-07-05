@@ -37,13 +37,21 @@ const (
 
 var httpClient = &http.Client{Timeout: 15 * time.Minute}
 
-// Reinstall removes existing runtime artifacts and re-fetches them, so a changed
-// Minecraft/loader version actually takes effect (EnsureRuntime alone is a no-op
-// when a jar is already present).
-func Reinstall(ctx context.Context, dir, platform, mcVersion, javaBinary string) error {
-	_ = os.Remove(filepath.Join(dir, JarName))
-	_ = os.Remove(filepath.Join(dir, RuntimeFile))
-	return EnsureRuntime(ctx, dir, platform, mcVersion, javaBinary)
+// Reinstall re-fetches the runtime for the requested platform/version even when
+// one is already present (EnsureRuntime alone is a no-op then), so a changed
+// Minecraft/loader version actually takes effect. The existing runtime stays in
+// place until its replacement has fully installed, so a failed reinstall never
+// leaves the server without a working runtime.
+func Reinstall(ctx context.Context, dir, platform, mcVersion, loaderVersion, javaBinary string) error {
+	// Jar downloads use a temporary file and atomically replace server.jar. Keep
+	// the working runtime in place until the replacement has fully downloaded.
+	if err := installRuntime(ctx, dir, platform, mcVersion, loaderVersion, javaBinary); err != nil {
+		return err
+	}
+	if platform != "forge" && platform != "neoforge" {
+		_ = os.Remove(filepath.Join(dir, RuntimeFile))
+	}
+	return nil
 }
 
 // EnsureRuntime makes the server runnable. Idempotent: returns nil if
@@ -51,13 +59,17 @@ func Reinstall(ctx context.Context, dir, platform, mcVersion, javaBinary string)
 //
 // javaBinary is the absolute path or shell name used to spawn installer JARs
 // (Forge/NeoForge/Spigot). Pass "java" to fall back to PATH lookup.
-func EnsureRuntime(ctx context.Context, dir, platform, mcVersion, javaBinary string) error {
+func EnsureRuntime(ctx context.Context, dir, platform, mcVersion, loaderVersion, javaBinary string) error {
 	if _, err := os.Stat(filepath.Join(dir, JarName)); err == nil {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, RuntimeFile)); err == nil {
 		return nil
 	}
+	return installRuntime(ctx, dir, platform, mcVersion, loaderVersion, javaBinary)
+}
+
+func installRuntime(ctx context.Context, dir, platform, mcVersion, loaderVersion, javaBinary string) error {
 	if mcVersion == "" {
 		return fmt.Errorf("mc_version required to auto-install %s", platform)
 	}
@@ -76,9 +88,9 @@ func EnsureRuntime(ctx context.Context, dir, platform, mcVersion, javaBinary str
 	case "vanilla":
 		return vanillaJar(ctx, dir, mcVersion)
 	case "fabric":
-		return fabricJar(ctx, dir, mcVersion)
+		return fabricJar(ctx, dir, mcVersion, loaderVersion)
 	case "quilt":
-		return quiltJar(ctx, dir, mcVersion)
+		return quiltJar(ctx, dir, mcVersion, loaderVersion)
 	case "spigot":
 		return spigotJar(ctx, dir, mcVersion, javaBinary)
 	case "forge":
@@ -249,19 +261,43 @@ func vanillaJar(ctx context.Context, dir, mcVersion string) error {
 
 // ── Fabric ───────────────────────────────────────────────────────────────────
 
-func fabricJar(ctx context.Context, dir, mcVersion string) error {
-	type loaderEntry struct {
-		Loader struct {
-			Version string `json:"version"`
-			Stable  bool   `json:"stable"`
-		} `json:"loader"`
+type fabricLoader struct {
+	Version string `json:"version"`
+	Stable  bool   `json:"stable"`
+}
+
+type fabricLoaderEntry struct {
+	Loader fabricLoader `json:"loader"`
+}
+
+func selectFabricLoader(loaders []fabricLoaderEntry, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		for _, entry := range loaders {
+			if entry.Loader.Version == requested {
+				return requested, nil
+			}
+		}
+		return "", fmt.Errorf("fabric loader %s is not available", requested)
 	}
+	for _, entry := range loaders {
+		if entry.Loader.Stable {
+			return entry.Loader.Version, nil
+		}
+	}
+	if len(loaders) == 0 {
+		return "", fmt.Errorf("no fabric loader available")
+	}
+	return loaders[0].Loader.Version, nil
+}
+
+func fabricJar(ctx context.Context, dir, mcVersion, loaderVersion string) error {
 	type installerEntry struct {
 		Version string `json:"version"`
 		Stable  bool   `json:"stable"`
 	}
 
-	var loaders []loaderEntry
+	var loaders []fabricLoaderEntry
 	if err := getJSON(ctx, fmt.Sprintf(
 		"https://meta.fabricmc.net/v2/versions/loader/%s", mcVersion), &loaders); err != nil {
 		return fmt.Errorf("fabric loader lookup: %w", err)
@@ -269,12 +305,9 @@ func fabricJar(ctx context.Context, dir, mcVersion string) error {
 	if len(loaders) == 0 {
 		return fmt.Errorf("no fabric loader for mc %s", mcVersion)
 	}
-	loader := loaders[0].Loader.Version
-	for _, l := range loaders {
-		if l.Loader.Stable {
-			loader = l.Loader.Version
-			break
-		}
+	loader, err := selectFabricLoader(loaders, loaderVersion)
+	if err != nil {
+		return fmt.Errorf("%w for Minecraft %s", err, mcVersion)
 	}
 
 	var installers []installerEntry
@@ -301,17 +334,37 @@ func fabricJar(ctx context.Context, dir, mcVersion string) error {
 
 // ── Quilt ────────────────────────────────────────────────────────────────────
 
-func quiltJar(ctx context.Context, dir, mcVersion string) error {
-	type loaderEntry struct {
-		Loader struct {
-			Version string `json:"version"`
-		} `json:"loader"`
+type quiltLoaderEntry struct {
+	Loader struct {
+		Version string `json:"version"`
+	} `json:"loader"`
+}
+
+// selectQuiltLoader picks the loader to install: the requested version when the
+// panel pinned one (erroring if quilt's meta no longer lists it, rather than
+// silently installing something else), otherwise the newest available.
+func selectQuiltLoader(loaders []quiltLoaderEntry, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		for _, entry := range loaders {
+			if entry.Loader.Version == requested {
+				return requested, nil
+			}
+		}
+		return "", fmt.Errorf("quilt loader %s is not available", requested)
 	}
+	if len(loaders) == 0 {
+		return "", fmt.Errorf("no quilt loader available")
+	}
+	return loaders[0].Loader.Version, nil
+}
+
+func quiltJar(ctx context.Context, dir, mcVersion, loaderVersion string) error {
 	type installerEntry struct {
 		Version string `json:"version"`
 	}
 
-	var loaders []loaderEntry
+	var loaders []quiltLoaderEntry
 	if err := getJSON(ctx, fmt.Sprintf(
 		"https://meta.quiltmc.org/v3/versions/loader/%s", mcVersion), &loaders); err != nil {
 		return fmt.Errorf("quilt loader lookup: %w", err)
@@ -319,7 +372,10 @@ func quiltJar(ctx context.Context, dir, mcVersion string) error {
 	if len(loaders) == 0 {
 		return fmt.Errorf("no quilt loader for mc %s", mcVersion)
 	}
-	loader := loaders[0].Loader.Version
+	loader, err := selectQuiltLoader(loaders, loaderVersion)
+	if err != nil {
+		return fmt.Errorf("%w for Minecraft %s", err, mcVersion)
+	}
 
 	var installers []installerEntry
 	if err := getJSON(ctx,
