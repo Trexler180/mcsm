@@ -37,6 +37,17 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 		return
 	}
 
+	// Managed projects already tracked, per directory. Adoption consults this so
+	// a leftover jar of an already-tracked project (e.g. a stale old version left
+	// behind by a reverted migration) is adopted as "custom" instead of becoming
+	// a duplicate managed row for the same project.
+	trackedProjects := map[string]bool{}
+	for _, m := range mods {
+		if m.SourceID != nil && *m.SourceID != "" {
+			trackedProjects[projectKey(m.Source, *m.SourceID, m.InstallPath)] = true
+		}
+	}
+
 	// Phase 1: per dir, prune deletions and collect untracked jars to adopt.
 	type adoptItem struct {
 		dir, name, path string
@@ -90,6 +101,9 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 				continue
 			}
 			if m.SourceID != nil {
+				// The project is no longer tracked here — a jar for it found on
+				// disk (e.g. renamed manually) may be adopted as managed again.
+				delete(trackedProjects, projectKey(m.Source, *m.SourceID, m.InstallPath))
 				_ = h.store.DeleteModDependencyEdges(ctx, serverID, *m.SourceID)
 			}
 		}
@@ -151,10 +165,15 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 	lookupOK := mrOK && (!cfEnabled || cfOK)
 
 	// Phase 4a: adopt new jars, recognized as managed mods when a provider matched.
+	// A jar whose project is already tracked in the same dir is adopted as
+	// "custom" instead: it's almost certainly a stale duplicate, and a second
+	// managed row would show twice in the Mods tab and double-update.
 	for _, a := range toAdopt {
 		fp := fps[a.path]
 		var created *store.InstalledMod
-		if rec, ok := h.recognize(fp, mr, mrTitles, cf, cfNames, jarDisplayName(a.name)); ok {
+		rec, recognized := h.recognize(fp, mr, mrTitles, cf, cfNames, jarDisplayName(a.name))
+		if recognized && !trackedProjects[projectKey(rec.source, rec.sourceID, a.dir)] {
+			trackedProjects[projectKey(rec.source, rec.sourceID, a.dir)] = true
 			pid, vid := rec.sourceID, rec.versionID
 			created, err = h.store.CreateMod(ctx, &store.InstalledMod{
 				ServerID:    serverID,
@@ -193,14 +212,19 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 	}
 
 	// Phase 4b: retro-identify existing custom rows (only on a definitive pass).
+	// The same duplicate guard applies: a custom row whose jar matches a project
+	// already tracked in its dir keeps its custom identity (hash stamped so it
+	// isn't re-checked) rather than becoming a second managed row.
 	if lookupOK {
 		for _, m := range toIdentify {
 			fp := fps[identifyPath[m.ID]]
 			if fp.SHA512 == "" {
 				continue // couldn't hash this one; leave it for a later pass
 			}
-			if rec, ok := h.recognize(fp, mr, mrTitles, cf, cfNames, m.Name); ok {
-				_ = h.store.RecognizeMod(ctx, m.ID, rec.source, rec.sourceID, rec.versionID, rec.name, rec.version, fp.SHA512)
+			if rec, ok := h.recognize(fp, mr, mrTitles, cf, cfNames, m.Name); ok && !trackedProjects[projectKey(rec.source, rec.sourceID, m.InstallPath)] {
+				if err := h.store.RecognizeMod(ctx, m.ID, rec.source, rec.sourceID, rec.versionID, rec.name, rec.version, fp.SHA512); err == nil {
+					trackedProjects[projectKey(rec.source, rec.sourceID, m.InstallPath)] = true
+				}
 			} else {
 				_ = h.store.StampModHash(ctx, m.ID, fp.SHA512) // checked, no match — don't rehash
 			}
@@ -380,12 +404,20 @@ func jarDisplayName(name string) string {
 // samePath compares two server-relative dir paths, ignoring a trailing slash and
 // case (Windows agents list case-insensitive paths).
 func samePath(a, b string) bool {
-	norm := func(p string) string {
-		p = strings.TrimSuffix(filepath.ToSlash(p), "/")
-		if p == "" {
-			p = "/"
-		}
-		return strings.ToLower(p)
+	return normDirPath(a) == normDirPath(b)
+}
+
+func normDirPath(p string) string {
+	p = strings.TrimSuffix(filepath.ToSlash(p), "/")
+	if p == "" {
+		p = "/"
 	}
-	return norm(a) == norm(b)
+	return strings.ToLower(p)
+}
+
+// projectKey identifies a managed project within one server directory, matching
+// the installed_mods_project_unique index (server scoping is implicit — the
+// reconciler works on a single server's rows).
+func projectKey(source, sourceID, dir string) string {
+	return source + "|" + sourceID + "|" + normDirPath(dir)
 }
