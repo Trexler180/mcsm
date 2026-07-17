@@ -429,8 +429,9 @@ export function DashboardTab({
             />
           </div>
         </Panel>
-        <Panel title="Quick Actions">
-          <div className="space-y-2">
+        <div className="flex flex-col gap-5">
+          <Panel title="Quick Actions">
+            <div className="space-y-2">
             {/* While a run is in flight, swap the button for live progress; the
                 run may already be going (e.g. started from the Mods tab). */}
             {canSafeUpdate && activeRun ? (
@@ -527,7 +528,19 @@ export function DashboardTab({
               />
             </div>
           </div>
-        </Panel>
+          </Panel>
+          {canTasks && tasks.length > 0 && (
+            <Panel
+              title="Scheduled Tasks"
+              description="Upcoming and recent runs. Manage in Tasks."
+              onClick={() => onSection("tasks")}
+              className="flex min-h-0 flex-1 flex-col"
+              bodyClassName="min-h-0 flex-1 overflow-y-auto"
+            >
+              <TaskTimeline tasks={tasks} compact />
+            </Panel>
+          )}
+        </div>
       </div>
 
       {(() => {
@@ -590,26 +603,8 @@ export function DashboardTab({
           </Panel>
         );
 
-        // With a tasks timeline, pair it beside the two info cards (stacked) so
-        // the timeline occupies about half the width rather than stretching
-        // edge to edge. Without it, the info cards keep the original 2-up row.
-        if (canTasks && tasks.length > 0) {
-          return (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <Panel
-                title="Scheduled Tasks"
-                description="Upcoming and recent runs. Manage in Tasks."
-                onClick={() => onSection("tasks")}
-              >
-                <TaskTimeline tasks={tasks} compact />
-              </Panel>
-              <div className="grid gap-5">
-                {serverDetails}
-                {latestBackupPanel}
-              </div>
-            </div>
-          );
-        }
+        // Scheduled Tasks now lives beside Resources (under Quick Actions), so
+        // the info cards keep the full-width 2-up row here.
         return (
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {serverDetails}
