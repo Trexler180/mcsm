@@ -32,7 +32,7 @@ func NewModHandlers(s *store.Store, serverRoot string, updater *autoupdate.Engin
 	return &ModHandlers{
 		store:      s,
 		serverRoot: serverRoot,
-		modrinth: modrinth.New(),
+		modrinth:   modrinth.New(),
 		// Resolve the CurseForge key lazily from the encrypted secret store,
 		// falling back to the legacy env var, so a key pasted in Settings →
 		// Integrations takes effect without a restart.
@@ -95,14 +95,14 @@ func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
 	h.reconcileFromDisk(r.Context(), id)
 	mods, err := h.store.ListMods(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list mods", err)
 		return
 	}
 	if mods == nil {
 		mods = []*store.InstalledMod{}
 	}
 	if err := h.annotateDependencies(r.Context(), id, mods); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list mods: dependencies", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, mods)

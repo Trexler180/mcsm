@@ -84,7 +84,7 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 		servers, err = h.store.ListServersForUser(ctx, claims.UserID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "overview: list servers", err)
 		return
 	}
 

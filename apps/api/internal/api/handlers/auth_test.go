@@ -46,7 +46,10 @@ func TestRefreshRotatesRefreshToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := func() error { _, e := s.CreateRefreshToken(ctx, user.ID, oldHash, "", "", time.Now().Add(time.Hour)); return e }(); err != nil {
+	if err := func() error {
+		_, e := s.CreateRefreshToken(ctx, user.ID, oldHash, "", "", time.Now().Add(time.Hour))
+		return e
+	}(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,7 +98,10 @@ func TestRefreshAcceptsCookieToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := func() error { _, e := s.CreateRefreshToken(ctx, user.ID, oldHash, "", "", time.Now().Add(time.Hour)); return e }(); err != nil {
+	if err := func() error {
+		_, e := s.CreateRefreshToken(ctx, user.ID, oldHash, "", "", time.Now().Add(time.Hour))
+		return e
+	}(); err != nil {
 		t.Fatal(err)
 	}
 

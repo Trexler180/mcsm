@@ -61,7 +61,7 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.SetModEnabled(r.Context(), modID, body.Enabled, newName); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "mod set enabled", err)
 		return
 	}
 	action := "mod.disable"
@@ -137,7 +137,7 @@ func (h *ModHandlers) ListConflicts(w http.ResponseWriter, r *http.Request) {
 	activeOnly := r.URL.Query().Get("active") == "1"
 	conflicts, err := h.store.ListConflicts(r.Context(), serverID, activeOnly)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list conflicts", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, conflicts)
@@ -158,7 +158,7 @@ func (h *ModHandlers) RecordConflict(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.store.RecordConflict(r.Context(), serverID, body.Kind, body.Summary, body.Mods)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "record conflict", err)
 		return
 	}
 	serverName := ""
@@ -199,7 +199,7 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.store.DeleteMod(r.Context(), modID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "uninstall mod: record", err)
 		return
 	}
 	// Drop this mod from the dependency graph so its required deps can become

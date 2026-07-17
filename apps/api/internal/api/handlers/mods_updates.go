@@ -26,14 +26,14 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 	}
 	mods, err := h.store.ListMods(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "mod updates: list mods", err)
 		return
 	}
 
 	// Blocklisted versions (auto-reverted by a previous run) are never offered.
 	skippedRows, err := h.store.ListSkippedModVersions(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "mod updates: skipped versions", err)
 		return
 	}
 	skipped := map[string]map[string]bool{} // project id -> version id -> true
@@ -143,7 +143,7 @@ func (h *ModHandlers) VersionCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	mods, err := h.store.ListMods(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "version check: list mods", err)
 		return
 	}
 
@@ -304,7 +304,7 @@ func (h *ModHandlers) AutoUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "mod auto-update: trigger", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
@@ -315,7 +315,7 @@ func (h *ModHandlers) ListUpdateRuns(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	runs, err := h.store.ListModUpdateRuns(r.Context(), serverID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list update runs", err)
 		return
 	}
 	if runs == nil {
@@ -338,7 +338,7 @@ func (h *ModHandlers) ListSkippedVersions(w http.ResponseWriter, r *http.Request
 	serverID := chi.URLParam(r, "id")
 	rows, err := h.store.ListSkippedModVersions(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list skipped versions", err)
 		return
 	}
 	if rows == nil {
@@ -358,7 +358,7 @@ func (h *ModHandlers) UnskipVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteSkippedModVersion(r.Context(), serverID, projectID, versionID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "unskip version", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -442,7 +442,7 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	mod.SHA256 = &sha
 	updated, err := h.store.UpdateMod(r.Context(), mod)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "mod update: record", err)
 		return
 	}
 	audit(h.store, r, serverID, "mod.update", map[string]any{"mod_id": modID, "version": ver.VersionNumber})
@@ -466,7 +466,7 @@ func (h *ModHandlers) Pin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.SetModPinned(r.Context(), modID, body.Pinned); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "pin mod", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

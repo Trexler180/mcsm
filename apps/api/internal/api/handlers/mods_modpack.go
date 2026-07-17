@@ -83,7 +83,7 @@ func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
 		InstallPath: "/",
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "install modpack: record", err)
 		return
 	}
 	audit(h.store, r, serverID, "modpack.install", map[string]any{"project_id": body.ProjectID, "files": count})

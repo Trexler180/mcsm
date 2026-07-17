@@ -20,7 +20,7 @@ func NewNodeHandlers(s *store.Store) *NodeHandlers {
 func (h *NodeHandlers) List(w http.ResponseWriter, r *http.Request) {
 	nodes, err := h.store.ListNodes(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list nodes", err)
 		return
 	}
 
@@ -65,7 +65,7 @@ func (h *NodeHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.store.CreateNode(r.Context(), n, body.Token)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "create node", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
@@ -117,7 +117,7 @@ func (h *NodeHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.UpdateNode(r.Context(), id, existing); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "update node", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, existing)
@@ -130,7 +130,7 @@ func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "node still has servers; delete or move those servers before removing the node")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete node", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

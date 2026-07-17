@@ -69,7 +69,7 @@ type integrationStatus struct {
 func (h *SettingsHandlers) ListIntegrations(w http.ResponseWriter, r *http.Request) {
 	meta, err := h.store.ListSecretMeta(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list integrations", err)
 		return
 	}
 	byKey := make(map[string]store.SecretMeta, len(meta))
@@ -124,7 +124,7 @@ func (h *SettingsHandlers) SetIntegration(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.store.SetSecret(r.Context(), def.Key, value, currentUserID(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "set integration", err)
 		return
 	}
 	audit(h.store, r, "", "integration.set", map[string]string{"key": def.Key})
@@ -138,7 +138,7 @@ func (h *SettingsHandlers) DeleteIntegration(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.store.DeleteSecret(r.Context(), key); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete integration", err)
 		return
 	}
 	audit(h.store, r, "", "integration.delete", map[string]string{"key": key})

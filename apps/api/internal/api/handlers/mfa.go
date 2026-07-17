@@ -68,8 +68,8 @@ func (h *MFAHandlers) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"secret":       secret,
-		"otpauth_url":  auth.TOTPProvisioningURI(secret, mfaIssuer(), user.Email),
+		"secret":      secret,
+		"otpauth_url": auth.TOTPProvisioningURI(secret, mfaIssuer(), user.Email),
 	})
 }
 

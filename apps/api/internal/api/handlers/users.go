@@ -39,7 +39,7 @@ func NewUserHandlers(s *store.Store, jwtSecret string) *UserHandlers {
 func (h *UserHandlers) List(w http.ResponseWriter, r *http.Request) {
 	users, err := h.store.ListUsers(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list users", err)
 		return
 	}
 	if users == nil {
@@ -135,7 +135,7 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.UpdateUser(r.Context(), id, displayName, role); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "update user", err)
 		return
 	}
 
@@ -150,14 +150,14 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.store.UpdateUserPassword(r.Context(), id, hash); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeServerError(w, r, "update user: password", err)
 			return
 		}
 	}
 
 	updated, err := h.store.GetUserByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "update user: reread", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -170,7 +170,7 @@ func (h *UserHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "this user still owns one or more servers; reassign or delete those servers before removing the user")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete user", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

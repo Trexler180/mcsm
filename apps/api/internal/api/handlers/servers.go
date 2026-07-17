@@ -209,7 +209,7 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 		servers, err = h.store.ListServersForUser(r.Context(), claims.UserID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list servers", err)
 		return
 	}
 	if servers == nil {
@@ -323,7 +323,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.store.CreateServer(r.Context(), srv)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "create server", err)
 		return
 	}
 
@@ -474,7 +474,7 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.UpdateServer(r.Context(), id, existing); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "update server", err)
 		return
 	}
 	if len(changes) > 0 {
@@ -518,7 +518,7 @@ func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.DeleteServer(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete server", err)
 		return
 	}
 	audit(h.store, r, "", "server.delete", map[string]any{
@@ -798,7 +798,7 @@ func (h *ServerHandlers) LogEvents(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	events, err := h.store.ListLogEvents(r.Context(), id, level, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list log events", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, events)

@@ -75,7 +75,7 @@ func (h *MigrationHandlers) Migrate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "migrate: trigger", err)
 		return
 	}
 	audit(h.store, r, serverID, "server.migrate_start", map[string]any{"from": srv.MCVersion, "to": target, "run_id": run.ID})
@@ -87,7 +87,7 @@ func (h *MigrationHandlers) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	runs, err := h.store.ListVersionMigrations(r.Context(), serverID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list migrations", err)
 		return
 	}
 	if runs == nil {

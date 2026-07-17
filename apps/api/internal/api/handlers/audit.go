@@ -21,7 +21,7 @@ func (h *AuditHandlers) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	entries, err := h.store.ListAudit(r.Context(), "", limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list audit", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
@@ -33,7 +33,7 @@ func (h *AuditHandlers) ListForServer(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	entries, err := h.store.ListAudit(r.Context(), serverID, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list server audit", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)

@@ -26,7 +26,7 @@ func (h *BackupHandlers) ListBackups(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	backups, err := h.store.ListBackups(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list backups", err)
 		return
 	}
 	if backups == nil {
@@ -63,7 +63,7 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.store.CreateBackup(r.Context(), pending)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "create backup: record", err)
 		return
 	}
 
@@ -175,7 +175,7 @@ func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.DeleteBackup(r.Context(), backupID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete backup: record", err)
 		return
 	}
 
@@ -190,7 +190,7 @@ func (h *BackupHandlers) ListTargets(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	targets, err := h.store.ListBackupTargets(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list backup targets", err)
 		return
 	}
 	if targets == nil {
@@ -229,7 +229,7 @@ func (h *BackupHandlers) CreateTarget(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.store.CreateBackupTarget(r.Context(), t)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "create backup target", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)

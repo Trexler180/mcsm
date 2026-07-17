@@ -140,10 +140,10 @@ func (h *NotificationHandlers) CreateChannel(w http.ResponseWriter, r *http.Requ
 	}
 	userID := currentUserID(r)
 	ch, err := h.store.CreateChannel(r.Context(), &store.NotificationChannel{
-		UserID: userID,
-		Kind:   "webhook",
-		Label:  body.Label,
-		Config: store.NotificationChannelConfig{URL: body.URL, Format: body.Format, SecretSet: body.Secret != ""},
+		UserID:  userID,
+		Kind:    "webhook",
+		Label:   body.Label,
+		Config:  store.NotificationChannelConfig{URL: body.URL, Format: body.Format, SecretSet: body.Secret != ""},
 		Enabled: true,
 	})
 	if err != nil {

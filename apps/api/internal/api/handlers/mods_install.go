@@ -94,7 +94,7 @@ func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 	dest := customInstallDirForPlatform(srv.Platform)
 	existing, err := h.store.ListMods(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "upload mod: list mods", err)
 		return
 	}
 
@@ -146,7 +146,7 @@ func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 			tracked.SHA256 = &sha
 			updated, err := h.store.UpdateMod(r.Context(), tracked)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				writeServerError(w, r, "upload mod: update record", err)
 				return
 			}
 			installed = append(installed, updated)
@@ -164,7 +164,7 @@ func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			_ = deleteAgentFile(ctx, c, serverID, dest+"/"+name)
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeServerError(w, r, "upload mod: create record", err)
 			return
 		}
 		existing = append(existing, mod)

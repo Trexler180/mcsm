@@ -80,7 +80,7 @@ func (h *ServerMemberHandlers) List(w http.ResponseWriter, r *http.Request) {
 	}
 	members, err := h.store.ListServerMembers(r.Context(), srv.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list members", err)
 		return
 	}
 	// The owner has implicit full access and is returned separately, so drop any
@@ -129,7 +129,7 @@ func (h *ServerMemberHandlers) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	perms, ok, err := h.store.GetServerPermissions(r.Context(), srv.ID, claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member self permissions", err)
 		return
 	}
 	if !ok {
@@ -173,12 +173,12 @@ func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "user already has server access")
 		return
 	} else if !errors.Is(err, store.ErrServerMemberNotFound) {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member add: lookup", err)
 		return
 	}
 
 	if err := h.store.SetServerPermissions(r.Context(), srv.ID, target.ID, perms); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member add: set permissions", err)
 		return
 	}
 	audit(h.store, r, srv.ID, "server.member.add", map[string]any{
@@ -189,7 +189,7 @@ func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	member, err := h.store.GetServerMember(r.Context(), srv.ID, target.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member add: reread", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, member)
@@ -229,7 +229,7 @@ func (h *ServerMemberHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member update: lookup", err)
 		return
 	}
 	if err := h.store.SetServerPermissionsIfCurrent(r.Context(), srv.ID, targetID, perms, *body.ExpectedPermissions); err != nil {
@@ -241,7 +241,7 @@ func (h *ServerMemberHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "member not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member update: set permissions", err)
 		return
 	}
 	audit(h.store, r, srv.ID, "server.member.update", map[string]any{
@@ -252,7 +252,7 @@ func (h *ServerMemberHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	})
 	updated, err := h.store.GetServerMember(r.Context(), srv.ID, targetID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member update: reread", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -275,11 +275,11 @@ func (h *ServerMemberHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member remove: lookup", err)
 		return
 	}
 	if err := h.store.DeleteServerPermissions(r.Context(), srv.ID, targetID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "member remove: delete permissions", err)
 		return
 	}
 	audit(h.store, r, srv.ID, "server.member.remove", map[string]any{

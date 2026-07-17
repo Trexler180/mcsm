@@ -53,7 +53,7 @@ func (h *TaskHandlers) List(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	tasks, err := h.store.ListTasks(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "list tasks", err)
 		return
 	}
 	if tasks == nil {
@@ -170,7 +170,7 @@ func (h *TaskHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteTask(r.Context(), taskID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServerError(w, r, "delete task", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
