@@ -38,7 +38,15 @@ func TestNodeHeartbeatAndDeleteConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	mem, disk, cpu := 4096, 120, 8
-	if err := s.UpdateNodeHeartbeat(ctx, node.ID, &mem, &disk, &cpu); err != nil {
+	memUsed, diskUsed, cpuPct := 2048, 60, 12.5
+	uptime := int64(3600)
+	osName, arch, ver := "linux", "amd64", "abc123"
+	hb := NodeHeartbeat{
+		MemoryMb: &mem, DiskGb: &disk, CPUCores: &cpu,
+		MemUsedMb: &memUsed, DiskUsedGb: &diskUsed, CPUPct: &cpuPct,
+		UptimeSeconds: &uptime, OS: &osName, Arch: &arch, AgentVersion: &ver,
+	}
+	if err := s.UpdateNodeHeartbeat(ctx, node.ID, hb); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetNode(ctx, node.ID)
@@ -47,6 +55,12 @@ func TestNodeHeartbeatAndDeleteConflict(t *testing.T) {
 	}
 	if got.LastSeen == nil || got.MemoryMb == nil || *got.MemoryMb != mem || got.DiskGb == nil || *got.DiskGb != disk || got.CPUCores == nil || *got.CPUCores != cpu {
 		t.Fatalf("heartbeat not persisted: %+v", got)
+	}
+	if got.MemUsedMb == nil || *got.MemUsedMb != memUsed || got.DiskUsedGb == nil || *got.DiskUsedGb != diskUsed ||
+		got.CPUPct == nil || *got.CPUPct != cpuPct || got.UptimeSeconds == nil || *got.UptimeSeconds != uptime ||
+		got.OS == nil || *got.OS != osName || got.Arch == nil || *got.Arch != arch ||
+		got.AgentVersion == nil || *got.AgentVersion != ver {
+		t.Fatalf("heartbeat stats not persisted: %+v", got)
 	}
 
 	user, err := s.CreateUser(ctx, "owner@example.com", "hash", "user")

@@ -77,6 +77,14 @@ export interface Node {
   created_at: string;
   last_seen: string | null;
   online?: boolean;
+  // Live stats from the latest agent heartbeat; null until first polled.
+  mem_used_mb: number | null;
+  disk_used_gb: number | null;
+  cpu_pct: number | null;
+  uptime_seconds: number | null;
+  os: string | null;
+  arch: string | null;
+  agent_version: string | null;
 }
 
 export type ServerStatus =
@@ -441,6 +449,8 @@ export interface OverviewNode {
   name: string;
   online: boolean;
   memory_mb: number | null;
+  mem_used_mb: number | null;
+  cpu_pct: number | null;
   last_seen: string | null;
 }
 

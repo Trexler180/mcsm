@@ -11,6 +11,18 @@ import (
 
 // ── Nodes ────────────────────────────────────────────────────────
 
+// nodeCols and nodeScanDest keep the node SELECT column list and its scan
+// targets in one place so Get/List can't drift apart.
+const nodeCols = `id, name, fqdn, port, scheme, token, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen,
+	mem_used_mb, disk_used_gb, cpu_pct, uptime_seconds, os, arch, agent_version`
+
+func nodeScanDest(n *Node) []any {
+	return []any{
+		&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen,
+		&n.MemUsedMb, &n.DiskUsedGb, &n.CPUPct, &n.UptimeSeconds, &n.OS, &n.Arch, &n.AgentVersion,
+	}
+}
+
 func (s *Store) CreateNode(ctx context.Context, n *Node, token string) (*Node, error) {
 	id := uuid.NewString()
 	encToken, err := s.EncryptNodeToken(token)
@@ -59,9 +71,9 @@ func (s *Store) EnsureNode(ctx context.Context, name, fqdn string, port int, sch
 func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	var n Node
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, fqdn, port, scheme, token, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen FROM nodes WHERE id = ?`,
+		`SELECT `+nodeCols+` FROM nodes WHERE id = ?`,
 		id,
-	).Scan(&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen)
+	).Scan(nodeScanDest(&n)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("node not found")
 	}
@@ -76,7 +88,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, fqdn, port, scheme, token, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen FROM nodes ORDER BY name`)
+		`SELECT `+nodeCols+` FROM nodes ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +96,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	var nodes []*Node
 	for rows.Next() {
 		var n Node
-		if err := rows.Scan(&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen); err != nil {
+		if err := rows.Scan(nodeScanDest(&n)...); err != nil {
 			return nil, err
 		}
 		token, err := s.DecryptNodeToken(n.Token)
@@ -122,10 +134,27 @@ func (s *Store) UpdateNodeSeen(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, memoryMb, diskGb, cpuCores *int) error {
+// NodeHeartbeat carries the stats reported by an agent's /info endpoint.
+// Fields left nil are stored as NULL (older agents may not report them).
+type NodeHeartbeat struct {
+	MemoryMb      *int
+	DiskGb        *int
+	CPUCores      *int
+	MemUsedMb     *int
+	DiskUsedGb    *int
+	CPUPct        *float64
+	UptimeSeconds *int64
+	OS            *string
+	Arch          *string
+	AgentVersion  *string
+}
+
+func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, hb NodeHeartbeat) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE nodes SET memory_mb=?, disk_gb=?, cpu_cores=?, last_seen=CURRENT_TIMESTAMP WHERE id=?`,
-		memoryMb, diskGb, cpuCores, id,
+		`UPDATE nodes SET memory_mb=?, disk_gb=?, cpu_cores=?, mem_used_mb=?, disk_used_gb=?, cpu_pct=?,
+		 uptime_seconds=?, os=?, arch=?, agent_version=?, last_seen=CURRENT_TIMESTAMP WHERE id=?`,
+		hb.MemoryMb, hb.DiskGb, hb.CPUCores, hb.MemUsedMb, hb.DiskUsedGb, hb.CPUPct,
+		hb.UptimeSeconds, hb.OS, hb.Arch, hb.AgentVersion, id,
 	)
 	return err
 }

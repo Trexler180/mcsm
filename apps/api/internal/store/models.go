@@ -236,6 +236,15 @@ type Node struct {
 	Location  *string    `json:"location"`
 	CreatedAt time.Time  `json:"created_at"`
 	LastSeen  *time.Time `json:"last_seen"`
+
+	// Live stats from the most recent agent heartbeat; nil until first polled.
+	MemUsedMb     *int     `json:"mem_used_mb"`
+	DiskUsedGb    *int     `json:"disk_used_gb"`
+	CPUPct        *float64 `json:"cpu_pct"`
+	UptimeSeconds *int64   `json:"uptime_seconds"`
+	OS            *string  `json:"os"`
+	Arch          *string  `json:"arch"`
+	AgentVersion  *string  `json:"agent_version"`
 }
 
 var ErrNodeHasServers = errors.New("node has servers")

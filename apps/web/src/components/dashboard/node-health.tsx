@@ -9,6 +9,12 @@ function formatMemory(mb: number | null): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(0)} GB` : `${mb} MB`;
 }
 
+function memoryLine(n: OverviewNode): string {
+  if (!n.memory_mb) return "—";
+  if (n.mem_used_mb == null) return formatMemory(n.memory_mb);
+  return `${(n.mem_used_mb / 1024).toFixed(1)} / ${formatMemory(n.memory_mb)}`;
+}
+
 export function NodeHealthCard({ nodes }: { nodes: OverviewNode[] }) {
   return (
     <Card>
@@ -42,9 +48,16 @@ export function NodeHealthCard({ nodes }: { nodes: OverviewNode[] }) {
                   {relativeTime(n.last_seen)}
                 </p>
               </div>
-              <span className="flex-shrink-0 font-mono text-xs text-text-secondary">
-                {formatMemory(n.memory_mb)}
-              </span>
+              <div className="flex flex-shrink-0 flex-col items-end gap-0.5">
+                <span className="font-mono text-xs text-text-secondary">
+                  {memoryLine(n)}
+                </span>
+                {n.online && n.cpu_pct != null && (
+                  <span className="font-mono text-[11px] text-text-secondary">
+                    CPU {n.cpu_pct.toFixed(0)}%
+                  </span>
+                )}
+              </div>
             </div>
           ))}
         </div>

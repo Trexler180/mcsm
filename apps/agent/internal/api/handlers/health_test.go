@@ -31,7 +31,7 @@ func TestHealthAndInfoShapes(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&info); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"hostname", "os", "arch", "memory_mb", "disk_gb", "cpu_cores", "agent_uptime_sec"} {
+	for _, key := range []string{"hostname", "os", "arch", "memory_mb", "mem_used_mb", "disk_gb", "disk_used_gb", "cpu_cores", "cpu_pct", "agent_uptime_sec"} {
 		if _, ok := info[key]; !ok {
 			t.Fatalf("info missing %q: %v", key, info)
 		}

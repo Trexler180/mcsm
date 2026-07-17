@@ -162,10 +162,19 @@ func pollNodes(ctx context.Context, s *store.Store, engine *notify.Engine) {
 			}
 			continue
 		}
-		memoryMb := intFromInfo(info, "memory_mb")
-		diskGb := intFromInfo(info, "disk_gb")
-		cpuCores := intFromInfo(info, "cpu_cores")
-		if err := s.UpdateNodeHeartbeat(ctx, node.ID, memoryMb, diskGb, cpuCores); err != nil {
+		hb := store.NodeHeartbeat{
+			MemoryMb:      intFromInfo(info, "memory_mb"),
+			DiskGb:        intFromInfo(info, "disk_gb"),
+			CPUCores:      intFromInfo(info, "cpu_cores"),
+			MemUsedMb:     intFromInfo(info, "mem_used_mb"),
+			DiskUsedGb:    intFromInfo(info, "disk_used_gb"),
+			CPUPct:        floatFromInfo(info, "cpu_pct"),
+			UptimeSeconds: int64FromInfo(info, "uptime_seconds"),
+			OS:            strFromInfo(info, "os"),
+			Arch:          strFromInfo(info, "arch"),
+			AgentVersion:  strFromInfo(info, "version"),
+		}
+		if err := s.UpdateNodeHeartbeat(ctx, node.ID, hb); err != nil {
 			log.Printf("poller: update node heartbeat %s: %v", node.ID, err)
 		}
 		if !wasOnline {
@@ -175,26 +184,52 @@ func pollNodes(ctx context.Context, s *store.Store, engine *notify.Engine) {
 }
 
 func intFromInfo(info map[string]any, key string) *int {
+	i := int64FromInfo(info, key)
+	if i == nil {
+		return nil
+	}
+	out := int(*i)
+	return &out
+}
+
+func int64FromInfo(info map[string]any, key string) *int64 {
+	f := floatFromInfo(info, key)
+	if f == nil {
+		return nil
+	}
+	out := int64(*f)
+	return &out
+}
+
+func floatFromInfo(info map[string]any, key string) *float64 {
 	v, ok := info[key]
 	if !ok {
 		return nil
 	}
-	var out int
+	var out float64
 	switch n := v.(type) {
 	case float64:
-		out = int(n)
-	case int:
 		out = n
+	case int:
+		out = float64(n)
 	case int64:
-		out = int(n)
+		out = float64(n)
 	case json.Number:
-		i, err := n.Int64()
+		f, err := n.Float64()
 		if err != nil {
 			return nil
 		}
-		out = int(i)
+		out = f
 	default:
 		return nil
 	}
 	return &out
+}
+
+func strFromInfo(info map[string]any, key string) *string {
+	s, ok := info[key].(string)
+	if !ok || s == "" {
+		return nil
+	}
+	return &s
 }

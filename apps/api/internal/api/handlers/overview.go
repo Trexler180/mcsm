@@ -38,11 +38,13 @@ type serverOverview struct {
 }
 
 type nodeOverview struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Online   bool       `json:"online"`
-	MemoryMb *int       `json:"memory_mb"`
-	LastSeen *time.Time `json:"last_seen"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Online    bool       `json:"online"`
+	MemoryMb  *int       `json:"memory_mb"`
+	MemUsedMb *int       `json:"mem_used_mb"`
+	CPUPct    *float64   `json:"cpu_pct"`
+	LastSeen  *time.Time `json:"last_seen"`
 }
 
 type overviewResponse struct {
@@ -157,7 +159,8 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 			}
 			out.Nodes = append(out.Nodes, nodeOverview{
 				ID: n.ID, Name: n.Name, Online: online,
-				MemoryMb: n.MemoryMb, LastSeen: n.LastSeen,
+				MemoryMb: n.MemoryMb, MemUsedMb: n.MemUsedMb, CPUPct: n.CPUPct,
+				LastSeen: n.LastSeen,
 			})
 		}
 	}
