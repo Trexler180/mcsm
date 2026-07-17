@@ -289,6 +289,9 @@ type BackupResult struct {
 	BackupID  string `json:"backup_id"`
 	Path      string `json:"path"`
 	SizeBytes int64  `json:"size_bytes"`
+	// Warning is set when the backup succeeded but left the target disk
+	// nearly full; callers should surface it to operators.
+	Warning string `json:"warning"`
 }
 
 // Backup zips the server directory on the agent host. The agent decides where

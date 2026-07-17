@@ -525,6 +525,9 @@ func (e *Engine) backup(ctx context.Context, c agentAPI, srv *store.Server) (str
 	}
 	_ = e.store.UpdateBackupResult(ctx, b.ID, "success", &res.SizeBytes, "")
 	backups.Enforce(ctx, e.store, srv.ID)
+	if res.Warning != "" {
+		_ = e.store.InsertLogEvent(ctx, srv.ID, "warning", res.Warning, "backup")
+	}
 	return b.ID, nil
 }
 

@@ -12,7 +12,81 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/agent/internal/process"
+	"github.com/shirou/gopsutil/v4/disk"
 )
+
+// ── Backup disk-space guard ──────────────────────────────────────
+//
+// A backup that fills the disk takes the whole node down with it (worlds can
+// no longer save, logs can't write). Before zipping we estimate the archive's
+// size from the uncompressed source — deliberately conservative, zip only
+// shrinks it — and refuse when the projected free space would drop below a
+// danger floor. After a successful backup we still return a warning when the
+// disk is merely getting tight, so the panel can surface it.
+
+const gib = int64(1) << 30
+
+// dangerFloor is the free space a backup must leave behind: 5% of the disk,
+// clamped to [2 GiB, 10 GiB] so tiny disks aren't impossible and huge disks
+// aren't wasteful.
+func dangerFloor(total int64) int64 { return max(2*gib, min(total/20, 10*gib)) }
+
+// warnFloor is where we start warning: 10% of the disk, clamped to [5 GiB, 25 GiB].
+func warnFloor(total int64) int64 { return max(5*gib, min(total/10, 25*gib)) }
+
+// backupBlockedMsg returns a refusal reason when writing ~estimate bytes would
+// leave the filesystem dangerously full, or "" when the backup may proceed.
+func backupBlockedMsg(free, total, estimate int64) string {
+	if total <= 0 {
+		return ""
+	}
+	floor := dangerFloor(total)
+	if free-estimate >= floor {
+		return ""
+	}
+	return fmt.Sprintf(
+		"not enough disk space for backup: needs up to %.1f GB but only %.1f GB is free, and at least %.1f GB must stay free; delete old backups or free up space",
+		float64(estimate)/float64(gib), float64(free)/float64(gib), float64(floor)/float64(gib))
+}
+
+// lowSpaceWarning returns a human-readable warning when free space is below
+// the warn floor, or "" when there is comfortable headroom.
+func lowSpaceWarning(free, total int64) string {
+	if total <= 0 || free >= warnFloor(total) {
+		return ""
+	}
+	usedPct := 100 - float64(free)/float64(total)*100
+	return fmt.Sprintf("backup disk is nearly full: %.1f GB free (%.0f%% used)",
+		float64(free)/float64(gib), usedPct)
+}
+
+// estimateBackupSize sums the sizes of the files the zip walk would include.
+// Best-effort: unreadable entries are skipped rather than failing the estimate.
+func estimateBackupSize(src string, skipRoots []string, skipExt map[string]bool) int64 {
+	var total int64
+	_ = filepath.Walk(src, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			if info != nil && info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		for _, sr := range skipRoots {
+			if path == sr || strings.HasPrefix(path, sr+string(filepath.Separator)) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+		if info.IsDir() || skipExt[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
+}
 
 type BackupHandlers struct {
 	mgr        *process.Manager
@@ -93,6 +167,21 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	}
 	zipPath := filepath.Join(backupDir, backupID+".zip")
 
+	skipRoots := []string{
+		filepath.Join(src, "mcsm-backups"),
+		filepath.Join(src, "logs"),
+	}
+	skipExt := map[string]bool{".lock": true, ".lck": true}
+
+	// Refuse a backup that could dangerously fill the target filesystem.
+	if du, derr := disk.Usage(backupDir); derr == nil && du != nil {
+		estimate := estimateBackupSize(src, skipRoots, skipExt)
+		if msg := backupBlockedMsg(int64(du.Free), int64(du.Total), estimate); msg != "" {
+			writeError(w, http.StatusInsufficientStorage, msg)
+			return
+		}
+	}
+
 	zf, err := os.Create(zipPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create zip: "+err.Error())
@@ -101,12 +190,6 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	defer zf.Close()
 
 	zw := zip.NewWriter(zf)
-
-	skipRoots := []string{
-		filepath.Join(src, "mcsm-backups"),
-		filepath.Join(src, "logs"),
-	}
-	skipExt := map[string]bool{".lock": true, ".lck": true}
 
 	walkErr := filepath.Walk(src, func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
@@ -172,11 +255,18 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"backup_id":  backupID,
 		"path":       zipPath,
 		"size_bytes": stat.Size(),
-	})
+	}
+	// Report (but don't fail on) a disk that is getting tight after the backup.
+	if du, derr := disk.Usage(backupDir); derr == nil && du != nil {
+		if warning := lowSpaceWarning(int64(du.Free), int64(du.Total)); warning != "" {
+			resp["warning"] = warning
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // Restore stops the server (if running), wipes the live server directory

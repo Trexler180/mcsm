@@ -269,6 +269,14 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 		_ = s.store.UpdateBackupResult(ctx, created.ID, "success", &result.SizeBytes, "")
 		backups.Enforce(ctx, s.store, srv.ID)
 		s.engine.Emit(notify.BackupSuccess(srv.ID, srv.Name))
+		if result.Warning != "" {
+			_ = s.store.InsertLogEvent(ctx, srv.ID, "warning", result.Warning, "backup")
+			nodeName := ""
+			if node, nerr := s.store.GetNode(ctx, srv.NodeID); nerr == nil {
+				nodeName = node.Name
+			}
+			s.engine.Emit(notify.NodeDiskLow(srv.NodeID, nodeName, result.Warning))
+		}
 
 	default:
 		log.Printf("scheduler: task %s unknown action %q", task.Name, task.Action)

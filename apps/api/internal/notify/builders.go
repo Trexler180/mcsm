@@ -91,6 +91,16 @@ func NodeOffline(nodeID, nodeName string) Event {
 	}
 }
 
+// NodeDiskLow reports that a backup left the node's disk nearly full. detail
+// carries the agent's measurement (e.g. "4.2 GB free (95% used)").
+func NodeDiskLow(nodeID, nodeName, detail string) Event {
+	return Event{
+		Type: EventNodeDiskLow, NodeID: nodeID, NodeName: nodeName,
+		Title: fmt.Sprintf("Disk space low on node %s", display(nodeName, nodeID)),
+		Body:  detail,
+	}
+}
+
 func NodeOnline(nodeID, nodeName string) Event {
 	return Event{
 		Type: EventNodeOnline, NodeID: nodeID, NodeName: nodeName,

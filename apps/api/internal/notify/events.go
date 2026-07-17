@@ -50,6 +50,7 @@ const (
 	EventBackupFailed       = "backup.failed"
 	EventNodeOffline        = "node.offline"
 	EventNodeOnline         = "node.online"
+	EventNodeDiskLow        = "node.disk_low"
 	EventServerPerformance  = "server.performance"
 )
 
@@ -77,6 +78,7 @@ var Catalog = []EventDef{
 	{EventServerPerformance, "Server under sustained load", "CPU or memory stayed above the alert threshold for several consecutive samples.", SeverityWarning, ScopeServer},
 	{EventNodeOffline, "Node offline", "An agent node stopped responding to heartbeats.", SeverityWarning, ScopeNode},
 	{EventNodeOnline, "Node online", "An agent node started responding again.", SeverityInfo, ScopeNode},
+	{EventNodeDiskLow, "Node disk low", "A backup left the node's disk nearly full.", SeverityWarning, ScopeNode},
 }
 
 // DefByType returns the catalog definition for an event type.

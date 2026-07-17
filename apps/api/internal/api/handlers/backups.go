@@ -91,6 +91,14 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 		_ = h.store.UpdateBackupResult(ctx, b.ID, "success", &result.SizeBytes, "")
 		backups.Enforce(ctx, h.store, b.ServerID)
 		h.notifier.Emit(notify.BackupSuccess(srv.ID, srv.Name))
+		if result.Warning != "" {
+			_ = h.store.InsertLogEvent(ctx, srv.ID, "warning", result.Warning, "backup")
+			nodeName := ""
+			if node, nerr := h.store.GetNode(ctx, srv.NodeID); nerr == nil {
+				nodeName = node.Name
+			}
+			h.notifier.Emit(notify.NodeDiskLow(srv.NodeID, nodeName, result.Warning))
+		}
 	}(created, srv.DirectoryPath)
 
 	writeJSON(w, http.StatusCreated, created)
