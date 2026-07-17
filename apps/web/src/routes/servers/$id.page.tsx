@@ -142,7 +142,7 @@ export function ServerDetailPage() {
       .recordConflict(id, {
         kind: conflict.kind ?? "crash",
         summary: conflict.summary,
-        mods: conflict.suggestions.map((s) => s.mod_name).filter(Boolean),
+        mods: (conflict.suggestions ?? []).map((s) => s.mod_name).filter(Boolean),
       })
       .catch(() => {
         // Best-effort: the dialog still works if recording fails.

@@ -37,6 +37,9 @@ export function ModConflictDialog({
 
   const isJava = conflict.kind === "java_version";
   const isCrash = conflict.kind === "crash";
+  // Older agents send null instead of [] when nothing was parsed.
+  const suggestions = conflict.suggestions ?? [];
+  const rawLog = conflict.raw ?? [];
   const title = isJava
     ? "Server needs a newer version of Java"
     : isCrash
@@ -50,7 +53,7 @@ export function ModConflictDialog({
 
   // De-dupe mod ids across suggestions; default every conflicting mod selected.
   const modIds = Array.from(
-    new Set(conflict.suggestions.map((s) => s.mod_id).filter(Boolean)),
+    new Set(suggestions.map((s) => s.mod_id).filter(Boolean)),
   );
   const [selected, setSelected] = useState<Set<string>>(() => new Set(modIds));
 
@@ -106,12 +109,12 @@ export function ModConflictDialog({
 
       {!isJava && (
       <div className="mt-4 space-y-2">
-        {conflict.suggestions.length === 0 && (
+        {suggestions.length === 0 && (
           <p className="text-sm text-text-secondary">
             Couldn't parse individual mods — see the raw log below.
           </p>
         )}
-        {conflict.suggestions.map((s, i) => (
+        {suggestions.map((s, i) => (
           <label
             key={`${s.mod_id}-${i}`}
             className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-2 px-3 py-2.5"
@@ -147,7 +150,7 @@ export function ModConflictDialog({
       </div>
       )}
 
-      {conflict.raw.length > 0 && (
+      {rawLog.length > 0 && (
         <div className="mt-3">
           <button
             onClick={() => setShowLog((v) => !v)}
@@ -162,7 +165,7 @@ export function ModConflictDialog({
           </button>
           {showLog && (
             <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-border bg-[#0f0f0f] p-3 font-mono text-[11px] leading-4 text-text-secondary">
-              {conflict.raw.join("\n")}
+              {rawLog.join("\n")}
             </pre>
           )}
         </div>

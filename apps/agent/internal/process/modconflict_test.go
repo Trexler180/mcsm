@@ -1,6 +1,10 @@
 package process
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestConflictDetectorParsesFabricBlock(t *testing.T) {
 	lines := []string{
@@ -56,5 +60,31 @@ func TestConflictDetectorParsesFabricBlock(t *testing.T) {
 	}
 	if got := mc.Suggestions[2].Requirements; len(got) != 1 {
 		t.Errorf("zfastnoise requirements = %+v, want exactly 1 (no More details leak)", got)
+	}
+}
+
+// A conflict detected without any parseable suggestion lines must still
+// marshal suggestions/raw as [] — the web maps over both (a null here crashed
+// the server page after a failed version migration).
+func TestConflictBuildNeverMarshalsNullArrays(t *testing.T) {
+	var d conflictDetector
+	mc := d.build()
+	if mc.Suggestions == nil || mc.Raw == nil {
+		t.Fatalf("nil arrays in built conflict: %+v", mc)
+	}
+	data, err := json.Marshal(mc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{`"suggestions":null`, `"raw":null`} {
+		if strings.Contains(string(data), bad) {
+			t.Errorf("marshalled conflict contains %s: %s", bad, data)
+		}
+	}
+
+	var mx mixinCrashDetector
+	mc = mx.build(nil)
+	if mc.Suggestions == nil || mc.Raw == nil {
+		t.Fatalf("nil arrays in built mixin conflict: %+v", mc)
 	}
 }

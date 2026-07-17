@@ -104,11 +104,12 @@ export interface ModConflict {
   // that launched it (fixed by switching Java, not by disabling mods).
   kind?: "incompatible" | "crash" | "java_version";
   summary: string;
-  suggestions: ConflictSuggestion[];
+  // Null from agents that detected a conflict but parsed no suggestions.
+  suggestions: ConflictSuggestion[] | null;
   // The Java feature release the server needs (set only for kind
   // "java_version"); lets the dialog match installed runtimes or suggest one.
   required_java?: number;
-  raw: string[];
+  raw: string[] | null;
   detected_at: number;
 }
 

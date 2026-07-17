@@ -116,12 +116,22 @@ func (d *conflictDetector) build() *ModConflict {
 	if n := len(d.sugg); n > 0 {
 		summary = fmt.Sprintf("%d mod conflict(s) detected", n)
 	}
+	// Zero parsed suggestions must marshal to [] not null — the web maps over
+	// suggestions (same contract as the java-version detector).
+	sugg := d.sugg
+	if sugg == nil {
+		sugg = []ConflictSuggestion{}
+	}
+	raw := d.raw
+	if raw == nil {
+		raw = []string{}
+	}
 	return &ModConflict{
 		Detected:    true,
 		Kind:        "incompatible",
 		Summary:     summary,
-		Suggestions: d.sugg,
-		Raw:         d.raw,
+		Suggestions: sugg,
+		Raw:         raw,
 		DetectedAt:  time.Now().UnixMilli(),
 	}
 }

@@ -118,12 +118,16 @@ func (d *mixinCrashDetector) build(ids []string) *ModConflict {
 		}
 	}
 
+	raw := d.raw
+	if raw == nil {
+		raw = []string{}
+	}
 	return &ModConflict{
 		Detected:    true,
 		Kind:        "crash",
 		Summary:     summary,
 		Suggestions: sugg,
-		Raw:         d.raw,
+		Raw:         raw,
 		DetectedAt:  time.Now().UnixMilli(),
 	}
 }
