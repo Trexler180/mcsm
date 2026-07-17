@@ -38,6 +38,7 @@ import type {
   ScheduledTask,
   Server,
   ServerBans,
+  ServerStats,
   ServerTime,
   ServerMember,
   ServerMembersResponse,
@@ -363,6 +364,12 @@ export const api = {
     get: (id: string) => get<Server>(`/servers/${id}`),
     metricsHistory: (id: string, hours: number) =>
       get<MetricsHistory>(`/servers/${id}/metrics/history?hours=${hours}`),
+    // days=0 means all time. tz_offset lets the server group the heatmap and
+    // daily series by the viewer's local calendar.
+    stats: (id: string, days: number) =>
+      get<ServerStats>(
+        `/servers/${id}/stats?days=${days}&tz_offset=${-new Date().getTimezoneOffset()}`,
+      ),
     clone: (
       id: string,
       data: {

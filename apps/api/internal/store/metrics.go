@@ -66,9 +66,90 @@ func (s *Store) ServerMetricsHistory(ctx context.Context, serverID string, since
 	return points, rows.Err()
 }
 
-// PruneServerMetrics deletes samples older than the retention cutoff.
+// PruneServerMetrics deletes samples older than the retention cutoff. Callers
+// must roll up first (RollupServerMetricsHourly) so pruning only drops raw
+// resolution, never history.
 func (s *Store) PruneServerMetrics(ctx context.Context, olderThan time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM server_metrics WHERE ts < ?`, olderThan.Unix())
 	return err
+}
+
+// RollupServerMetricsHourly folds raw samples into server_metrics_hourly for
+// every complete hour before `upTo`, across all servers. It recomputes each
+// hour still covered by raw data (REPLACE), which makes the sweep idempotent;
+// hours whose raw samples were already pruned have no rows to recompute from
+// and keep their stored rollup untouched.
+func (s *Store) RollupServerMetricsHourly(ctx context.Context, upTo time.Time) error {
+	hourStart := upTo.Unix() / 3600 * 3600
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO server_metrics_hourly
+			(server_id, ts, cpu_avg, cpu_max, ram_avg_mb, ram_max_mb,
+			 ram_total_mb, players_avg, players_max, samples)
+		SELECT server_id,
+		       (ts / 3600) * 3600 AS hour,
+		       AVG(cpu_percent),
+		       MAX(cpu_percent),
+		       CAST(AVG(ram_used_mb) AS INTEGER),
+		       MAX(ram_used_mb),
+		       MAX(ram_total_mb),
+		       AVG(players),
+		       MAX(players),
+		       COUNT(*)
+		FROM server_metrics
+		WHERE ts < ?
+		GROUP BY server_id, hour`, hourStart)
+	return err
+}
+
+// ServerMetricsHistoryHourly returns history from the forever-kept hourly
+// rollups, bucket-combined so long windows stay bounded. Averages are weighted
+// by each hour's sample count; players reports the bucket peak so short spikes
+// survive coarse buckets.
+func (s *Store) ServerMetricsHistoryHourly(ctx context.Context, serverID string, since time.Time, bucketSeconds int64) ([]MetricPoint, error) {
+	if bucketSeconds < 3600 {
+		bucketSeconds = 3600
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT (ts / ?) * ? AS bucket,
+		       SUM(cpu_avg * samples) / SUM(samples),
+		       CAST(SUM(ram_avg_mb * samples) / SUM(samples) AS INTEGER),
+		       MAX(ram_total_mb),
+		       MAX(players_max)
+		FROM server_metrics_hourly
+		WHERE server_id = ? AND ts >= ? AND samples > 0
+		GROUP BY bucket
+		ORDER BY bucket`,
+		bucketSeconds, bucketSeconds, serverID, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := make([]MetricPoint, 0, 256)
+	for rows.Next() {
+		var p MetricPoint
+		if err := rows.Scan(&p.TS, &p.CPUPercent, &p.RAMUsedMB, &p.RAMTotalMB, &p.Players); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
+}
+
+// ServerMetricsDataSince returns the timestamp of the oldest stored metric for
+// a server (rollup or raw), or zero time when none exists. It anchors the
+// stats page's "all time" window.
+func (s *Store) ServerMetricsDataSince(ctx context.Context, serverID string) (time.Time, error) {
+	var ts *int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT MIN(ts) FROM (
+			SELECT MIN(ts) AS ts FROM server_metrics_hourly WHERE server_id = ?
+			UNION ALL
+			SELECT MIN(ts) AS ts FROM server_metrics WHERE server_id = ?
+		) WHERE ts IS NOT NULL`, serverID, serverID).Scan(&ts)
+	if err != nil || ts == nil {
+		return time.Time{}, err
+	}
+	return time.Unix(*ts, 0), nil
 }

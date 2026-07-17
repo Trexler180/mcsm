@@ -1,4 +1,5 @@
 import {
+  ChartColumn,
   ChevronRight,
   FileCog,
   FileText,
@@ -21,6 +22,7 @@ export type ServerSection =
   | "console"
   | "logs"
   | "players"
+  | "stats"
   | "mods"
   | "version"
   | "options"
@@ -45,6 +47,7 @@ export const SERVER_SECTIONS: Array<{
   { value: "console", label: "Console", icon: Terminal, group: "Operate", permission: "console" },
   { value: "logs", label: "Logs", icon: FileText, group: "Operate", permission: "files" },
   { value: "players", label: "Players", icon: Users, group: "Operate", permission: "players" },
+  { value: "stats", label: "Stats", icon: ChartColumn, group: "Operate", permission: "view" },
   { value: "mods", label: "Mods", icon: PackageOpen, group: "Manage", permission: "mods" },
   { value: "version", label: "Version", icon: Rocket, group: "Manage", permission: "settings" },
   { value: "options", label: "Options", icon: SlidersHorizontal, group: "Manage", permission: "settings" },
@@ -63,19 +66,23 @@ export function Panel({
   actions,
   children,
   onClick,
+  className,
+  bodyClassName,
 }: {
   title: string;
   description?: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
   onClick?: () => void;
+  className?: string;
+  bodyClassName?: string;
 }) {
   const clickable = !!onClick;
   return (
     <section
       className={`rounded-md border border-border bg-surface ${
         clickable ? "cursor-pointer transition-colors hover:border-border-hover" : ""
-      }`}
+      }${className ? ` ${className}` : ""}`}
       onClick={onClick}
       role={clickable ? "button" : undefined}
       tabIndex={clickable ? 0 : undefined}
@@ -102,7 +109,9 @@ export function Panel({
             <ChevronRight className="h-4 w-4 flex-shrink-0 text-text-secondary" />
           ))}
       </div>
-      <div className="p-4 sm:p-5">{children}</div>
+      <div className={`p-4 sm:p-5${bodyClassName ? ` ${bodyClassName}` : ""}`}>
+        {children}
+      </div>
     </section>
   );
 }

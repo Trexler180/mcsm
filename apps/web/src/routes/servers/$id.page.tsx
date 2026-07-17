@@ -28,6 +28,7 @@ import {
 } from "@/components/servers/shared";
 import { BackupsTab } from "@/components/servers/backups-tab";
 import { DashboardTab } from "@/components/servers/dashboard-tab";
+import { StatsTab } from "@/components/servers/stats-tab";
 import { TasksTab } from "@/components/servers/tasks-tab";
 import { LogsTab } from "@/components/servers/logs-tab";
 import { WorldsTab } from "@/components/servers/worlds-tab";
@@ -376,6 +377,11 @@ export function ServerDetailPage() {
             </div>
           )}
           {tab === "logs" && can("files") && <LogsTab serverId={id} />}
+          {tab === "stats" && (
+            <div className="h-full overflow-y-auto p-4 sm:p-6">
+              <StatsTab serverId={id} ramMaxMb={server.ram_mb_max} />
+            </div>
+          )}
           {tab === "players" && can("players") && (
             <PlayersPanel
               serverId={id}

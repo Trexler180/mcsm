@@ -95,8 +95,14 @@ func (sm *sampler) sampleAll(ctx context.Context, s *store.Store, engine *notify
 	}
 
 	sm.rounds++
-	if sm.rounds%pruneEvery == 0 {
-		if err := s.PruneServerMetrics(ctx, now.Add(-metricsRetention)); err != nil {
+	// Roll raw samples up into the forever-kept hourly table, then prune raw
+	// rows past retention — in that order, so pruning only ever drops
+	// resolution, never history. The first round also runs it so a fresh boot
+	// (or first deploy of the rollup feature) backfills without waiting an hour.
+	if sm.rounds == 1 || sm.rounds%pruneEvery == 0 {
+		if err := s.RollupServerMetricsHourly(ctx, now); err != nil {
+			log.Printf("sampler: rollup metrics: %v", err)
+		} else if err := s.PruneServerMetrics(ctx, now.Add(-metricsRetention)); err != nil {
 			log.Printf("sampler: prune metrics: %v", err)
 		}
 	}

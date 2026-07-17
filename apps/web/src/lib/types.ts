@@ -149,9 +149,60 @@ export interface MetricPoint {
 }
 
 export interface MetricsHistory {
-  hours: number;
+  hours: number; // as requested; 0 = all time
+  window_hours?: number; // actual window served (resolves hours=0)
   bucket_seconds: number;
   points: MetricPoint[];
+}
+
+// ── Stats page (GET /servers/:id/stats) ──────────────────────────────────────
+
+export interface ServerStatsSummary {
+  unique_players: number;
+  total_joins: number;
+  playtime_seconds: number;
+  peak_players: number;
+  peak_ts?: number; // unix seconds
+  uptime_seconds: number;
+  longest_session_seconds: number;
+  longest_session_player?: string;
+}
+
+export interface TopPlayer {
+  name: string;
+  uuid?: string;
+  playtime_seconds: number;
+  joins: number;
+  last_seen: number; // unix seconds
+  online: boolean;
+}
+
+// One weekday × hour cell of the activity heatmap, in the requester's timezone
+// (dow 0 = Sunday).
+export interface ActivityCell {
+  dow: number;
+  hour: number;
+  avg_players: number;
+  max_players: number;
+}
+
+export interface DailyStat {
+  date: string; // YYYY-MM-DD, requester-local
+  unique_players: number;
+  joins: number;
+  playtime_seconds: number;
+  peak_players: number;
+  uptime_seconds: number;
+}
+
+export interface ServerStats {
+  days: number; // as requested; 0 = all time
+  since: number; // unix seconds — resolved window start
+  data_since: number; // unix seconds of the oldest stored data (0 = none)
+  summary: ServerStatsSummary;
+  top_players: TopPlayer[];
+  activity: ActivityCell[];
+  daily: DailyStat[];
 }
 
 export interface Server {
