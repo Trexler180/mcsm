@@ -5,8 +5,7 @@ plane, a per-host Go agent, and a React web UI.
 
 The supported production shape for this phase is a single host running the API,
 web UI, and one local agent. SQLite is the supported database. Remote nodes,
-Postgres, organizations, and granular collaborator permissions are reserved for
-later architecture work.
+Postgres, and organizations are reserved for later architecture work.
 
 ## Local Development
 
@@ -36,15 +35,13 @@ the local agent. Override any default with an environment variable, e.g.
 Java on `PATH`; `run.sh` runs `pnpm install` automatically on first start (skip
 with `./run.sh --skip-install`). Press Ctrl+C to stop all services.
 
-`run.ps1` additionally supervises the services and hot-reloads the Go backends on
-source edits (disable with `.\run.ps1 -NoBackendWatch`); `run.sh` is a simpler
-launcher — re-run it after editing Go sources.
-
-The script supervises all three services: any service that exits (crash, port
-conflict, compile error during a reload) is restarted automatically with
-backoff, and changes to `apps/web/package.json` or `pnpm-lock.yaml` trigger a
-`pnpm install` plus web dev-server restart. Updating the manager while it runs
-never requires stopping the script — only Ctrl+C stops it.
+`run.ps1` additionally supervises all three services: the Go backends are
+hot-reloaded on source edits (disable with `.\run.ps1 -NoBackendWatch`), any
+service that exits (crash, port conflict, compile error during a reload) is
+restarted automatically with backoff, and changes to `apps/web/package.json` or
+`pnpm-lock.yaml` trigger a `pnpm install` plus web dev-server restart. Updating
+the manager while it runs never requires stopping the script — only Ctrl+C
+stops it. `run.sh` is a simpler launcher — re-run it after editing Go sources.
 
 ## Production (native, single host)
 
@@ -60,7 +57,10 @@ cd apps/web   && pnpm install --frozen-lockfile && pnpm build   # → apps/web/d
 ```
 
 Serve `apps/web/dist` as static files behind any reverse proxy you already run,
-proxying `/api` to the API on `:8081`. Persistent state:
+proxying `/api` to the API on `:8081`. If you enable public status pages
+(Options → Public Status Page), also proxy `/status/` to the API — see
+`docs/deployment.md` for the nginx snippet and the optional per-server
+subdomain setup (`PUBLIC_STATUS_DOMAIN`). Persistent state:
 
 - SQLite DB at `DATABASE_PATH`
 - server directories and local backup archives under `SERVER_ROOT`
