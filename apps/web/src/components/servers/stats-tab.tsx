@@ -12,7 +12,12 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "@/lib/api";
-import type { ActivityCell, DailyStat, TopPlayer } from "@/lib/types";
+import type {
+  ActivityCell,
+  DailyStat,
+  TopPlayer,
+  UptimeReport,
+} from "@/lib/types";
 import { Panel, StatTile } from "./shared";
 import { GaplessBar } from "@/components/charts/gapless-bar";
 
@@ -234,6 +239,188 @@ function ResourcesHistoryChart({
         />
       </AreaChart>
     </ResponsiveContainer>
+  );
+}
+
+// ── uptime & availability ────────────────────────────────────────────────────
+
+// Uptime wears the panel's status green; crashes red. Offline stretches stay
+// neutral so the green reads as "share of the bar that was up" at a glance.
+const C_ONLINE = "#16a34a";
+const C_CRASH = "#dc2626";
+
+function pctOf(ts: number, since: number, span: number): number {
+  return Math.min(100, Math.max(0, ((ts - since) / span) * 100));
+}
+
+// Availability with up to 3 decimals, trailing zeros trimmed — "99.987%"
+// stays distinguishable from "99.9%", and a clean window reads "100%".
+function fmtAvailability(pct: number): string {
+  return `${parseFloat(pct.toFixed(3))}%`;
+}
+
+function UptimeTimeline({
+  report,
+  since,
+  now,
+}: {
+  report: UptimeReport;
+  since: number;
+  now: number;
+}) {
+  const span = Math.max(1, now - since);
+  const untrackedPct =
+    report.tracked_since > since ? pctOf(report.tracked_since, since, span) : 0;
+
+  return (
+    <div>
+      <div
+        className="relative h-3 overflow-hidden rounded-sm"
+        style={{ background: "rgba(255,255,255,0.08)" }}
+        role="img"
+        aria-label="Uptime timeline for the selected window"
+      >
+        {/* Lead-in before tracking began: distinct from real downtime. */}
+        {untrackedPct > 0 && (
+          <div
+            className="absolute inset-y-0 left-0"
+            style={{
+              width: `${untrackedPct}%`,
+              background:
+                "repeating-linear-gradient(45deg, rgba(255,255,255,0.03), rgba(255,255,255,0.03) 4px, transparent 4px, transparent 8px)",
+            }}
+            title="Before uptime tracking began"
+          />
+        )}
+        {report.segments.map((seg, i) => {
+          const start = Math.max(seg.started_at, since);
+          const end = seg.ended_at || now;
+          const left = pctOf(start, since, span);
+          const width = Math.max(0.15, pctOf(end, since, span) - left);
+          const label = seg.ended_at
+            ? `Online ${fmtWhen(seg.started_at)} — ${fmtWhen(seg.ended_at)} (${fmtDuration(seg.ended_at - seg.started_at)})${seg.end_reason === "crash" ? " · ended in a crash" : ""}`
+            : `Online since ${fmtWhen(seg.started_at)} (${fmtDuration(now - seg.started_at)})`;
+          return (
+            <div
+              key={i}
+              className="absolute inset-y-0"
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background: C_ONLINE,
+              }}
+              title={label}
+            />
+          );
+        })}
+        {/* Crash ticks sit on top so they survive next to adjacent restarts. */}
+        {report.segments
+          .filter((s) => s.end_reason === "crash" && s.ended_at)
+          .map((seg, i) => (
+            <div
+              key={`c${i}`}
+              className="absolute inset-y-0 w-[3px]"
+              style={{
+                left: `calc(${pctOf(seg.ended_at!, since, span)}% - 1px)`,
+                background: C_CRASH,
+              }}
+              title={`Crashed ${fmtWhen(seg.ended_at!)}`}
+            />
+          ))}
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-text-secondary">
+        <span>{fmtWhen(since)}</span>
+        <span className="flex items-center gap-3">
+          <LegendChip color={C_ONLINE} label="Online" />
+          <LegendChip color="rgba(255,255,255,0.25)" label="Offline" />
+          <LegendChip color={C_CRASH} label="Crash" />
+        </span>
+        <span>now</span>
+      </div>
+    </div>
+  );
+}
+
+function UptimePanel({
+  report,
+  since,
+  now,
+}: {
+  report?: UptimeReport;
+  since: number;
+  now: number;
+}) {
+  if (!report || report.tracked_since === 0) {
+    return (
+      <Panel
+        title="Uptime & availability"
+        description="Online and offline stretches, from status transitions."
+      >
+        <EmptyChart note="No uptime recorded yet — tracking starts the first time the server comes online." />
+      </Panel>
+    );
+  }
+
+  const interruptions = report.stops + report.crashes;
+  const lastEnd = report.segments
+    .filter((s) => s.ended_at)
+    .reduce((m, s) => Math.max(m, s.ended_at!), 0);
+
+  return (
+    <Panel
+      title="Uptime & availability"
+      description={`Online and offline stretches, from status transitions. Tracked since ${fmtWhen(report.tracked_since)}.`}
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile
+            label="Availability"
+            value={
+              report.window_seconds > 0
+                ? fmtAvailability(report.availability_pct)
+                : "—"
+            }
+            detail={`${fmtDuration(report.uptime_seconds)} online in this window`}
+          />
+          <StatTile
+            label="Current status"
+            value={
+              report.online_since
+                ? `Up ${fmtDuration(now - report.online_since)}`
+                : "Offline"
+            }
+            detail={
+              report.online_since
+                ? `since ${fmtWhen(report.online_since)}`
+                : lastEnd > 0
+                  ? `down ${fmtDuration(now - lastEnd)} — since ${fmtWhen(lastEnd)}`
+                  : undefined
+            }
+          />
+          <StatTile
+            label="Interruptions"
+            value={String(interruptions)}
+            detail={
+              report.crashes > 0
+                ? `${report.crashes} crash${report.crashes === 1 ? "" : "es"} · ${report.stops} clean stop${report.stops === 1 ? "" : "s"}`
+                : interruptions > 0
+                  ? "all clean stops"
+                  : "none in this window"
+            }
+          />
+          <StatTile
+            label="Longest uptime"
+            value={
+              report.longest_uptime_seconds > 0
+                ? fmtDuration(report.longest_uptime_seconds)
+                : "—"
+            }
+            detail="single online stretch"
+          />
+        </div>
+        <UptimeTimeline report={report} since={since} now={now} />
+      </div>
+    </Panel>
   );
 }
 
@@ -570,6 +757,13 @@ export function StatsTab({
           detail={s ? `${uptimePct.toFixed(0)}% of window` : undefined}
         />
       </div>
+
+      {/* Uptime & availability */}
+      <UptimePanel
+        report={stats?.uptime}
+        since={stats?.since ?? Math.floor(Date.now() / 1000) - 86400}
+        now={Math.floor(Date.now() / 1000)}
+      />
 
       {/* Players over time */}
       <Panel

@@ -195,6 +195,26 @@ export interface DailyStat {
   uptime_seconds: number;
 }
 
+// One online stretch from the uptime tracker (status transitions the panel
+// observed). ended_at absent/0 = still online.
+export interface UptimeSegment {
+  started_at: number; // unix seconds
+  ended_at?: number;
+  end_reason?: "stop" | "crash" | "";
+}
+
+export interface UptimeReport {
+  tracked_since: number; // unix seconds; 0 = uptime never tracked
+  window_seconds: number; // availability denominator (window clipped to tracked_since)
+  uptime_seconds: number;
+  availability_pct: number;
+  stops: number; // clean stops inside the window
+  crashes: number;
+  online_since?: number; // unix seconds; absent when offline
+  longest_uptime_seconds: number;
+  segments: UptimeSegment[];
+}
+
 export interface ServerStats {
   days: number; // as requested; 0 = all time
   since: number; // unix seconds — resolved window start
@@ -203,6 +223,7 @@ export interface ServerStats {
   top_players: TopPlayer[];
   activity: ActivityCell[];
   daily: DailyStat[];
+  uptime: UptimeReport;
 }
 
 export interface Server {
@@ -226,6 +247,7 @@ export interface Server {
   settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  online_since?: number; // unix seconds; present while the server is online
 }
 
 export interface FileEntry {

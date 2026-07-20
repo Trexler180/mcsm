@@ -270,6 +270,10 @@ type Server struct {
 	Settings      json.RawMessage `json:"settings"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+
+	// Derived (not a servers column): start of the open uptime segment, unix
+	// seconds. Set while the server is online, nil otherwise.
+	OnlineSince *int64 `json:"online_since,omitempty"`
 }
 
 type InstalledMod struct {

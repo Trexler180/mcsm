@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Route as rootRoute } from "../__root";
 import { Header } from "@/components/layout/header";
+import { durationSince } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
 import {
@@ -402,6 +403,26 @@ function ServerActions({ server }: { server: ServerType }) {
   );
 }
 
+// "up 3h 12m" next to an online badge, from the uptime tracker's online_since.
+// Renders nothing for offline servers or before the first tracked start.
+function UptimeHint({ server }: { server: ServerType }) {
+  if (server.status !== "online") return null;
+  const up = durationSince(server.online_since);
+  if (!up) return null;
+  return (
+    <span
+      className="whitespace-nowrap text-[11px] text-text-secondary"
+      title={
+        server.online_since
+          ? `Online since ${new Date(server.online_since * 1000).toLocaleString()}`
+          : undefined
+      }
+    >
+      up {up}
+    </span>
+  );
+}
+
 function ServersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const user = useAuthStore((s) => s.user);
@@ -460,7 +481,10 @@ function ServersPage() {
                   <span className="min-w-0 truncate text-sm font-medium text-text-primary">
                     {srv.name}
                   </span>
-                  <StatusBadge status={srv.status as ServerStatus} />
+                  <span className="flex shrink-0 items-center gap-2">
+                    <UptimeHint server={srv} />
+                    <StatusBadge status={srv.status as ServerStatus} />
+                  </span>
                 </div>
                 <p className="mt-1 text-xs text-text-secondary">
                   <span className="capitalize">{srv.platform}</span>{" "}
@@ -503,7 +527,10 @@ function ServersPage() {
                 >
                   <TableCell className="font-medium">{srv.name}</TableCell>
                   <TableCell>
-                    <StatusBadge status={srv.status as ServerStatus} />
+                    <span className="flex items-center gap-2">
+                      <StatusBadge status={srv.status as ServerStatus} />
+                      <UptimeHint server={srv} />
+                    </span>
                   </TableCell>
                   <TableCell className="capitalize">{srv.platform}</TableCell>
                   <TableCell>{srv.mc_version}</TableCell>

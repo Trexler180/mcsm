@@ -108,9 +108,11 @@ func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
 			// recent panel-initiated stop/restart/kill to explain it — is a crash.
 			// Record it as a first-class signal for the overview before we
 			// overwrite the status (after which the transition is no longer visible).
+			crashed := false
 			if srv.Status == "online" && desired == "offline" {
 				recent, _ := s.HasRecentLifecycleAction(ctx, srv.ID, crashGrace)
 				if !recent {
+					crashed = true
 					msg := "Server went offline unexpectedly (possible crash)"
 					s.LogAction(ctx, "", srv.ID, "server.crash", "", map[string]any{"detail": msg})
 					_ = s.InsertLogEvent(ctx, srv.ID, "error", msg, "poller")
@@ -135,7 +137,13 @@ func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
 					log.Printf("poller: resolve conflicts %s: %v", srv.ID, err)
 				}
 			}
-			if err := s.UpdateServerStatus(ctx, srv.ID, desired); err != nil {
+			// The crash-attributed variant stamps the closed uptime segment's
+			// end_reason so the stats page can tell crashes from clean stops.
+			update := s.UpdateServerStatus
+			if crashed {
+				update = s.UpdateServerStatusCrash
+			}
+			if err := update(ctx, srv.ID, desired); err != nil {
 				log.Printf("poller: update status %s -> %s: %v", srv.ID, desired, err)
 			}
 		}

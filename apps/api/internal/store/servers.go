@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -35,11 +36,12 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 	var srv Server
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
-		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at
+		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at,
+		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers WHERE id = ?`, id,
 	).Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 		&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
-		&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt)
+		&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("server not found")
 	}
@@ -49,7 +51,8 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 func (s *Store) ListServers(ctx context.Context) ([]*Server, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
-		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at
+		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at,
+		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -60,7 +63,7 @@ func (s *Store) ListServers(ctx context.Context) ([]*Server, error) {
 		var srv Server
 		if err := rows.Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 			&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
-			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt); err != nil {
+			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
 			return nil, err
 		}
 		servers = append(servers, &srv)
@@ -77,7 +80,8 @@ func (s *Store) CountServersForNode(ctx context.Context, nodeID string) (int, er
 func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Server, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
-		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at
+		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings, created_at, updated_at,
+		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers
 		 WHERE owner_id = ?
 		    OR id IN (
@@ -94,7 +98,7 @@ func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Serve
 		var srv Server
 		if err := rows.Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 			&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
-			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt); err != nil {
+			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings), &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
 			return nil, err
 		}
 		servers = append(servers, &srv)
@@ -300,9 +304,62 @@ func (s *Store) UpdateServer(ctx context.Context, id string, srv *Server) error 
 	return err
 }
 
+// UpdateServerStatus persists a server's status and maintains its uptime
+// segments on the online boundary: entering "online" opens a segment, leaving
+// it closes the open one as a clean stop. The poller uses
+// UpdateServerStatusCrash for offline transitions it attributes to a crash.
 func (s *Store) UpdateServerStatus(ctx context.Context, id, status string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, status, id)
-	return err
+	return s.updateServerStatus(ctx, id, status, "stop")
+}
+
+// UpdateServerStatusCrash is UpdateServerStatus for a transition the caller
+// knows was not panel-initiated; the closed uptime segment records "crash".
+func (s *Store) UpdateServerStatusCrash(ctx context.Context, id, status string) error {
+	return s.updateServerStatus(ctx, id, status, "crash")
+}
+
+func (s *Store) updateServerStatus(ctx context.Context, id, status, endReason string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var prev string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM servers WHERE id = ?`, id).Scan(&prev); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Matches the historical UPDATE-only behavior: a status write for a
+			// deleted server is a silent no-op, not an error.
+			return nil
+		}
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE servers SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, status, id); err != nil {
+		return err
+	}
+
+	now := time.Now().Unix()
+	switch {
+	case prev != "online" && status == "online":
+		// Close any dangling open segment first (shouldn't exist, but a stray
+		// one would otherwise double-count from here on), then open a new one.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE server_uptime SET ended_at=? WHERE server_id=? AND ended_at IS NULL`, now, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO server_uptime (server_id, started_at) VALUES (?,?)`, id, now); err != nil {
+			return err
+		}
+	case prev == "online" && status != "online":
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE server_uptime SET ended_at=?, end_reason=? WHERE server_id=? AND ended_at IS NULL`,
+			now, endReason, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteServer(ctx context.Context, id string) error {

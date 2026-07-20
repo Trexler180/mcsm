@@ -72,6 +72,11 @@ func (h *ServerHandlers) Stats(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "stats daily", err)
 		return
 	}
+	uptime, err := h.store.UptimeReport(r.Context(), serverID, since, now)
+	if err != nil {
+		writeServerError(w, r, "stats uptime", err)
+		return
+	}
 
 	var dataSinceUnix int64
 	if !dataSince.IsZero() {
@@ -85,5 +90,6 @@ func (h *ServerHandlers) Stats(w http.ResponseWriter, r *http.Request) {
 		"top_players": top,
 		"activity":    activity,
 		"daily":       daily,
+		"uptime":      uptime,
 	})
 }

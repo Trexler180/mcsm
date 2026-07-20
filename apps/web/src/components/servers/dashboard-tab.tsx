@@ -21,6 +21,7 @@ import { MetricsHistoryChart } from "@/components/charts/history-chart";
 import { TaskTimeline } from "./task-timeline";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
 import { api } from "@/lib/api";
+import { durationSince } from "@/lib/time";
 import { useNotifications } from "@/store/notifications";
 import type {
   Server,
@@ -392,7 +393,12 @@ export function DashboardTab({
           label="Status"
           value={server.status}
           detail={
-            server.status === "online" ? "Accepting commands" : "Not running"
+            server.status === "online"
+              ? (() => {
+                  const up = durationSince(server.online_since);
+                  return up ? `Up for ${up}` : "Accepting commands";
+                })()
+              : "Not running"
           }
         />
         <StatTile
