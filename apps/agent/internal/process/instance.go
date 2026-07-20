@@ -349,8 +349,20 @@ func reattachInstance(serverRoot string, st runState) (*Instance, error) {
 	}
 	inst.histMu.Unlock()
 
+	status := inferStatus(seeded)
+	if status == StatusStarting {
+		// The tail window misses "Done (" on any server that has been up long
+		// enough for it to scroll past (500 lines is minutes on a busy server) —
+		// which would leave the reattached server "starting" forever, and the
+		// panel's sampler skips non-online servers. Scan the whole current-run
+		// log for the marker; failing that, trust longevity: a process alive
+		// well past any plausible startup is serving players.
+		if logContainsDone(inst.logPath) || time.Since(st.StartedAt) > reattachOnlineAfter {
+			status = StatusOnline
+		}
+	}
 	inst.mu.Lock()
-	inst.status = inferStatus(seeded)
+	inst.status = status
 	inst.mu.Unlock()
 
 	go inst.broadcastLoop()
@@ -358,6 +370,29 @@ func reattachInstance(serverRoot string, st runState) (*Instance, error) {
 	go inst.watchExit()
 
 	return inst, nil
+}
+
+// reattachOnlineAfter is how long a reattached process must have been alive for
+// "still starting" to be implausible without log evidence either way.
+const reattachOnlineAfter = 15 * time.Minute
+
+// logContainsDone streams the current run's log looking for the vanilla
+// "Done (" startup marker. Runs once per reattach, so a linear read is fine
+// even on chatty modded logs.
+func logContainsDone(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), "Done (") {
+			return true
+		}
+	}
+	return false
 }
 
 // inferStatus guesses a reattached server's state from its recent console: a
