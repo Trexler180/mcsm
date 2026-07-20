@@ -34,6 +34,8 @@ const server = {
   auto_start: false,
   tags: [],
   settings: {},
+  public_status: false,
+  public_slug: "",
   created_at: "2026-07-03T00:00:00Z",
   updated_at: "2026-07-03T00:00:00Z",
 } satisfies Server;

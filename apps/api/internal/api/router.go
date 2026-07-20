@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -26,6 +27,16 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
+	// Route HEAD as GET (net/http drops the body): link-preview crawlers
+	// probe og:image and status pages with HEAD before fetching.
+	r.Use(chimw.GetHead)
+	statusH := handlers.NewPublicStatusHandlers(s)
+	// Public status pages on their own subdomains: <slug>.<PUBLIC_STATUS_DOMAIN>
+	// is answered directly (before path routing); every other host passes
+	// through. Unset means no host-based routing — the path route still works.
+	if statusDomain := strings.ToLower(os.Getenv("PUBLIC_STATUS_DOMAIN")); statusDomain != "" {
+		r.Use(statusH.HostRouter(statusDomain))
+	}
 	// Strip spoofable X-Forwarded-* from untrusted peers before RealIP consumes
 	// them, so client IPs in audit logs and login throttling can't be forged.
 	r.Use(apimw.TrustedProxy(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
@@ -70,6 +81,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 		r.Post("/auth/login", authH.Login)
 		r.Post("/auth/refresh", authH.Refresh)
 		r.Get("/public/servers/{id}/resource-pack/{publicID}", resourcePackH.Download)
+		// Machine-readable public status (page HTML lives at /status/{slug}).
+		r.Get("/public/status/{slug}", statusH.JSON)
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
@@ -299,6 +312,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.With(requireAdmin(s)).Get("/audit", auditH.List)
 		})
 	})
+
+	// Public, unauthenticated status page (opt-in per server; minimal data).
+	r.Get("/status/{slug}", statusH.Page)
+	r.Get("/status/{slug}/og.png", statusH.OGImage) // live link-preview card
 
 	return r
 }

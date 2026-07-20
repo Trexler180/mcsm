@@ -154,6 +154,69 @@ map $http_upgrade $connection_upgrade {
 }
 ```
 
+### Public status pages (optional)
+
+Servers can opt into a public, unauthenticated status page (Options → Public
+Status Page). The API renders it itself — a small self-contained HTML page plus
+a JSON endpoint — showing only the server name, online/offline, sampled player
+count, Minecraft version, and uptime history.
+
+- Page: `GET /status/<slug>` (HTML)
+- Data: `GET /api/v1/public/status/<slug>` (JSON, CORS-open)
+
+The JSON route is already covered by the `/api/` proxy above. To expose the
+HTML page at the panel's own domain, add:
+
+```nginx
+    # Public status pages, rendered by the API.
+    location /status/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+#### Per-server subdomains
+
+To give each page its own subdomain (`<slug>.status.example.com`), set the env
+var on the API service:
+
+```
+PUBLIC_STATUS_DOMAIN=status.example.com
+```
+
+and route the wildcard host to the API — the API resolves the slug from the
+`Host` header and serves the page at `/`:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name *.status.example.com;
+
+    # Wildcard cert required (Let's Encrypt: DNS-01 challenge).
+    ssl_certificate     /etc/letsencrypt/live/status.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/status.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+DNS needs a wildcard record (`*.status.example.com` → the host). Slugs are
+validated to DNS-label rules and common infrastructure labels (`www`, `api`,
+`mail`, …) are reserved, so a panel user can't claim a sensitive hostname.
+
+Notes:
+
+- A page is only served while its server has `public_status` enabled; disabled
+  or unknown slugs return 404 (indistinguishable from each other).
+- Responses are cached in-process for 15 s per slug and carry
+  `Cache-Control: public, max-age=30`, so public traffic doesn't multiply into
+  database load. An nginx `proxy_cache` in front is optional hardening.
+
 ## Hardening
 
 Before exposing the panel to the public internet:

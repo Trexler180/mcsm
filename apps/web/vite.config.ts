@@ -145,6 +145,12 @@ export default defineConfig({
           })
         },
       },
+      // Public status pages are served by the API at the origin root, so the
+      // "open page" link from the options panel works in local dev too.
+      '/status': {
+        target: `http://${apiHost}:${apiPort}`,
+        changeOrigin: true,
+      },
     },
   },
   build: {

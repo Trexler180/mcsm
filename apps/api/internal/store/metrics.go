@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -23,6 +25,21 @@ func (s *Store) InsertServerMetric(ctx context.Context, serverID string, ts time
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		serverID, ts.Unix(), cpuPercent, ramUsedMB, ramTotalMB, players)
 	return err
+}
+
+// LatestServerPlayers returns the most recent sampled player count and its
+// timestamp (unix seconds). Zero timestamp when the server has no samples.
+// Callers judge freshness themselves — samples land about once a minute while
+// the server runs, so anything older than a few minutes is stale.
+func (s *Store) LatestServerPlayers(ctx context.Context, serverID string) (players int, ts int64, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT players, ts FROM server_metrics WHERE server_id = ? ORDER BY ts DESC LIMIT 1`,
+		serverID,
+	).Scan(&players, &ts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, nil
+	}
+	return players, ts, err
 }
 
 // ServerMetricsHistory returns samples for a server since `since`, averaged

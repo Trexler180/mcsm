@@ -376,6 +376,8 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		AutoStart     *bool           `json:"auto_start"`
 		Tags          []string        `json:"tags"`
 		Settings      json.RawMessage `json:"settings"`
+		PublicStatus  *bool           `json:"public_status"`
+		PublicSlug    *string         `json:"public_slug"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -472,8 +474,34 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.Settings = body.Settings
 	}
+	if body.PublicSlug != nil {
+		slug := strings.ToLower(strings.TrimSpace(*body.PublicSlug))
+		if slug != "" {
+			if err := ValidatePublicSlug(slug); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		record("public_slug", existing.PublicSlug, slug)
+		existing.PublicSlug = slug
+	}
+	if body.PublicStatus != nil {
+		record("public_status", existing.PublicStatus, *body.PublicStatus)
+		existing.PublicStatus = *body.PublicStatus
+	}
+	// Enabling the page without a slug would publish nothing reachable —
+	// reject so the UI surfaces the missing piece instead of silently no-oping.
+	if existing.PublicStatus && existing.PublicSlug == "" {
+		writeError(w, http.StatusBadRequest, "public_slug is required while the public status page is enabled")
+		return
+	}
 
 	if err := h.store.UpdateServer(r.Context(), id, existing); err != nil {
+		if strings.Contains(err.Error(), "servers_public_slug") ||
+			strings.Contains(err.Error(), "servers.public_slug") {
+			writeError(w, http.StatusConflict, "that public URL is already taken by another server")
+			return
+		}
 		writeServerError(w, r, "update server", err)
 		return
 	}

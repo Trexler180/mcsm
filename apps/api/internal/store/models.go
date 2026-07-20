@@ -268,8 +268,12 @@ type Server struct {
 	AutoStart     bool            `json:"auto_start"`
 	Tags          []string        `json:"tags"`
 	Settings      json.RawMessage `json:"settings"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// Public status page: exposed at /status/<slug> (and the status subdomain)
+	// with no auth when PublicStatus is set and a slug is chosen.
+	PublicStatus bool      `json:"public_status"`
+	PublicSlug   string    `json:"public_slug"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
 	// Derived (not a servers column): start of the open uptime segment, unix
 	// seconds. Set while the server is online, nil otherwise.

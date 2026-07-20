@@ -245,6 +245,8 @@ export interface Server {
   auto_start: boolean;
   tags: string[];
   settings: Record<string, unknown>;
+  public_status: boolean;
+  public_slug: string; // "" = none chosen
   created_at: string;
   updated_at: string;
   online_since?: number; // unix seconds; present while the server is online
