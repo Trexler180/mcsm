@@ -163,9 +163,23 @@ func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
 }
 
+// Restart restarts a server. An optional StartConfig body replaces the stored
+// configuration, so launch-time settings changed in the panel since the last
+// start are applied by a plain restart rather than needing a stop/start cycle.
 func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.mgr.Restart(id); err != nil {
+
+	var override *process.StartConfig
+	if r.Body != nil {
+		var cfg process.StartConfig
+		// A missing or unparseable body is not an error: older panels restart
+		// without one, and those must keep working.
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err == nil && cfg.Directory != "" {
+			override = &cfg
+		}
+	}
+
+	if err := h.mgr.RestartWith(id, override); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

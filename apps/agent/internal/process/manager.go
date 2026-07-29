@@ -17,6 +17,12 @@ type Manager struct {
 
 	rosterMu sync.Mutex
 	roster   map[string]rosterCache
+
+
+	// linkRosters holds the online player set most recently reported by each
+	// server's helper mod. Preferred over the console `/list` path while fresh.
+	linkMu      sync.Mutex
+	linkRosters map[string]linkRosterEntry
 }
 
 // rosterCache memoises the expensive part of AllPlayers (reading every
@@ -108,7 +114,20 @@ func (m *Manager) Kill(id string) error {
 	return inst.kill()
 }
 
+// Restart stops and restarts a server with the configuration it is already
+// running.
 func (m *Manager) Restart(id string) error {
+	return m.RestartWith(id, nil)
+}
+
+// RestartWith restarts a server, optionally replacing its start configuration.
+//
+// The override matters because settings that only take effect at launch — the
+// helper mod being the current example — would otherwise be invisible to a
+// restart: the instance would come back up with whatever config it was given
+// the last time it was *started*, which is not what a user who just changed a
+// setting and hit restart expects.
+func (m *Manager) RestartWith(id string, override *StartConfig) error {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
@@ -205,6 +224,15 @@ func (m *Manager) Players(id string) []Player {
 }
 
 func (m *Manager) RefreshPlayers(id string, timeout time.Duration) []Player {
+	// Prefer the helper mod's roster when one is current. It is authoritative,
+	// carries real UUIDs, and — unlike the console path below — costs nothing:
+	// no `/list` command typed into the server, no waiting on its output, no
+	// regex over the log. This is the "mod-preferred, scrape-fallback" rule made
+	// concrete for the roster.
+	if players, ok := m.linkRoster(id); ok {
+		return players
+	}
+
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
@@ -212,6 +240,64 @@ func (m *Manager) RefreshPlayers(id string, timeout time.Duration) []Player {
 		return nil
 	}
 	return inst.RefreshPlayers(timeout)
+}
+
+// linkRosterTTL is how long a mod snapshot is trusted as the live roster.
+//
+// Comfortably longer than the 15s heartbeat so an ordinary late frame does not
+// bounce the panel back to the console path, but short enough that a mod which
+// stopped reporting is noticed rather than freezing the roster forever.
+const linkRosterTTL = 45 * time.Second
+
+type linkRosterEntry struct {
+	players []Player
+	at      time.Time
+}
+
+// SetLinkRoster records the online players reported by a server's helper mod.
+//
+// Called on every snapshot, which is what makes a dropped join or leave event
+// self-correcting: the next snapshot restates the truth wholesale rather than
+// replaying history.
+func (m *Manager) SetLinkRoster(id string, players []Player) {
+	m.linkMu.Lock()
+	defer m.linkMu.Unlock()
+	if m.linkRosters == nil {
+		m.linkRosters = make(map[string]linkRosterEntry)
+	}
+	m.linkRosters[id] = linkRosterEntry{players: players, at: time.Now()}
+}
+
+// ClearLinkRoster drops a server's mod roster, so the console path takes over
+// again. Called when a mod disconnects.
+func (m *Manager) ClearLinkRoster(id string) {
+	m.linkMu.Lock()
+	defer m.linkMu.Unlock()
+	delete(m.linkRosters, id)
+}
+
+// linkRoster returns the mod-reported roster when it is fresh enough to trust.
+func (m *Manager) linkRoster(id string) ([]Player, bool) {
+	m.linkMu.Lock()
+	defer m.linkMu.Unlock()
+
+	entry, ok := m.linkRosters[id]
+	if !ok || time.Since(entry.at) > linkRosterTTL {
+		return nil, false
+	}
+
+	// Copy: callers stamp op/whitelist/ban flags onto the returned players, and
+	// must not mutate what the next request will read.
+	out := make([]Player, len(entry.players))
+	copy(out, entry.players)
+	return out, true
+}
+
+// HasLinkRoster reports whether a server's roster is currently coming from the
+// helper mod rather than the console.
+func (m *Manager) HasLinkRoster(id string) bool {
+	_, ok := m.linkRoster(id)
+	return ok
 }
 
 // AllPlayers returns the merged roster: players currently online (tracked live

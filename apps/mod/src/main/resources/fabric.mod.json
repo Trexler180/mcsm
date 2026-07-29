@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "mcsm-helper",
+	"version": "${version}",
+	"name": "MCSM Helper",
+	"description": "Exposes structured server telemetry and actions to the MCSM panel agent. Does nothing unless started by the agent.",
+	"authors": [
+		"MCSM"
+	],
+	"contact": {
+		"sources": "https://github.com/mcsm/servermanager"
+	},
+	"license": "MIT",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"com.mcsm.helper.McsmHelper"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

@@ -134,6 +134,55 @@ func applyImportConfig(cfg map[string]any, settings json.RawMessage) {
 	}
 }
 
+// helperModEnabled reports whether a server should run the manager's helper mod.
+//
+// An explicit choice in settings always wins. With no choice recorded, the
+// default is on for Fabric servers the panel created and off for imported ones:
+// an imported directory is somebody's existing, possibly curated instance, and
+// adding a jar to it without being asked is not ours to do.
+func helperModEnabled(settings json.RawMessage, platform, mcVersion string) bool {
+	var s struct {
+		HelperMod *bool           `json:"helper_mod"`
+		Import     json.RawMessage `json:"import"`
+	}
+	if len(settings) > 0 {
+		if err := json.Unmarshal(settings, &s); err == nil && s.HelperMod != nil {
+			return *s.HelperMod
+		}
+	}
+
+	// Only default it on where it can actually load. The agent independently
+	// refuses to install onto an incompatible version, so a wrong default here
+	// would be inert rather than dangerous — but it would still show the user a
+	// switch that claims something untrue.
+	if !helperModCompatible(platform, mcVersion) {
+		return false
+	}
+	return len(s.Import) == 0
+}
+
+// applyHelperModConfig threads the helper-mod decision into the agent start
+// payload. The agent installs or removes the embedded jar accordingly.
+func applyHelperModConfig(cfg map[string]any, settings json.RawMessage, platform, mcVersion string) {
+	if helperModEnabled(settings, platform, mcVersion) {
+		cfg["helper_mod"] = true
+	}
+}
+
+// setHelperModSetting records an explicit on/off choice in a server's settings,
+// preserving whatever else is stored there.
+func setHelperModSetting(settings json.RawMessage, enabled bool) (json.RawMessage, error) {
+	m := map[string]any{}
+	if len(settings) > 0 {
+		if err := json.Unmarshal(settings, &m); err != nil {
+			// Don't destroy settings we failed to parse.
+			return nil, err
+		}
+	}
+	m["helper_mod"] = enabled
+	return json.Marshal(m)
+}
+
 // ImportCandidates lists existing server directories on a node that aren't yet
 // managed by the panel, with detected settings to pre-fill the import dialog.
 func (h *ServerHandlers) ImportCandidates(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +624,9 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	// Imported servers carry their existing jar + a no-install flag, so the agent
 	// runs what's already on disk instead of fetching a runtime over it.
 	applyImportConfig(cfg, srv.Settings)
+	// Tells the agent to install (or remove) the embedded helper mod for this
+	// server before the JVM starts.
+	applyHelperModConfig(cfg, srv.Settings, srv.Platform, srv.MCVersion)
 
 	// Long deadline because the agent may auto-install the server runtime on
 	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
@@ -784,7 +836,14 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	if err := c.RestartServer(ctx, id); err != nil {
+	// Send the current configuration rather than letting the agent reuse what it
+	// was given at the last start, so a setting changed in the panel since then
+	// (the helper mod toggle, for one) is actually applied by this restart.
+	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
+	applyImportConfig(cfg, srv.Settings)
+	applyHelperModConfig(cfg, srv.Settings, srv.Platform, srv.MCVersion)
+
+	if err := c.RestartServer(ctx, id, cfg); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}

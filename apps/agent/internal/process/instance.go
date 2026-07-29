@@ -99,6 +99,11 @@ type StartConfig struct {
 	// user's own runtime, so the agent must run it as-is and never auto-download
 	// or run an installer over it.
 	NoInstall bool `json:"no_install,omitempty"`
+	// HelperMod enables the manager's helper mod for this server: the agent
+	// installs the embedded jar into mods/ on start and the mod links back for
+	// structured telemetry and actions. Disabling it removes the jar again.
+	// Fabric-only for now; ignored on other platforms.
+	HelperMod bool `json:"helper_mod,omitempty"`
 }
 
 type ConsoleEvent struct {
@@ -274,7 +279,32 @@ func (inst *Instance) start() error {
 	fifoPath := consoleFifoPath(inst.serverRoot, inst.ID)
 	_ = os.Remove(fifoPath)
 
-	l, err := launch(javaPath, args, inst.Config.Directory, inst.logPath, fifoPath)
+	// Reconcile the helper jar before the JVM starts, so the loader sees the
+	// right set of mods on this boot rather than the next one.
+	if note := ensureHelperMod(inst.Config.Directory, inst.Config.Platform, inst.Config.MCVersion, inst.Config.HelperMod, nil); note != "" {
+		javaNote = strings.TrimSpace(javaNote + "\n" + note)
+	}
+
+	// Mint this launch's helper-mod credentials. A failure here is deliberately
+	// non-fatal: the mod simply stays dormant and the server runs exactly as it
+	// did before the mod existed. Losing telemetry is never a reason to refuse
+	// to start someone's server.
+	var linkToken string
+	if inst.Config.HelperMod {
+		token, err := newLaunchToken()
+		if err != nil {
+			javaNote = strings.TrimSpace(javaNote + "\n[mcsm] warning: could not issue helper link token: " + err.Error())
+		} else {
+			linkToken = token
+		}
+	}
+	linkEnv := linkEnviron(LinkAgentURL, inst.ID, linkToken)
+	if len(linkEnv) == 0 {
+		// Nothing to authenticate with, so nothing to persist either.
+		linkToken = ""
+	}
+
+	l, err := launch(javaPath, args, inst.Config.Directory, inst.logPath, fifoPath, linkEnv)
 	if err != nil {
 		return err
 	}
@@ -295,6 +325,7 @@ func (inst *Instance) start() error {
 		StartedAt: inst.startedAt,
 		Directory: inst.Config.Directory,
 		Config:    inst.Config,
+		LinkToken: linkToken,
 	}); err != nil {
 		// Non-fatal: the server is running; we just can't reattach across an agent
 		// restart. Surface it on the console so it isn't silent.

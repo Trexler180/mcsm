@@ -1,0 +1,95 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	// Loom adds the Minecraft/Fabric repositories automatically.
+}
+
+loom {
+	// Deliberately NO splitEnvironmentSourceSets(): this is a dedicated-server-only
+	// mod with no client code, so the template's client source set is dead weight.
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	testImplementation platform('org.junit:junit-bom:5.11.4')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// NOTE: there is no `mappings` dependency and dependencies use plain
+// `implementation` rather than `modImplementation`. That is not an omission —
+// Minecraft 26.x ships deobfuscated, so there is no remapping step. See
+// DECISIONS.md §3 for the evidence. This matches the official
+// FabricMC/fabric-example-mod `26.2` branch.
+
+processResources {
+	def version = project.version
+	inputs.property 'version', version
+
+	filesMatching('fabric.mod.json') {
+		expand 'version': version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
+
+// ── Reproducible output ─────────────────────────────────────────────────────
+// The built jar is committed to the repository and CI verifies it by hash, so
+// byte-for-byte determinism is a hard requirement, not a nicety. Without these,
+// jars embed build timestamps and entry order varies, and the CI gate becomes
+// unfalsifiable.
+tasks.withType(AbstractArchiveTask).configureEach {
+	preserveFileTimestamps = false
+	reproducibleFileOrder = true
+	// Explicit permissions rather than inherited ones: the jar is verified by
+	// hash in CI, and a local Windows build must produce the same bytes as a
+	// Linux CI build with a different umask. (dirMode/fileMode were removed in
+	// Gradle 9 — these are the replacements.)
+	dirPermissions { unix(0755) }
+	filePermissions { unix(0644) }
+}
+
+// ── Embed into the agent ────────────────────────────────────────────────────
+// The agent embeds this jar with go:embed, which can only read files inside its
+// own package directory — hence copying rather than referencing across the tree.
+// The filename is intentionally version-free and stable so upgrading a server's
+// helper is an overwrite, not an accumulation of stale jars.
+def agentEmbedDir = layout.projectDirectory.dir('../agent/internal/helperjar')
+
+tasks.register('installToAgent', Copy) {
+	group = 'mcsm'
+	description = 'Copy the built jar into the agent package so go:embed picks it up.'
+	dependsOn tasks.named('jar')
+	from tasks.named('jar').map { it.archiveFile }
+	into agentEmbedDir
+	rename { 'mcsm-helper.jar' }
+}
+
+// `gradle build` alone should leave the tree ready to commit.
+tasks.named('build') {
+	finalizedBy tasks.named('installToAgent')
+}

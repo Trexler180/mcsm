@@ -21,7 +21,9 @@ const supportsReattach = true
 // dying), and stdin connected to a FIFO opened O_RDWR (so the server never sees
 // stdin EOF while no agent is attached). We Release the process and track it by
 // PID, so the same exit/stop machinery serves both fresh starts and reattaches.
-func launch(java string, args []string, dir, logPath, fifoPath string) (*launched, error) {
+// extraEnv entries (KEY=VALUE) are appended to the agent's own environment; they
+// carry the helper mod's link credentials. Nil means the mod stays dormant.
+func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv []string) (*launched, error) {
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open console log: %w", err)
@@ -34,6 +36,9 @@ func launch(java string, args []string, dir, logPath, fifoPath string) (*launche
 
 	cmd := exec.Command(java, args...)
 	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	cmd.Stdin = stdin.(*os.File) // passed as a real fd, so the child reads the FIFO directly
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

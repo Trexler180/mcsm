@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "welcome",
+  "ts": 1753800000123,
+  "data": {
+    "heartbeat_ms": 15000,
+    "accepted_capabilities": ["vitals", "player_events", "rpc", "command_exec"],
+    "max_frame_bytes": 262144
+  }
+}

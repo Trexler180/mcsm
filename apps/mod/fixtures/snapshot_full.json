@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "type": "snapshot",
+  "ts": 1753800015000,
+  "data": {
+    "uptime_ms": 3600000,
+    "tps": { "m1": 19.98, "m5": 19.99, "m15": 20.0 },
+    "mspt": { "avg": 8.4, "p50": 7.9, "p95": 14.2, "p99": 21.7, "max": 40.1 },
+    "heap": { "used_mb": 2048, "committed_mb": 4096, "max_mb": 8192 },
+    "gc": { "collections": 142, "time_ms": 3820 },
+    "chunks": { "loaded": 1024 },
+    "entities": { "total": 3150 },
+    "dimensions": [
+      { "id": "minecraft:overworld", "chunks": 812, "entities": 2400 },
+      { "id": "minecraft:the_nether", "chunks": 148, "entities": 610 },
+      { "id": "minecraft:the_end", "chunks": 64, "entities": 140 }
+    ],
+    "players": {
+      "online": 2,
+      "max": 20,
+      "list": [
+        {
+          "uuid": "11111111-2222-3333-4444-555555555555",
+          "name": "Steve",
+          "ping_ms": 42,
+          "dimension": "minecraft:overworld"
+        },
+        {
+          "uuid": "66666666-7777-8888-9999-000000000000",
+          "name": "Alex",
+          "ping_ms": 117,
+          "dimension": "minecraft:the_nether"
+        }
+      ]
+    }
+  }
+}

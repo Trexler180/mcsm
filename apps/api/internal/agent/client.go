@@ -164,8 +164,11 @@ func (c *Client) StopServer(ctx context.Context, serverID string, graceful bool,
 	return checkError(resp)
 }
 
-func (c *Client) RestartServer(ctx context.Context, serverID string) error {
-	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/restart", nil)
+// RestartServer restarts a server. cfg may be nil; when supplied it replaces the
+// agent's stored start configuration, so launch-time settings changed since the
+// last start take effect on a plain restart.
+func (c *Client) RestartServer(ctx context.Context, serverID string, cfg map[string]any) error {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/restart", cfg)
 	if err != nil {
 		return err
 	}

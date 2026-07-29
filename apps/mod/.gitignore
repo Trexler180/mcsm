@@ -1,0 +1,7 @@
+# Gradle
+.gradle/
+build/
+build-log.txt
+
+# The built jar is committed, but only the copy the agent embeds
+# (apps/agent/internal/helperjar/mcsm-helper.jar). build/libs is throwaway.

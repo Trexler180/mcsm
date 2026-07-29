@@ -420,6 +420,22 @@ export const api = {
       get<VersionMigration[]>(`/servers/${id}/migrations?limit=${limit}`),
     migration: (id: string, runId: string) =>
       get<VersionMigration>(`/servers/${id}/migrations/${runId}`),
+    // Helper mod: the manager ships the jar inside the agent and installs it
+    // into the server's mods folder on start, so this is a toggle rather than
+    // an upload. Takes effect on the next restart.
+    helperMod: (id: string) =>
+      get<{
+        enabled: boolean;
+        supported: boolean;
+        platform: string;
+        mc_version: string;
+        required_mc_series: string;
+      }>(`/servers/${id}/helper-mod`),
+    setHelperMod: (id: string, enabled: boolean) =>
+      post<{ enabled: boolean; restart_required: boolean }>(
+        `/servers/${id}/helper-mod`,
+        { enabled },
+      ),
     kill: (id: string) => post(`/servers/${id}/kill`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),

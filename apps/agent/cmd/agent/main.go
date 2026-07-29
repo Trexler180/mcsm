@@ -17,6 +17,7 @@ import (
 
 	agentapi "github.com/mcsm/agent/internal/api"
 	"github.com/mcsm/agent/internal/api/handlers"
+	"github.com/mcsm/agent/internal/link"
 	"github.com/mcsm/agent/internal/metrics"
 	"github.com/mcsm/agent/internal/process"
 )
@@ -131,7 +132,47 @@ func main() {
 	// restart or upgrade, so a deploy doesn't take servers down (P0).
 	mgr.Reattach()
 
-	router := agentapi.NewRouter(token, mgr, collector, serverRoot)
+	// Servers dial the agent back over loopback regardless of what address the
+	// agent advertises publicly: the JVM is always on this host, and pointing a
+	// spawned server at a routable address would send a credential over the
+	// network for no reason.
+	process.LinkAgentURL = fmt.Sprintf("http://127.0.0.1:%s", port)
+
+	// Helper mod build resolution. The mod is released from its own repository,
+	// so new Minecraft versions are supported by publishing a build there rather
+	// than by shipping a new manager. With no index configured the agent uses
+	// only the build embedded in this binary.
+	helperResolver := process.EmbeddedOnlyResolver()
+	helperResolver.IndexURL = os.Getenv("MCSM_HELPER_INDEX_URL")
+	helperResolver.CacheDir = filepath.Join(serverRoot, ".mcsm-run", "helper-cache")
+	process.HelperModResolver = helperResolver
+	if helperResolver.IndexURL != "" {
+		log.Printf("helper mod index: %s", helperResolver.IndexURL)
+	}
+
+	// Helper-mod link. Servers without the mod never touch this and keep using
+	// the log-scraping and stdin paths.
+	linkSink := link.NewMemorySink()
+
+	// Feed the mod's authoritative player list into the roster the panel already
+	// reads. This is what stops the players tab from typing `/list` into the
+	// server: the mod becomes a better source for the same pipeline rather than
+	// a second, parallel one the UI would have to choose between.
+	linkSink.OnSnapshotFunc(func(serverID string, snap link.Snapshot) {
+		players := make([]process.Player, 0, len(snap.Players.List))
+		for _, p := range snap.Players.List {
+			players = append(players, process.Player{
+				Name:   p.Name,
+				UUID:   p.UUID,
+				Online: true,
+			})
+		}
+		mgr.SetLinkRoster(serverID, players)
+	})
+
+	links := link.NewRegistry(linkSink, mgr)
+
+	router := agentapi.NewRouter(token, mgr, collector, serverRoot, links)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", host, port),

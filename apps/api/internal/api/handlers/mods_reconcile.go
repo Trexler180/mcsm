@@ -84,6 +84,14 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 			if _, ok := tracked[strings.ToLower(e.Name)]; ok {
 				continue
 			}
+			if isManagerOwnedMod(e.Name) {
+				// The manager installs and removes this one itself. Adopting it
+				// as a user mod would make the panel offer updates for a project
+				// that does not exist on any mod site, and let someone delete it
+				// without turning the feature off — after which the next start
+				// would silently put it back.
+				continue
+			}
 			toAdopt = append(toAdopt, adoptItem{
 				dir:     dir,
 				name:    e.Name,

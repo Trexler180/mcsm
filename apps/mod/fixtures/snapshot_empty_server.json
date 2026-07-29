@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "type": "snapshot",
+  "ts": 1753800030000,
+  "data": {
+    "uptime_ms": 15000,
+    "tps": { "m1": 20.0, "m5": 20.0, "m15": 20.0 },
+    "mspt": { "avg": 0.4, "p50": 0.3, "p95": 0.9, "p99": 1.2, "max": 3.0 },
+    "heap": { "used_mb": 512, "committed_mb": 1024, "max_mb": 8192 },
+    "gc": { "collections": 2, "time_ms": 40 },
+    "chunks": { "loaded": 441 },
+    "entities": { "total": 0 },
+    "dimensions": [],
+    "players": {
+      "online": 0,
+      "max": 20,
+      "list": []
+    }
+  }
+}

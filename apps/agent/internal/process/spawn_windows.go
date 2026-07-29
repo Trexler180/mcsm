@@ -16,13 +16,18 @@ const supportsReattach = false
 // launch starts the JVM as a child process with stdout+stderr redirected to the
 // console log (so the agent tails one file on every platform) and stdin via a
 // pipe. The *exec.Cmd is retained so exit is detected with cmd.Wait.
-func launch(java string, args []string, dir, logPath, fifoPath string) (*launched, error) {
+// extraEnv entries (KEY=VALUE) are appended to the agent's own environment; they
+// carry the helper mod's link credentials. Nil means the mod stays dormant.
+func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv []string) (*launched, error) {
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open console log: %w", err)
 	}
 	cmd := exec.Command(java, args...)
 	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		logFile.Close()

@@ -197,6 +197,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(requireAdmin(s)).Post("/clone", modH.Clone)
 
 					r.With(startAccess).Post("/start", serverH.Start)
+					// Helper mod: reading is a view-level concern, but turning it
+					// on writes a jar into the server directory, so it needs the
+					// same authority as other settings changes.
+					r.With(viewAccess).Get("/helper-mod", serverH.HelperModStatus)
+					r.With(settingsAccess).Post("/helper-mod", serverH.SetHelperMod)
 					r.With(settingsAccess).Post("/reinstall", serverH.Reinstall)
 					r.With(settingsAccess).Post("/migrate", migrateH.Migrate)
 					r.With(viewAccess).Get("/migrations", migrateH.List)

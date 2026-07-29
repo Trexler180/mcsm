@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "rpc_response",
+  "id": "01J8ZQ7XN4E5P6RT8VW9YB2CDG",
+  "ts": 1753800002060,
+  "data": {
+    "ok": false,
+    "error": {
+      "code": "player_not_found",
+      "message": "no player named Steve is online"
+    }
+  }
+}

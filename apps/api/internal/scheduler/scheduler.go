@@ -239,7 +239,10 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 		}
 
 	case "restart":
-		if err := c.RestartServer(ctx, srv.ID); err != nil {
+		// nil config: a scheduled restart deliberately reuses whatever the server
+		// is already running with, rather than re-deriving configuration on a
+		// timer when nobody is watching.
+		if err := c.RestartServer(ctx, srv.ID, nil); err != nil {
 			log.Printf("scheduler: task %s restart: %v", task.Name, err)
 		}
 

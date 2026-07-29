@@ -32,6 +32,36 @@ jobs:
         working-directory: apps/agent
         run: go build ./cmd/agent
 
+  mod:
+    name: Helper mod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Minecraft 26.2 requires Java 25 (java-runtime-epsilon).
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build mod
+        working-directory: apps/mod
+        run: ./gradlew build --no-daemon --console=plain
+      # `build` is finalizedBy installToAgent, which overwrites the committed
+      # jar with a freshly built one. If the two differ, the committed jar no
+      # longer matches its source and the working tree is dirty here.
+      #
+      # This is the gate that makes committing a binary safe: a stale or
+      # hand-modified jar cannot reach main. It depends on the jar being
+      # byte-reproducible, which is enforced by the archive settings in
+      # build.gradle and was verified locally across clean rebuilds.
+      - name: Verify committed jar matches its source
+        run: |
+          if ! git diff --exit-code -- apps/agent/internal/helperjar/mcsm-helper.jar; then
+            echo "::error::apps/agent/internal/helperjar/mcsm-helper.jar is stale."
+            echo "Rebuild with 'cd apps/mod && ./gradlew build' and commit the result."
+            exit 1
+          fi
+
   web:
     name: Web
     runs-on: ubuntu-latest

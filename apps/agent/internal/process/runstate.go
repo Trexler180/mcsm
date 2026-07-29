@@ -28,6 +28,11 @@ type runState struct {
 	StartedAt time.Time   `json:"started_at"`
 	Directory string      `json:"directory"`
 	Config    StartConfig `json:"config"`
+
+	// LinkToken authenticates the helper mod's WebSocket link for this launch.
+	// Persisted so a server that outlives an agent restart can re-authenticate
+	// when it reconnects; cleared with the rest of the run state on stop.
+	LinkToken string `json:"link_token,omitempty"`
 }
 
 func runtimeRoot(serverRoot string) string {
@@ -52,6 +57,10 @@ func statePath(serverRoot, id string) string {
 
 // writeRunState persists st atomically (write-temp then rename) so a crash mid
 // write can't leave a half-written state.json that reattach would choke on.
+//
+// The file is 0600 rather than 0644 because it carries the launch token for the
+// helper mod link. Only the agent ever reads this file, so restricting it costs
+// nothing and keeps a live credential off a world-readable path.
 func writeRunState(serverRoot string, st runState) error {
 	dir := runtimeDir(serverRoot, st.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -62,7 +71,12 @@ func writeRunState(serverRoot string, st runState) error {
 		return err
 	}
 	tmp := statePath(serverRoot, st.ID) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	// WriteFile does not chmod an existing file, so a state.json created by an
+	// older agent build would keep its 0644 mode without this.
+	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, statePath(serverRoot, st.ID))

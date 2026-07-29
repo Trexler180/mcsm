@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "rpc_response",
+  "id": "01J8ZQ7XN4E5P6RT8VW9YB2CDF",
+  "ts": 1753800002050,
+  "data": {
+    "ok": true,
+    "result": {}
+  }
+}

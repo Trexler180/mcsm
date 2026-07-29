@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "hello",
+  "ts": 1753800000000,
+  "data": {
+    "mod_version": "1.0.0",
+    "mc_version": "26.2",
+    "loader": "fabric",
+    "loader_version": "0.19.3",
+    "server_brand": "fabric",
+    "capabilities": ["vitals", "player_events", "rpc", "command_exec"]
+  }
+}

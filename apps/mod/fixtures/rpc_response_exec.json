@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "type": "rpc_response",
+  "id": "01J8ZQ7XN4E5P6RT8VW9YB2CDH",
+  "ts": 1753800002400,
+  "data": {
+    "ok": true,
+    "result": {
+      "output": [
+        "There are 2 of a max of 20 players online: Steve, Alex"
+      ],
+      "success": true
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "event",
+  "ts": 1753800004500,
+  "data": {
+    "kind": "player_death",
+    "uuid": "11111111-2222-3333-4444-555555555555",
+    "name": "Steve",
+    "message": "Steve fell from a high place"
+  }
+}

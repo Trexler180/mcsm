@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "type": "rpc_request",
+  "id": "01J8ZQ7XN4E5P6RT8VW9YB2CDF",
+  "ts": 1753800002000,
+  "data": {
+    "method": "player.kick",
+    "params": {
+      "player": "Steve",
+      "reason": "afk too long"
+    }
+  }
+}
