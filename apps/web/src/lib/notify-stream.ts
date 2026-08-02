@@ -2,6 +2,11 @@ import { api } from "./api";
 import { useNotificationFeed } from "@/store/notification-feed";
 import { useNotifications } from "@/store/notifications";
 import { showDesktopNotification } from "./desktop-notify";
+import {
+  asJoinDeniedAlert,
+  canWhitelistOn,
+  whitelistFromAlert,
+} from "./join-denied";
 import type { NotificationItem } from "./types";
 
 type StreamMessage = { type: string; data: NotificationItem };
@@ -101,7 +106,45 @@ class NotificationStream {
         : item.severity === "warning"
           ? "warning"
           : "default";
-    notify.add({ title: item.title, description: item.body, variant });
+
+    const denied = asJoinDeniedAlert(item);
+    if (denied) {
+      // This alert is a question, not a status update, so it gets a toast that
+      // waits for an answer instead of one that fades. The permission check is
+      // awaited before showing anything: a prompt is only useful to someone who
+      // can act on it, and the plain toast is the right fallback for everyone
+      // else — they should still know somebody tried to get in.
+      void canWhitelistOn(denied.serverId).then((allowed) => {
+        notify.add({
+          title: item.title,
+          description: item.body,
+          variant,
+          sticky: allowed,
+          action: allowed
+            ? {
+                label: `Whitelist ${denied.player}`,
+                onClick: async () => {
+                  try {
+                    await whitelistFromAlert(denied);
+                    useNotifications
+                      .getState()
+                      .success(`${denied.player} is now whitelisted`);
+                  } catch (e) {
+                    useNotifications
+                      .getState()
+                      .error(
+                        `Could not whitelist ${denied.player}`,
+                        (e as Error).message,
+                      );
+                  }
+                },
+              }
+            : undefined,
+        });
+      });
+    } else {
+      notify.add({ title: item.title, description: item.body, variant });
+    }
 
     // Raise a native OS notification too, when the user enabled them on this
     // device. No push service involved — this fires off the live stream while

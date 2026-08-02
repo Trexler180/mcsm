@@ -1,6 +1,9 @@
 package notify
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // These constructors keep alert copy in one place and give detection points a
 // one-liner to emit. Pass the human-friendly server/node name when available;
@@ -116,6 +119,35 @@ func ServerPerformance(serverID, serverName, detail string) Event {
 		Type: EventServerPerformance, ServerID: serverID, ServerName: serverName,
 		Title: fmt.Sprintf("%s is under sustained load", display(serverName, serverID)),
 		Body:  detail,
+	}
+}
+
+// PlayerJoinDenied reports someone the whitelist turned away. The Data payload
+// is what makes the alert actionable rather than merely informative: the panel
+// renders a "let them in" button straight from these fields, so the operator
+// never has to go find the player in a roster the player was never added to.
+func PlayerJoinDenied(serverID, serverName, player, uuid string, bedrock bool, attempts int) Event {
+	body := fmt.Sprintf("%s is not on the whitelist and could not join.", player)
+	if attempts > 1 {
+		body = fmt.Sprintf("%s is not on the whitelist and has tried to join %d times.", player, attempts)
+	}
+	if bedrock {
+		body += " They are connecting from Bedrock Edition."
+	}
+	return Event{
+		Type: EventPlayerJoinDenied, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s tried to join %s", player, display(serverName, serverID)),
+		Body:  body,
+		Data: map[string]any{
+			"player":   player,
+			"uuid":     uuid,
+			"bedrock":  bedrock,
+			"attempts": attempts,
+		},
+		// Keyed on the player, not just the server, so two different people
+		// knocking inside the cooldown produce two alerts — collapsing them would
+		// silently lose one of them.
+		DedupeKey: EventPlayerJoinDenied + ":" + serverID + ":" + strings.ToLower(player),
 	}
 }
 

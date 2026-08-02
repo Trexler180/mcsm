@@ -200,6 +200,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("create admin: %v", err)
 		}
+		if err := s.SeedDefaultSubscriptions(ctx, u.ID, notify.DefaultOnTypes()); err != nil {
+			log.Printf("seed default subscriptions for admin: %v", err)
+		}
 		log.Printf("created admin user: %s", u.Email)
 		if generatedPassword {
 			// Don't print the bootstrap password to the logs (they get shipped,

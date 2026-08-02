@@ -31,6 +31,12 @@ type Manager struct {
 	linkMu      sync.Mutex
 	linkRosters map[string]linkRosterEntry
 
+	// denials holds players the whitelist turned away, per server. It lives here
+	// rather than on the Instance so an attempt survives the restart or crash
+	// that often follows it — the operator still has to answer for it.
+	denialMu sync.Mutex
+	denials  map[string]*denialLog
+
 	// linkExec routes a console command through the helper mod when one is
 	// linked; nil leaves every command on stdin. onUnregister lets state the
 	// manager does not own be evicted when a server is purged. Both are wired by
@@ -56,6 +62,7 @@ func NewManager(serverRoot string) *Manager {
 		dirs:         make(map[string]string),
 		roster:       make(map[string]rosterCache),
 		bedrockCache: make(map[string]bedrockLookup),
+		denials:      make(map[string]*denialLog),
 	}
 }
 
@@ -73,7 +80,7 @@ func (m *Manager) Reattach() {
 			clearRunState(m.serverRoot, st.ID)
 			continue
 		}
-		inst, err := reattachInstance(m.serverRoot, st)
+		inst, err := reattachInstance(m.serverRoot, st, m.recordJoinDenial)
 		if err != nil {
 			log.Printf("reattach %s: %v", st.ID, err)
 			clearRunState(m.serverRoot, st.ID)
@@ -101,6 +108,7 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 	}
 
 	inst := newInstance(m.serverRoot, id, cfg)
+	inst.onJoinDenied = m.recordJoinDenial
 	if err := inst.start(); err != nil {
 		return err
 	}
@@ -182,10 +190,16 @@ func (m *Manager) Status(id string) StatusInfo {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
-	if !ok {
-		return StatusInfo{ID: id, Status: StatusOffline}
+
+	info := StatusInfo{ID: id, Status: StatusOffline}
+	if ok {
+		info = inst.statusInfo()
 	}
-	return inst.statusInfo()
+	// Attached here rather than in statusInfo() because the records outlive the
+	// instance: a server that was stopped after turning someone away still owes
+	// its operator that answer.
+	info.JoinDenied = m.JoinDenials(id)
+	return info
 }
 
 func (m *Manager) SendCommand(id, cmd string) error {
@@ -294,6 +308,7 @@ func (m *Manager) Unregister(id string) {
 	delete(m.roster, id)
 	m.rosterMu.Unlock()
 
+	m.clearJoinDenials(id)
 	m.ClearLinkRoster(id)
 
 	// Let anything holding derived state for this server drop it too. The helper

@@ -34,9 +34,10 @@ func Run(ctx context.Context, s *store.Store, engine *notify.Engine) {
 
 	sm := newSampler()
 	sessions := newSessionTracker(s)
+	denials := newDenialTracker()
 	tick := 0
 	sweep := func() {
-		pollAll(ctx, s, engine)
+		pollAll(ctx, s, engine, denials)
 		// Sample resource history on a slower cadence than status polling; each
 		// snapshot's roster also drives player-session tracking.
 		if tick%sampleEvery == 0 {
@@ -59,17 +60,19 @@ func Run(ctx context.Context, s *store.Store, engine *notify.Engine) {
 	}
 }
 
-func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
+func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine, denials *denialTracker) {
 	pollNodes(ctx, s, engine)
 
 	servers, err := s.ListServers(ctx)
 	if err != nil {
 		return
 	}
+	live := make(map[string]struct{}, len(servers))
 	// Cache nodes to avoid hitting the DB once per server in the common
 	// "few nodes, many servers" case.
 	nodes := map[string]*store.Node{}
 	for _, srv := range servers {
+		live[srv.ID] = struct{}{}
 		node, ok := nodes[srv.NodeID]
 		if !ok {
 			n, err := s.GetNode(ctx, srv.NodeID)
@@ -84,6 +87,14 @@ func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
 		callCtx, cancel := context.WithTimeout(ctx, perCallBudget)
 		status, err := c.GetStatus(callCtx, srv.ID)
 		cancel()
+
+		// Players the whitelist turned away ride along on the status payload, so
+		// this costs no extra request. Handled before the status-change branch
+		// below, which returns early in several cases — an operator still needs to
+		// hear about someone knocking on a server whose status did not move.
+		if err == nil {
+			denials.observe(srv, status, engine)
+		}
 
 		desired := ""
 		if err != nil {
@@ -148,6 +159,9 @@ func pollAll(ctx context.Context, s *store.Store, engine *notify.Engine) {
 			}
 		}
 	}
+
+	// Servers deleted since the last sweep leave their ledger behind otherwise.
+	denials.reap(live)
 }
 
 func pollNodes(ctx context.Context, s *store.Store, engine *notify.Engine) {

@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
 import { X, CheckCircle, AlertCircle, AlertTriangle } from 'lucide-react'
 import { useNotifications, type Toast, type ToastVariant } from '@/store/notifications'
+import { Button } from './button'
 
 const variantConfig: Record<ToastVariant, { icon: React.ReactNode; classes: string }> = {
   default: {
@@ -22,7 +23,7 @@ const variantConfig: Record<ToastVariant, { icon: React.ReactNode; classes: stri
 }
 
 function ToastItem({ toast }: { toast: Toast }) {
-  const { remove } = useNotifications()
+  const { remove, runAction } = useNotifications()
   const config = variantConfig[toast.variant]
 
   return (
@@ -46,9 +47,24 @@ function ToastItem({ toast }: { toast: Toast }) {
         {toast.description && (
           <p className="text-xs text-text-secondary mt-0.5">{toast.description}</p>
         )}
+        {toast.action && (
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => void runAction(toast.id)}
+              loading={toast.busy}
+            >
+              {toast.action.label}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => remove(toast.id)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
       </div>
       <button
         onClick={() => remove(toast.id)}
+        aria-label="Dismiss notification"
         className="text-text-secondary hover:text-text-primary flex-shrink-0"
       >
         <X className="h-4 w-4" />
@@ -64,8 +80,13 @@ export function Toaster() {
   if (toasts.length === 0) return null
 
   // Newest at the bottom (closest to corner); only render the last few so the
-  // stack can't grow tall enough to cover the UI behind it.
-  const visible = toasts.slice(-MAX_VISIBLE)
+  // stack can't grow tall enough to cover the UI behind it. Toasts asking the
+  // user something outrank chatter for those slots — a prompt pushed out of
+  // view by three "mod installed" toasts is a prompt that never gets answered.
+  const ranked = [...toasts].sort(
+    (a, b) => Number(Boolean(a.sticky)) - Number(Boolean(b.sticky)),
+  )
+  const visible = ranked.slice(-MAX_VISIBLE)
   const hidden = toasts.length - visible.length
 
   return (

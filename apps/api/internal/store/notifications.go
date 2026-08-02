@@ -123,6 +123,28 @@ func (s *Store) MatchingSubscriptions(ctx context.Context, eventType, serverID s
 	return scanSubscriptions(rows)
 }
 
+// SeedDefaultSubscriptions gives a new user in-app alerts for the event types
+// the catalog marks as on-by-default, across every server they can access.
+//
+// It never overwrites an existing rule, so re-running it (or a user having
+// already configured that event) is a no-op rather than a silent reset of their
+// preferences. The event list is passed in because the catalog lives in the
+// notify package, which imports this one.
+func (s *Store) SeedDefaultSubscriptions(ctx context.Context, userID string, eventTypes []string) error {
+	for _, et := range eventTypes {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO notification_subscriptions
+			  (id, user_id, event_type, server_id, min_severity, channels, enabled)
+			VALUES (?, ?, ?, NULL, 'info', '["inapp"]', 1)
+			ON CONFLICT(user_id, event_type) WHERE server_id IS NULL DO NOTHING`,
+			uuid.NewString(), userID, et)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UpsertSubscription inserts or replaces the user's rule for (event_type, scope).
 // The two partial unique indexes (scoped vs all-servers) require branching the
 // conflict target on whether server_id is set.

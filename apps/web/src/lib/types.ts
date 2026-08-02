@@ -950,6 +950,23 @@ export interface NotificationItem {
   read_at: string | null;
 }
 
+/** Event type of the alert raised when the whitelist turns a player away. It is
+ *  the one alert the panel renders an action for, so it is named here rather
+ *  than left as a bare string at each use. */
+export const EVENT_PLAYER_JOIN_DENIED = "player.join_denied";
+
+/** The `data` payload of a `player.join_denied` alert — everything needed to
+ *  whitelist the player without first finding them in a roster they were never
+ *  added to. */
+export interface JoinDeniedData {
+  player: string;
+  uuid: string;
+  /** Connecting through Geyser/Floodgate, which whitelists by a different path
+   *  (the UUID rather than a console command). */
+  bedrock: boolean;
+  attempts: number;
+}
+
 // Live telemetry pushed by the helper mod. The snapshot fields are only present
 // once the mod has reported at least once; `linked` alone distinguishes "mod
 // connected right now" from "serving the last snapshot across a reconnect".

@@ -8,6 +8,7 @@ import {
   Plus,
   Send,
   Trash2,
+  UserPlus,
   Webhook,
   Smartphone,
 } from "lucide-react";
@@ -19,6 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
+import { can } from "@/lib/permissions";
+import {
+  asJoinDeniedAlert,
+  whitelistFromAlert,
+  type JoinDeniedAlert,
+} from "@/lib/join-denied";
 import { useNotifications } from "@/store/notifications";
 import { useNotificationFeed } from "@/store/notification-feed";
 import {
@@ -106,8 +113,51 @@ function Inbox() {
   );
 }
 
+// WhitelistPrompt is the inbox's copy of the action the live toast offers. The
+// toast is gone in seconds once acted on (or if the panel was closed when the
+// player knocked), so the inbox has to be able to answer the same question —
+// otherwise a missed toast means finding the player by hand in a roster they
+// were never added to.
+function WhitelistPrompt({ alert }: { alert: JoinDeniedAlert }) {
+  const { success, error } = useNotifications();
+  const [done, setDone] = useState(false);
+
+  const perms = useQuery({
+    queryKey: ["my-perms", alert.serverId],
+    queryFn: () => api.servers.myPermissions(alert.serverId),
+  });
+
+  const add = useMutation({
+    mutationFn: () => whitelistFromAlert(alert),
+    onSuccess: () => {
+      setDone(true);
+      success(`${alert.player} is now whitelisted`);
+    },
+    onError: (e: Error) =>
+      error(`Could not whitelist ${alert.player}`, e.message),
+  });
+
+  if (done) {
+    return (
+      <p className="mt-2 text-xs text-text-secondary">
+        Whitelisted {alert.player}.
+      </p>
+    );
+  }
+  if (!perms.data || !can(perms.data, "players.whitelist")) return null;
+
+  return (
+    <div className="mt-2">
+      <Button size="sm" onClick={() => add.mutate()} loading={add.isPending}>
+        <UserPlus className="h-4 w-4" /> Whitelist {alert.player}
+      </Button>
+    </div>
+  );
+}
+
 function FeedRow({ item, onRead }: { item: NotificationItem; onRead: () => void }) {
   const unread = !item.read_at;
+  const denied = asJoinDeniedAlert(item);
   return (
     <div
       className={
@@ -123,6 +173,7 @@ function FeedRow({ item, onRead }: { item: NotificationItem; onRead: () => void 
         {item.body && (
           <p className="mt-0.5 text-sm text-text-secondary">{item.body}</p>
         )}
+        {denied && <WhitelistPrompt alert={denied} />}
         <p className="mt-1 text-xs text-text-secondary">
           {relativeTime(item.created_at)}
         </p>

@@ -118,6 +118,13 @@ type StatusInfo struct {
 	PID         int          `json:"pid,omitempty"`
 	StartedAt   time.Time    `json:"started_at,omitempty"`
 	ModConflict *ModConflict `json:"mod_conflict,omitempty"`
+
+	// JoinDenied lists players the whitelist recently turned away and who have
+	// not been let in since. It rides on the status poll the panel already makes
+	// rather than a stream of its own: an attempt the operator hears about
+	// fifteen seconds late is still news, and a second per-server request every
+	// poll is not worth that latency.
+	JoinDenied []JoinDenial `json:"join_denied,omitempty"`
 }
 
 // launched is the normalized result of starting (or reattaching to) a server
@@ -181,6 +188,11 @@ type Instance struct {
 	crashDetector mixinCrashDetector
 	javaDetector  javaVersionDetector
 	conflict      *ModConflict
+
+	// onJoinDenied reports a player the whitelist turned away. Set by the manager
+	// (which owns the record set, so an attempt outlives this instance); nil in
+	// tests that drive an instance directly.
+	onJoinDenied func(serverID, name, uuid, reason string)
 }
 
 func newInstance(serverRoot, id string, cfg StartConfig) *Instance {
@@ -350,8 +362,12 @@ func (inst *Instance) start() error {
 
 // reattachInstance adopts a server that kept running across an agent restart.
 // The caller has already confirmed the PID is alive and matches the directory.
-func reattachInstance(serverRoot string, st runState) (*Instance, error) {
+// onJoinDenied is wired here rather than after the call because reattach starts
+// tailing the log before it returns, and a denial logged in that window would
+// otherwise be dropped.
+func reattachInstance(serverRoot string, st runState, onJoinDenied func(serverID, name, uuid, reason string)) (*Instance, error) {
 	inst := newInstance(serverRoot, st.ID, st.Config)
+	inst.onJoinDenied = onJoinDenied
 
 	stdin, err := openStdinWriter(consoleFifoPath(serverRoot, st.ID))
 	if err != nil {
@@ -620,6 +636,12 @@ func (inst *Instance) consumeLine(line, stream string) {
 		}
 		inst.mu.Unlock()
 	}
+	// A player refused by the whitelist never reaches the roster, so this line is
+	// the only evidence the attempt happened at all.
+	if name, uuid, reason, ok := parseJoinDenial(line); ok && inst.onJoinDenied != nil {
+		inst.onJoinDenied(inst.ID, name, uuid, reason)
+	}
+
 	if m := playerJoinRe.FindStringSubmatch(line); m != nil {
 		inst.playersMu.Lock()
 		if _, ok := inst.players[m[1]]; !ok {

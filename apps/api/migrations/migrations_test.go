@@ -32,6 +32,61 @@ func TestMigrationsApplyFromEmptySQLite(t *testing.T) {
 	}
 }
 
+// Migration 023 backfills whitelist-rejection alerts for users who predate the
+// feature — without which the alert exists but fires for nobody — while leaving
+// anyone who already has a rule for it alone, including one they disabled.
+func TestJoinDeniedSubscriptionBackfill(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	goose.SetBaseFS(FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 22); err != nil {
+		t.Fatal(err)
+	}
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u1','a@e.com','x','admin')`)
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u2','b@e.com','x','user')`)
+	// u2 already decided they do not want these alerts.
+	mustExec(`INSERT INTO notification_subscriptions (id, user_id, event_type, server_id, channels, enabled)
+	          VALUES ('sub-existing','u2','player.join_denied',NULL,'[]',0)`)
+
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatal(err)
+	}
+
+	var channels string
+	var enabled int
+	if err := db.QueryRow(`SELECT channels, enabled FROM notification_subscriptions
+	                        WHERE user_id='u1' AND event_type='player.join_denied'`).
+		Scan(&channels, &enabled); err != nil {
+		t.Fatalf("u1 should have been backfilled: %v", err)
+	}
+	if channels != `["inapp"]` || enabled != 1 {
+		t.Errorf("backfilled rule = %s/%d, want [\"inapp\"] enabled", channels, enabled)
+	}
+
+	var id string
+	if err := db.QueryRow(`SELECT id FROM notification_subscriptions
+	                        WHERE user_id='u2' AND event_type='player.join_denied'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != "sub-existing" {
+		t.Errorf("u2's own rule was replaced (id %s); an opt-out must survive the upgrade", id)
+	}
+}
+
 // Migration 018 must remove duplicate managed-mod rows (keeping the oldest per
 // project+dir) and then reject new duplicates via the unique index.
 func TestModProjectUniqueMigrationDedupes(t *testing.T) {

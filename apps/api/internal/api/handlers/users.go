@@ -3,11 +3,13 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -76,6 +78,12 @@ func (h *UserHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusConflict, "user already exists or db error: "+err.Error())
 		return
+	}
+	// Best-effort: a missing default subscription costs the user some alerts they
+	// can still switch on themselves, which is not worth failing account creation
+	// and leaving them with no account at all.
+	if err := h.store.SeedDefaultSubscriptions(r.Context(), user.ID, notify.DefaultOnTypes()); err != nil {
+		log.Printf("seed default subscriptions for %s: %v", user.ID, err)
 	}
 	writeJSON(w, http.StatusCreated, user)
 }

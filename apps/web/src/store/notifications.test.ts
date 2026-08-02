@@ -69,4 +69,64 @@ describe("useNotifications", () => {
     useNotifications.getState().remove(id);
     expect(toasts()).toHaveLength(0);
   });
+
+  // A toast that asks the user something has to survive them looking away.
+  it("does not auto-dismiss a sticky toast", () => {
+    useNotifications.getState().add({
+      title: "Steve tried to join",
+      variant: "warning",
+      sticky: true,
+      action: { label: "Whitelist Steve", onClick: () => {} },
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(toasts()).toHaveLength(1);
+  });
+
+  // Two people knocking is two decisions. Merging them on a shared title would
+  // silently drop one of them.
+  it("never merges toasts that carry an action", () => {
+    const add = useNotifications.getState().add;
+    const action = { label: "Whitelist", onClick: () => {} };
+    add({ title: "Player tried to join", variant: "warning", action });
+    add({ title: "Player tried to join", variant: "warning", action });
+    expect(toasts()).toHaveLength(2);
+  });
+
+  it("runAction marks the toast busy, then dismisses it", async () => {
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    useNotifications.getState().add({
+      title: "Steve tried to join",
+      variant: "warning",
+      sticky: true,
+      action: { label: "Whitelist Steve", onClick: () => pending },
+    });
+    const id = toasts()[0].id;
+
+    const run = useNotifications.getState().runAction(id);
+    expect(toasts()[0].busy).toBe(true);
+
+    release();
+    await run;
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("dismisses the toast even when its action fails", async () => {
+    useNotifications.getState().add({
+      title: "Steve tried to join",
+      variant: "warning",
+      sticky: true,
+      action: {
+        label: "Whitelist Steve",
+        onClick: () => Promise.reject(new Error("server said no")),
+      },
+    });
+    const id = toasts()[0].id;
+    await expect(useNotifications.getState().runAction(id)).rejects.toThrow(
+      "server said no",
+    );
+    expect(toasts()).toHaveLength(0);
+  });
 });
