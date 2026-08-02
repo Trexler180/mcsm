@@ -9,6 +9,7 @@ import { AttentionCard } from "@/components/dashboard/attention-card";
 import { FleetGrid } from "@/components/dashboard/fleet-grid";
 import { NodeHealthCard } from "@/components/dashboard/node-health";
 import { ActivityFeed } from "@/components/dashboard/activity-feed";
+import { useServerFolders } from "@/components/servers/folder-dialogs";
 import { api } from "@/lib/api";
 
 // Placeholder for the region below the stat tiles while the overview loads:
@@ -61,6 +62,9 @@ function DashboardPage() {
     queryFn: () => api.overview.get(),
     refetchInterval: 10_000,
   });
+  // Folders change far less often than status, so they ride their own query
+  // rather than bloating the 10s overview poll.
+  const { data: folders = [] } = useServerFolders();
 
   // Deep-link straight to a server tab via its own URL.
   const openServer = (id: string, tab?: string) => {
@@ -159,7 +163,11 @@ function DashboardPage() {
               onOpenNodes={() => navigate({ to: "/nodes" })}
             />
 
-            <FleetGrid servers={overview.servers} onOpenServer={openServer} />
+            <FleetGrid
+              servers={overview.servers}
+              folders={folders}
+              onOpenServer={openServer}
+            />
 
             <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
               <NodeHealthCard nodes={overview.nodes} />

@@ -250,6 +250,7 @@ export interface Server {
   auto_start: boolean;
   tags: string[];
   settings: Record<string, unknown>;
+  folder_id: string | null; // null = ungrouped
   public_status: boolean;
   public_slug: string; // "" = none chosen
   created_at: string;
@@ -528,9 +529,35 @@ export interface OverviewServer {
   platform: string;
   mc_version: string;
   node_id: string;
+  folder_id: string | null;
   active_conflict: boolean;
   last_backup_at: string | null;
   last_backup_ok: boolean;
+}
+
+/** Accent tokens a folder may carry; "" uses the default surface styling. */
+export type FolderColor =
+  | ""
+  | "slate"
+  | "blue"
+  | "green"
+  | "amber"
+  | "red"
+  | "purple"
+  | "pink"
+  | "cyan";
+
+/** A flat grouping of servers — "Minigames", "Staging". */
+export interface ServerFolder {
+  id: string;
+  name: string;
+  description: string;
+  color: FolderColor;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  /** Servers in this folder that the current user can see. */
+  server_count: number;
 }
 
 export interface OverviewNode {

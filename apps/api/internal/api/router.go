@@ -52,6 +52,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets)
 	nodeH := handlers.NewNodeHandlers(s)
 	serverH := handlers.NewServerHandlers(s, serverRoot)
+	folderH := handlers.NewFolderHandlers(s)
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
@@ -149,6 +150,16 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 				r.Get("/{id}", nodeH.Get)
 				r.Put("/{id}", nodeH.Update)
 				r.Delete("/{id}", nodeH.Delete)
+			})
+
+			// Server folders — flat grouping over the fleet. Listing is scoped
+			// to folders the caller can see servers in; managing them is an
+			// admin concern, like creating the servers themselves.
+			r.Route("/server-folders", func(r chi.Router) {
+				r.Get("/", folderH.List)
+				r.With(requireAdmin(s)).Post("/", folderH.Create)
+				r.With(requireAdmin(s)).Put("/{id}", folderH.Update)
+				r.With(requireAdmin(s)).Delete("/{id}", folderH.Delete)
 			})
 
 			// Servers

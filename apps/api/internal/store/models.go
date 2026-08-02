@@ -67,6 +67,8 @@ var (
 	ErrServerMemberNotFound    = errors.New("server member not found")
 	ErrServerPermissionsStale  = errors.New("server permissions changed")
 	ErrAmbiguousUserEmail      = errors.New("multiple users match email")
+	ErrFolderNotFound          = errors.New("folder not found")
+	ErrFolderNameTaken         = errors.New("a folder with that name already exists")
 )
 
 // allServerPermissions is the set of grantable group permissions. Owners and
@@ -268,6 +270,10 @@ type Server struct {
 	AutoStart     bool            `json:"auto_start"`
 	Tags          []string        `json:"tags"`
 	Settings      json.RawMessage `json:"settings"`
+	// FolderID groups the server with its siblings in the panel. nil means
+	// ungrouped; deleting a folder resets its servers to nil rather than
+	// removing them.
+	FolderID *string `json:"folder_id"`
 	// Public status page: exposed at /status/<slug> (and the status subdomain)
 	// with no auth when PublicStatus is set and a slug is chosen.
 	PublicStatus bool      `json:"public_status"`
@@ -278,6 +284,23 @@ type Server struct {
 	// Derived (not a servers column): start of the open uptime segment, unix
 	// seconds. Set while the server is online, nil otherwise.
 	OnlineSince *int64 `json:"online_since,omitempty"`
+}
+
+// ServerFolder is a flat, fleet-wide grouping of servers — "Minigames",
+// "Staging". Folders carry no permissions of their own: a user sees a folder
+// because they can see servers inside it.
+type ServerFolder struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Color       string    `json:"color"`
+	SortOrder   int       `json:"sort_order"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+
+	// Derived (not a server_folders column): how many servers the requesting
+	// user can see inside this folder.
+	ServerCount int `json:"server_count"`
 }
 
 type InstalledMod struct {

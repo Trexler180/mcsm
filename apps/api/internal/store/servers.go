@@ -20,11 +20,11 @@ func (s *Store) CreateServer(ctx context.Context, srv *Server) (*Server, error) 
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO servers (id, node_id, owner_id, name, description, platform, mc_version, loader_version,
-		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, auto_start, tags, settings)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, auto_start, tags, settings, folder_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, srv.NodeID, srv.OwnerID, srv.Name, srv.Description, srv.Platform, srv.MCVersion, srv.LoaderVersion,
 		srv.DirectoryPath, srv.JavaBinary, strArray(srv.JVMArgs), srv.Port, srv.RAMMbMin, srv.RAMMbMax,
-		srv.AutoStart, strArray(srv.Tags), jsonRaw(srv.Settings),
+		srv.AutoStart, strArray(srv.Tags), jsonRaw(srv.Settings), srv.FolderID,
 	)
 	if err != nil {
 		return nil, err
@@ -37,13 +37,13 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
 		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings,
-		  public_status, COALESCE(public_slug, ''), created_at, updated_at,
+		  folder_id, public_status, COALESCE(public_slug, ''), created_at, updated_at,
 		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers WHERE id = ?`, id,
 	).Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 		&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
 		&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings),
-			&srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
+			&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("server not found")
 	}
@@ -72,7 +72,7 @@ func (s *Store) ListServers(ctx context.Context) ([]*Server, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
 		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings,
-		  public_status, COALESCE(public_slug, ''), created_at, updated_at,
+		  folder_id, public_status, COALESCE(public_slug, ''), created_at, updated_at,
 		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers ORDER BY name`)
 	if err != nil {
@@ -85,7 +85,7 @@ func (s *Store) ListServers(ctx context.Context) ([]*Server, error) {
 		if err := rows.Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 			&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
 			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings),
-			&srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
+			&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
 			return nil, err
 		}
 		servers = append(servers, &srv)
@@ -103,7 +103,7 @@ func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Serve
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, node_id, owner_id, name, description, platform, mc_version, loader_version,
 		  directory_path, java_binary, jvm_args, port, ram_mb_min, ram_mb_max, status, auto_start, tags, settings,
-		  public_status, COALESCE(public_slug, ''), created_at, updated_at,
+		  folder_id, public_status, COALESCE(public_slug, ''), created_at, updated_at,
 		  (SELECT MAX(u.started_at) FROM server_uptime u WHERE u.server_id = servers.id AND u.ended_at IS NULL) AS online_since
 		 FROM servers
 		 WHERE owner_id = ?
@@ -122,7 +122,7 @@ func (s *Store) ListServersForUser(ctx context.Context, userID string) ([]*Serve
 		if err := rows.Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 			&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
 			&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings),
-			&srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
+			&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince); err != nil {
 			return nil, err
 		}
 		servers = append(servers, &srv)
@@ -319,11 +319,11 @@ func (s *Store) UpdateServer(ctx context.Context, id string, srv *Server) error 
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE servers SET name=?, description=?, platform=?, mc_version=?, loader_version=?,
 		  directory_path=?, java_binary=?, jvm_args=?, port=?, ram_mb_min=?, ram_mb_max=?,
-		  auto_start=?, tags=?, settings=?, public_status=?, public_slug=?, updated_at=CURRENT_TIMESTAMP
+		  auto_start=?, tags=?, settings=?, folder_id=?, public_status=?, public_slug=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=?`,
 		srv.Name, srv.Description, srv.Platform, srv.MCVersion, srv.LoaderVersion,
 		srv.DirectoryPath, srv.JavaBinary, strArray(srv.JVMArgs), srv.Port, srv.RAMMbMin, srv.RAMMbMax,
-		srv.AutoStart, strArray(srv.Tags), jsonRaw(srv.Settings), srv.PublicStatus, srv.PublicSlug, id,
+		srv.AutoStart, strArray(srv.Tags), jsonRaw(srv.Settings), srv.FolderID, srv.PublicStatus, srv.PublicSlug, id,
 	)
 	return err
 }

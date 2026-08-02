@@ -32,6 +32,64 @@ func TestMigrationsApplyFromEmptySQLite(t *testing.T) {
 	}
 }
 
+// Migration 024 adds servers.folder_id, which SQLite refuses to drop while an
+// index still references it — so the Down leg has to drop servers_folder_id
+// first. Rolling down and back up must also leave existing servers intact.
+func TestServerFoldersMigrationRollsBack(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	goose.SetBaseFS(FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatal(err)
+	}
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(`INSERT INTO nodes (id, name, fqdn, port, scheme, token) VALUES ('n1','n','localhost',8090,'http','x')`)
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u1','u@e.com','x','admin')`)
+	mustExec(`INSERT INTO server_folders (id, name) VALUES ('f1','Minigames')`)
+	mustExec(`INSERT INTO servers (id, node_id, owner_id, name, platform, mc_version, directory_path, java_binary, port, folder_id)
+	          VALUES ('s1','n1','u1','bedwars','paper','1.21','servers/bedwars','java',25565,'f1')`)
+
+	if err := goose.Down(db, "."); err != nil {
+		t.Fatalf("rolling back the folders migration failed: %v", err)
+	}
+
+	// The server outlives the rollback; only the grouping is gone.
+	var name string
+	if err := db.QueryRow(`SELECT name FROM servers WHERE id='s1'`).Scan(&name); err != nil {
+		t.Fatalf("server should survive the rollback: %v", err)
+	}
+	if name != "bedwars" {
+		t.Fatalf("server name = %q, want bedwars", name)
+	}
+	if _, err := db.Exec(`SELECT folder_id FROM servers`); err == nil {
+		t.Fatal("folder_id column should be gone after rollback")
+	}
+
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatalf("re-applying the folders migration failed: %v", err)
+	}
+	var folderID *string
+	if err := db.QueryRow(`SELECT folder_id FROM servers WHERE id='s1'`).Scan(&folderID); err != nil {
+		t.Fatal(err)
+	}
+	if folderID != nil {
+		t.Fatalf("folder_id = %v, want NULL — the grouping is not restored by re-applying", *folderID)
+	}
+}
+
 // Migration 023 backfills whitelist-rejection alerts for users who predate the
 // feature — without which the alert exists but fires for nobody — while leaving
 // anyone who already has a rule for it alone, including one they disabled.

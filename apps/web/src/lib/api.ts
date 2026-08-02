@@ -38,6 +38,7 @@ import type {
   PlayerSessionsResponse,
   ScheduledTask,
   Server,
+  ServerFolder,
   ServerBans,
   ServerStats,
   ServerTime,
@@ -360,6 +361,25 @@ export const api = {
     // query string.
     ticket: () => post<{ ticket: string; expires_in: number }>("/auth/ticket"),
     me: () => get<User>("/auth/me"),
+  },
+
+  // Server folders — flat grouping over the fleet. Everyone can list the
+  // folders they have servers in; only admins may create, rename, or remove one.
+  serverFolders: {
+    list: (signal?: AbortSignal) =>
+      get<ServerFolder[]>("/server-folders", signal),
+    create: (data: {
+      name: string;
+      description?: string;
+      color?: string;
+      sort_order?: number;
+    }) => post<ServerFolder>("/server-folders", data),
+    update: (
+      id: string,
+      data: Partial<Pick<ServerFolder, "name" | "description" | "color" | "sort_order">>,
+    ) => put<ServerFolder>(`/server-folders/${id}`, data),
+    // Servers inside are kept — they just become ungrouped.
+    delete: (id: string) => del(`/server-folders/${id}`),
   },
 
   servers: {

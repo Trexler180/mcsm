@@ -16,6 +16,20 @@
 The granular permission model is live (not reserved). The `api_keys` table is
 still reserved for future automation use.
 
+### Server folders
+
+Folders (`server_folders`, `servers.folder_id`) are a flat, presentation-only
+grouping — they grant no access of their own. Creating, renaming, and deleting
+them is admin-only; moving a server between folders rides the server's existing
+`settings` permission, like renaming it.
+
+Listing is scoped rather than global: a non-admin is only shown folders that
+contain at least one server they can already see, and the reported server count
+covers only those servers, so a folder never leaks the existence of servers or
+sibling folders the caller cannot reach. Deleting a folder is non-destructive —
+the foreign key sets `folder_id` back to NULL, so its servers become ungrouped
+rather than being deleted or stopped.
+
 ### Privileged start-command fields
 
 `java_binary`, `jvm_args`, and `directory_path` are inputs the agent executes,

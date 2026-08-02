@@ -32,6 +32,7 @@ type serverOverview struct {
 	Platform       string     `json:"platform"`
 	MCVersion      string     `json:"mc_version"`
 	NodeID         string     `json:"node_id"`
+	FolderID       *string    `json:"folder_id"`
 	ActiveConflict bool       `json:"active_conflict"`
 	LastBackupAt   *time.Time `json:"last_backup_at"`
 	LastBackupOK   bool       `json:"last_backup_ok"`
@@ -131,6 +132,7 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 			Platform:       s.Platform,
 			MCVersion:      s.MCVersion,
 			NodeID:         s.NodeID,
+			FolderID:       s.FolderID,
 			ActiveConflict: conflictByServer[s.ID],
 		}
 		// Backup freshness: newest successful backup.

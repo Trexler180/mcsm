@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Copy,
+  Folder,
   FolderTree,
 
   MemoryStick,
@@ -17,6 +18,10 @@ import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
+import {
+  FolderSelect,
+  useServerFolders,
+} from "@/components/servers/folder-dialogs";
 import { useNotifications } from "@/store/notifications";
 import type { Server } from "@/lib/types";
 
@@ -33,6 +38,9 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
   const [cloneName, setCloneName] = useState("");
   const [cloneDir, setCloneDir] = useState("");
   const [cloneMods, setCloneMods] = useState(true);
+
+  const { data: folders = [] } = useServerFolders();
+  const [folderId, setFolderId] = useState<string | null>(server.folder_id);
 
   const [form, setForm] = useState({
     name: server.name,
@@ -52,10 +60,13 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
         port: Number(form.port),
         ram_mb_max: Number(form.ram_mb_max),
         ram_mb_min: Number(form.ram_mb_min),
+        folder_id: folderId,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["server", server.id] });
       qc.invalidateQueries({ queryKey: ["servers"] });
+      // Moving the server changes both folders' counts.
+      qc.invalidateQueries({ queryKey: ["server-folders"] });
       success("Settings saved");
     },
     onError: (e: Error) => error("Save failed", e.message),
@@ -127,7 +138,8 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
     form.directory_path !== server.directory_path ||
     form.port !== String(server.port) ||
     form.ram_mb_max !== String(server.ram_mb_max) ||
-    form.ram_mb_min !== String(server.ram_mb_min);
+    form.ram_mb_min !== String(server.ram_mb_min) ||
+    folderId !== server.folder_id;
 
   const inputLife = "hover:border-border-hover";
 
@@ -181,6 +193,20 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
                 onChange={f("directory_path")}
                 className={`font-mono ${inputLife}`}
                 placeholder="E:/mc-test"
+              />
+            </div>
+            {/* Panel-side grouping only — this has no bearing on where the
+                server's files live on the node. */}
+            <div className="space-y-1">
+              <Label className="flex items-center gap-1.5" htmlFor="server-folder">
+                <Folder className="h-3.5 w-3.5 text-text-secondary" />
+                Folder
+              </Label>
+              <FolderSelect
+                id="server-folder"
+                value={folderId}
+                onChange={setFolderId}
+                folders={folders}
               />
             </div>
           </div>

@@ -124,6 +124,32 @@ func setHelperModSetting(settings json.RawMessage, enabled bool) (json.RawMessag
 	return json.Marshal(m)
 }
 
+// resolveFolder turns a requested folder id into a value safe to store: nil for
+// "ungrouped" (nil or empty string), or the id once it's confirmed to exist.
+// Checking here converts what would be a foreign-key 500 into a clear 400.
+func (h *ServerHandlers) resolveFolder(r *http.Request, id *string) (*string, error) {
+	if id == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*id)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if _, err := h.store.GetServerFolder(r.Context(), trimmed); err != nil {
+		return nil, fmt.Errorf("folder not found")
+	}
+	return &trimmed, nil
+}
+
+// folderLabel renders a folder id for the audit diff, where "" reads as
+// ungrouped.
+func folderLabel(id *string) string {
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
 // ImportCandidates lists existing server directories on a node that aren't yet
 // managed by the panel, with detected settings to pre-fill the import dialog.
 func (h *ServerHandlers) ImportCandidates(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +253,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		AutoStart     bool            `json:"auto_start"`
 		Tags          []string        `json:"tags"`
 		Settings      json.RawMessage `json:"settings"`
+		FolderID      *string         `json:"folder_id"`
 		// ImportExisting adopts a server directory already on disk: its files are
 		// left untouched (no EULA write, no runtime install), and JarFile records
 		// the existing launcher so start runs their jar rather than fetching one.
@@ -291,6 +318,13 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if body.Settings == nil {
 		body.Settings = json.RawMessage("{}")
 	}
+	// Resolve the folder up front: a bad id should read as a 400 here, not as an
+	// opaque foreign-key failure from the insert.
+	folderID, err := h.resolveFolder(r, body.FolderID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	srv := &store.Server{
 		NodeID:        body.NodeID,
@@ -309,6 +343,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		AutoStart:     body.AutoStart,
 		Tags:          body.Tags,
 		Settings:      body.Settings,
+		FolderID:      folderID,
 	}
 
 	created, err := h.store.CreateServer(r.Context(), srv)
@@ -368,6 +403,10 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		Settings      json.RawMessage `json:"settings"`
 		PublicStatus  *bool           `json:"public_status"`
 		PublicSlug    *string         `json:"public_slug"`
+		// Raw so the three cases stay distinct: absent leaves the folder alone,
+		// explicit null ungroups the server, an id moves it. A *string would
+		// collapse the first two into nil.
+		FolderID json.RawMessage `json:"folder_id"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -463,6 +502,20 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			changes["settings"] = map[string]any{"from": "previous config", "to": "updated config"}
 		}
 		existing.Settings = body.Settings
+	}
+	if len(body.FolderID) > 0 {
+		var target *string
+		if err := json.Unmarshal(body.FolderID, &target); err != nil {
+			writeError(w, http.StatusBadRequest, "folder_id must be a folder id or null")
+			return
+		}
+		resolved, err := h.resolveFolder(r, target)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		record("folder_id", folderLabel(existing.FolderID), folderLabel(resolved))
+		existing.FolderID = resolved
 	}
 	if body.PublicSlug != nil {
 		slug := strings.ToLower(strings.TrimSpace(*body.PublicSlug))
