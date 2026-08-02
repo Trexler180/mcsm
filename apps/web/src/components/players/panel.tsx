@@ -19,10 +19,11 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, ConfirmDialog } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { useNotifications } from '@/store/notifications'
-import type { Player, PlayerActionKind, ServerStatus } from '@/lib/types'
+import type { GeyserInfo, Player, PlayerActionKind, ServerStatus } from '@/lib/types'
 import { PlayerDetailDialog } from './detail'
 import { PlayerActionsMenu } from './actions-menu'
 import { BansView } from './bans'
+import { BedrockWhitelistNotes, PlayerNameField, usePlayerName } from './name-field'
 
 interface PlayersPanelProps {
   serverId: string
@@ -299,12 +300,17 @@ const ADD_SUBMIT: Record<AddTab, { label: string; verb: string }> = {
 // operator list, or the ban list — each tab shows only the fields that intent
 // needs (a level picker for op, a reason for ban). Works online (live command)
 // or offline (edits the JSON files directly).
+//
+// Only the whitelist tab offers the Bedrock edition picker. Opping or banning a
+// Bedrock player still relies on the server already knowing them, which is a
+// separate problem from whitelisting someone who has never joined.
 function AddPlayerDialog({
   open,
   onClose,
   onSubmit,
   busy,
-  bedrockPrefix,
+  serverId,
+  meta,
   serverOnline,
 }: {
   open: boolean
@@ -312,18 +318,23 @@ function AddPlayerDialog({
   onSubmit: (
     kind: PlayerActionKind,
     name: string,
-    opts: { reason?: string; level?: number },
+    opts: { reason?: string; level?: number; bedrock?: boolean; gamertag?: string },
   ) => void
   busy: boolean
-  bedrockPrefix?: string
+  serverId: string
+  meta: GeyserInfo | undefined
   serverOnline: boolean
 }) {
   const [tab, setTab] = useState<AddTab>('whitelist_add')
   const [name, setName] = useState('')
   const [reason, setReason] = useState('')
   const [level, setLevel] = useState(4)
+  const bedrockPrefix = meta?.installed ? meta.prefix || undefined : undefined
+  const nameState = usePlayerName(serverId, meta)
+
+  const whitelisting = tab === 'whitelist_add'
   const trimmed = name.trim()
-  const valid = isValidName(trimmed, bedrockPrefix)
+  const valid = whitelisting ? nameState.selection.valid : isValidName(trimmed, bedrockPrefix)
 
   useEffect(() => {
     if (open) {
@@ -331,17 +342,29 @@ function AddPlayerDialog({
       setName('')
       setReason('')
       setLevel(4)
+      nameState.reset()
     }
+    // nameState.reset is stable enough for this open/close reset; re-running on
+    // every render of the hook would clear the field as the admin types.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const submit = () => {
-    if (!valid) return
+    if (!valid || busy) return
     if (tab === 'ban') onSubmit('ban', trimmed, { reason: reason.trim() || undefined })
     else if (tab === 'op')
       // A specific level only sticks via the offline ops.json edit; a live
       // server's /op always grants its default level, so don't send one.
       onSubmit('op', trimmed, serverOnline ? {} : { level })
-    else onSubmit('whitelist_add', trimmed, {})
+    else {
+      const sel = nameState.selection
+      onSubmit('whitelist_add', sel.name, {
+        bedrock: sel.edition === 'bedrock',
+        // The agent re-resolves this rather than trusting the name above, so a
+        // preview that went stale cannot write the wrong player.
+        gamertag: sel.edition === 'bedrock' ? sel.gamertag : undefined,
+      })
+    }
   }
 
   return (
@@ -373,26 +396,36 @@ function AddPlayerDialog({
       </div>
 
       <div className="space-y-4">
-        <div>
-          <label className="mb-1 block text-xs font-medium text-text-secondary">
-            Player name
-          </label>
-          <Input
-            placeholder="e.g. Notch"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit()
-            }}
-            autoFocus
-          />
-          {trimmed && !valid && (
-            <p className="mt-1 text-xs text-red-400">
-              Names are 1–16 characters: letters, digits, underscore.
-              {bedrockPrefix ? ` Bedrock players use the "${bedrockPrefix}" prefix.` : ''}
-            </p>
-          )}
-        </div>
+        {whitelisting ? (
+          <>
+            <PlayerNameField state={nameState} onSubmit={submit} autoFocus />
+            <BedrockWhitelistNotes
+              edition={nameState.edition}
+              whitelistEnabled={meta?.whitelist_enabled}
+            />
+          </>
+        ) : (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-text-secondary">
+              Player name
+            </label>
+            <Input
+              placeholder="e.g. Notch"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit()
+              }}
+              autoFocus
+            />
+            {trimmed && !valid && (
+              <p className="mt-1 text-xs text-red-400">
+                Names are 1–16 characters: letters, digits, underscore.
+                {bedrockPrefix ? ` Bedrock players use the "${bedrockPrefix}" prefix.` : ''}
+              </p>
+            )}
+          </div>
+        )}
 
         {tab === 'op' &&
           (serverOnline ? (
@@ -497,13 +530,13 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
     refetchInterval: isOnline ? 5_000 : false,
   })
 
-  // Geyser/Floodgate install + Bedrock prefix. Rarely changes, so fetch lazily.
+  // Geyser/Floodgate install, Bedrock prefix and whitelist state. Rarely
+  // changes, so fetch lazily.
   const { data: meta } = useQuery({
     queryKey: ['players-meta', serverId],
     queryFn: () => api.players.meta(serverId),
     staleTime: 5 * 60_000,
   })
-  const bedrockPrefix = meta?.installed ? meta.prefix || undefined : undefined
 
   const counts = useMemo(
     () => ({
@@ -573,16 +606,24 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
       uuid?: string
       reason?: string
       level?: number
+      bedrock?: boolean
+      gamertag?: string
     }) => api.players.action(serverId, vars),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['players', serverId] })
       if (vars.uuid) {
         qc.invalidateQueries({ queryKey: ['player-detail', serverId, vars.uuid] })
       }
-      success(
-        `${ACTION_VERB[vars.action]} ${vars.name}`,
-        isOnline ? 'Command sent to the live server' : 'Edited the server config files',
-      )
+      // A Bedrock whitelist change never uses a console command, so report what
+      // actually happened rather than the usual online/offline split.
+      const detail = vars.bedrock
+        ? isOnline
+          ? 'Updated whitelist.json and reloaded it'
+          : 'Updated whitelist.json'
+        : isOnline
+          ? 'Command sent to the live server'
+          : 'Edited the server config files'
+      success(`${ACTION_VERB[vars.action]} ${vars.name}`, detail)
     },
     onError: (e: Error) => error('Action failed', e.message),
   })
@@ -604,14 +645,23 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
   const applyAction = (
     kind: PlayerActionKind,
     player: Player,
-    opts: { reason?: string; level?: number } = {},
+    opts: { reason?: string; level?: number; bedrock?: boolean; gamertag?: string } = {},
   ) => {
+    // Whitelist changes for a Bedrock player have to edit whitelist.json: the
+    // console command would make the server resolve a Floodgate name against
+    // Mojang, which does not know it. Row actions infer this from the player's
+    // own Bedrock flag; the Add dialog states it explicitly.
+    const isWhitelist = kind === 'whitelist_add' || kind === 'whitelist_remove'
+    const bedrock = opts.bedrock ?? (isWhitelist && !!player.bedrock)
+
     action.mutate({
       action: kind,
       name: player.name,
       uuid: player.uuid,
       reason: opts.reason,
       level: opts.level,
+      bedrock: bedrock || undefined,
+      gamertag: opts.gamertag,
     })
   }
 
@@ -834,7 +884,8 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         busy={action.isPending}
-        bedrockPrefix={bedrockPrefix}
+        serverId={serverId}
+        meta={meta}
         serverOnline={isOnline}
         onSubmit={(kind, name, opts) => {
           applyAction(kind, { name, online: false }, opts)

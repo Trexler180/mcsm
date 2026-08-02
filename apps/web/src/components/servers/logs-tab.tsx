@@ -4,6 +4,7 @@ import { FileArchive, FileText, FileWarning, RefreshCw, Search } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 
 type LogFileItem = {
@@ -171,8 +172,10 @@ export function LogsTab({ serverId }: { serverId: string }) {
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {isLoadingFiles ? (
-            <div className="flex justify-center py-8">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <div className="space-y-1.5 p-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
             </div>
           ) : filteredLogFiles.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-text-secondary">

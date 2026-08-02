@@ -6,6 +6,7 @@ import type {
   FileTree,
   AgentStatus,
   GameVersion,
+  BedrockIdentity,
   GeyserInfo,
   ImportCandidate,
   InstalledMod,
@@ -40,6 +41,7 @@ import type {
   ServerBans,
   ServerStats,
   ServerTime,
+  ServerVitals,
   ServerMember,
   ServerMembersResponse,
   ServerPermission,
@@ -51,6 +53,7 @@ import type {
   NotificationChannel,
   NotificationItem,
   NotificationSeverity,
+  WorldUploadResult,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -436,6 +439,10 @@ export const api = {
         `/servers/${id}/helper-mod`,
         { enabled },
       ),
+    // Live telemetry pushed by the helper mod (TPS, tick times, heap, world
+    // counts). Served from agent memory, so polling costs the server nothing;
+    // servers without the mod report linked: false and no snapshot fields.
+    vitals: (id: string) => get<ServerVitals>(`/servers/${id}/vitals`),
     kill: (id: string) => post(`/servers/${id}/kill`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),
@@ -581,6 +588,39 @@ export const api = {
     },
   },
 
+  worlds: {
+    // Upload a zipped world. Not a plain file upload: the agent looks for
+    // level.dat inside the archive, unpacks only the world (a full server
+    // backup zip works too), and installs it as its own folder in the server
+    // root. `overwrite` is required to replace a world that already exists.
+    upload: (
+      serverId: string,
+      file: File,
+      opts: { name: string; overwrite?: boolean },
+      onProgress?: (p: UploadProgress) => void,
+    ) => {
+      const params = new URLSearchParams({ name: opts.name });
+      if (opts.overwrite) params.set("overwrite", "true");
+      const fd = new FormData();
+      fd.append("file", file);
+      return xhrUpload(
+        `${BASE}/servers/${serverId}/worlds/upload?${params.toString()}`,
+        fd,
+        onProgress,
+      ).then(async (r) => {
+        if (!r.ok) {
+          let msg = `HTTP ${r.status}`;
+          try {
+            const err = await r.json();
+            msg = err.error || msg;
+          } catch {}
+          throw new Error(msg);
+        }
+        return r.json() as Promise<WorldUploadResult>;
+      });
+    },
+  },
+
   players: {
     list: (serverId: string) => get<Player[]>(`/servers/${serverId}/players`),
     sessions: (serverId: string, opts?: { name?: string; hours?: number }) => {
@@ -598,6 +638,13 @@ export const api = {
       get<ServerBans>(`/servers/${serverId}/players/bans`),
     get: (serverId: string, uuid: string) =>
       get<PlayerDetail>(`/servers/${serverId}/players/${uuid}`),
+    // Resolves an Xbox gamertag to the Floodgate identity that would be written
+    // to whitelist.json. Read-only, so it is safe to call while the admin types.
+    // `q` accepts either the gamertag or the prefixed Floodgate name.
+    resolveBedrock: (serverId: string, q: string) =>
+      get<BedrockIdentity>(
+        `/servers/${serverId}/players/bedrock/resolve?q=${encodeURIComponent(q)}`,
+      ),
     action: (
       serverId: string,
       body: {
@@ -610,6 +657,13 @@ export const api = {
         /** Operator permission level (1–4) for the `op` action; applied to
          *  offline ops.json edits. Omit to use the server default. */
         level?: number;
+        /** Marks a whitelist change as targeting a Bedrock player, so the agent
+         *  writes whitelist.json directly instead of using a console command
+         *  the server cannot resolve. Set from the explicit edition choice. */
+        bedrock?: boolean;
+        /** Xbox gamertag to resolve for a Bedrock `whitelist_add`. Omit for a
+         *  player already in the roster, whose Floodgate UUID is known. */
+        gamertag?: string;
       },
     ) => post(`/servers/${serverId}/players/action`, body),
     // Permanently deletes a player's saved data files (offline-only; enforced by

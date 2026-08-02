@@ -148,6 +148,37 @@ export function ServerTerminal({ serverId }: TerminalProps) {
     termRef.current = term;
     fitAddonRef.current = fit;
 
+    // Touch scrolling: xterm renders its screen on top of the scroll viewport,
+    // so a native touch-drag never reaches the scrollable element and the
+    // console feels "stuck" on mobile. Translate one-finger vertical drags into
+    // buffer scrolls ourselves. Two-finger gestures fall through to the browser.
+    const rowHeight = (term.options.fontSize ?? 13) * (term.options.lineHeight ?? 1);
+    let touchY = 0;
+    let scrollRemainder = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      touchY = e.touches[0].clientY;
+      scrollRemainder = 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const y = e.touches[0].clientY;
+      // Drag up (finger moves toward top) => positive delta => scroll down.
+      scrollRemainder += (touchY - y) / rowHeight;
+      touchY = y;
+      const lines = Math.trunc(scrollRemainder);
+      if (lines !== 0) {
+        scrollRemainder -= lines;
+        term.scrollLines(lines);
+        // Only claim the gesture once we actually scroll, so a tap-to-focus or
+        // a drag on a terminal too short to scroll still behaves normally.
+        e.preventDefault();
+      }
+    };
+    const touchTarget = containerRef.current;
+    touchTarget.addEventListener("touchstart", onTouchStart, { passive: true });
+    touchTarget.addEventListener("touchmove", onTouchMove, { passive: false });
+
     const sc = new ServerConsole(serverId);
     consoleRef.current = sc;
 
@@ -178,6 +209,8 @@ export function ServerTerminal({ serverId }: TerminalProps) {
       unsub();
       sc.disconnect();
       resizeObserver.disconnect();
+      touchTarget.removeEventListener("touchstart", onTouchStart);
+      touchTarget.removeEventListener("touchmove", onTouchMove);
       term.dispose();
     };
   }, [serverId]);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Area,
@@ -13,6 +13,10 @@ import {
 } from "recharts";
 import { api } from "@/lib/api";
 import { GaplessBar } from "./gapless-bar";
+import {
+  hasTickData,
+  TickHealthCharts,
+} from "./tick-health-chart";
 
 const WINDOWS = [
   { hours: 1, label: "1h" },
@@ -33,6 +37,9 @@ type Point = {
   cpu_percent: number;
   mem_pct: number;
   players: number;
+  tps: number | null;
+  mspt_avg: number | null;
+  mspt_p95: number | null;
 };
 
 // Raw history is one sample a minute (1440 points over 24h, ~10k over 7d),
@@ -46,13 +53,43 @@ function consolidate(points: Point[]): Point[] {
   const size = Math.ceil(points.length / TARGET_BARS);
   const out: Point[] = [];
   for (let i = 0; i < points.length; i += size) {
-    const bucket = points.slice(i, i + size);
-    const n = bucket.length;
+    const end = Math.min(i + size, points.length);
+    const n = end - i;
+    let cpuTotal = 0;
+    let memTotal = 0;
+    let players = 0;
+    let tpsTotal = 0;
+    let tpsCount = 0;
+    let msptTotal = 0;
+    let msptCount = 0;
+    let msptP95: number | null = null;
+    for (let j = i; j < end; j++) {
+      const point = points[j];
+      cpuTotal += point.cpu_percent;
+      memTotal += point.mem_pct;
+      players = Math.max(players, point.players);
+      if (point.tps != null) {
+        tpsTotal += point.tps;
+        tpsCount++;
+      }
+      if (point.mspt_avg != null) {
+        msptTotal += point.mspt_avg;
+        msptCount++;
+      }
+      if (point.mspt_p95 != null) {
+        msptP95 = msptP95 == null ? point.mspt_p95 : Math.max(msptP95, point.mspt_p95);
+      }
+    }
     out.push({
-      ts: bucket[Math.floor(n / 2)].ts,
-      cpu_percent: bucket.reduce((s, p) => s + p.cpu_percent, 0) / n,
-      mem_pct: bucket.reduce((s, p) => s + p.mem_pct, 0) / n,
-      players: bucket.reduce((m, p) => Math.max(m, p.players), 0),
+      ts: points[i + Math.floor(n / 2)].ts,
+      cpu_percent: cpuTotal / n,
+      mem_pct: memTotal / n,
+      players,
+      // Tick values average over the reporting samples only; a bucket with
+      // nothing reported stays null so the line breaks there.
+      tps: tpsCount > 0 ? tpsTotal / tpsCount : null,
+      mspt_avg: msptCount > 0 ? msptTotal / msptCount : null,
+      mspt_p95: msptP95,
     });
   }
   return out;
@@ -77,21 +114,32 @@ export function MetricsHistoryChart({
     refetchInterval: 60_000,
   });
 
-  const points = consolidate(
-    (data?.points ?? []).map((p) => ({
-      ts: p.ts,
-      cpu_percent: p.cpu_percent,
-      players: p.players,
-      // Memory as a percentage of the configured heap (falling back to host
-      // RAM) so it shares the CPU axis.
-      mem_pct:
-        ramMaxMb && ramMaxMb > 0
-          ? Math.min(100, (p.ram_used_mb / ramMaxMb) * 100)
-          : p.ram_total_mb > 0
-            ? (p.ram_used_mb / p.ram_total_mb) * 100
-            : 0,
-    })),
+  const points = useMemo(
+    () =>
+      consolidate(
+        (data?.points ?? []).map((p) => ({
+          ts: p.ts,
+          cpu_percent: p.cpu_percent,
+          players: p.players,
+          tps: p.tps ?? null,
+          mspt_avg: p.mspt_avg ?? null,
+          mspt_p95: p.mspt_p95 ?? null,
+          // Memory as a percentage of the configured heap (falling back to host
+          // RAM) so it shares the CPU axis.
+          mem_pct:
+            ramMaxMb && ramMaxMb > 0
+              ? Math.min(100, (p.ram_used_mb / ramMaxMb) * 100)
+              : p.ram_total_mb > 0
+                ? (p.ram_used_mb / p.ram_total_mb) * 100
+                : 0,
+        })),
+      ),
+    [data?.points, ramMaxMb],
   );
+
+  const playerValues = useMemo(() => points.map((p) => p.players), [points]);
+
+  const showTick = hasTickData(points);
 
   return (
     <div className="bg-surface rounded-lg border border-border p-3">
@@ -123,73 +171,25 @@ export function MetricsHistoryChart({
         </div>
       ) : (
         <>
-          {/* Resources: CPU + Memory as a percentage area chart. */}
-          <ResponsiveContainer width="100%" height={160}>
-            <AreaChart data={points} margin={{ top: 4, right: 4, bottom: 0, left: -14 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-              <XAxis
-                dataKey="ts"
-                tickFormatter={(ts: number) => formatTick(ts, hours)}
-                tick={{ fontSize: 10, fill: "#8a8a8a" }}
-                tickLine={false}
-                axisLine={false}
-                minTickGap={40}
+          {/* Tick health leads: on a Minecraft server it is the measure that
+              says whether players are having a good time. CPU and memory are
+              how the host feels, which matters only once TPS says something is
+              wrong — so they read last, as the explanation rather than the
+              headline. Absent entirely when the helper mod has never reported. */}
+          {showTick && (
+            <div>
+              <TickHealthCharts
+                points={points}
+                formatTick={(ts) => formatTick(ts, hours)}
+                formatLabel={(ts) => new Date(ts * 1000).toLocaleString()}
               />
-              <YAxis
-                domain={[0, 100]}
-                tick={{ fontSize: 10, fill: "#8a8a8a" }}
-                tickLine={false}
-                axisLine={false}
-                width={44}
-                tickFormatter={(v: number) => `${v}%`}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "#1a1a1a",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
-                labelFormatter={(ts) =>
-                  new Date((ts as number) * 1000).toLocaleString()
-                }
-                formatter={(value, name) => {
-                  if (name === "cpu_percent")
-                    return [`${(value as number).toFixed(1)}%`, "CPU"];
-                  return [`${(value as number).toFixed(1)}%`, "Memory"];
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="cpu_percent"
-                stroke="#22c55e"
-                fill="#22c55e"
-                fillOpacity={0.12}
-                strokeWidth={1.5}
-                isAnimationActive={false}
-              />
-              <Area
-                type="monotone"
-                dataKey="mem_pct"
-                stroke="#3b82f6"
-                fill="#3b82f6"
-                fillOpacity={0.08}
-                strokeWidth={1.5}
-                isAnimationActive={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-          <div className="mt-1.5 flex items-center gap-4 text-[10px] text-text-secondary">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-green-500" /> CPU
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500" /> Memory
-            </span>
-          </div>
+            </div>
+          )}
 
-          {/* Players: separate bar chart below the resources graph. */}
-          <div className="mt-3 border-t border-border pt-3">
+          {/* Players: bar chart, peak per bucket. */}
+          <div
+            className={showTick ? "mt-3 border-t border-border pt-3" : undefined}
+          >
             <ResponsiveContainer width="100%" height={120}>
               <BarChart
                 data={points}
@@ -230,13 +230,80 @@ export function MetricsHistoryChart({
                   dataKey="players"
                   fill="#eab308"
                   isAnimationActive={false}
-                  shape={<GaplessBar values={points.map((p) => p.players)} />}
+                  shape={<GaplessBar values={playerValues} />}
                 />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-1.5 flex items-center gap-4 text-[10px] text-text-secondary">
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" /> Players
+              </span>
+            </div>
+          </div>
+
+          {/* Host resources: CPU + Memory as a percentage area chart. */}
+          <div className="mt-3 border-t border-border pt-3">
+            <ResponsiveContainer width="100%" height={160}>
+              <AreaChart data={points} margin={{ top: 4, right: 4, bottom: 0, left: -14 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="ts"
+                  tickFormatter={(ts: number) => formatTick(ts, hours)}
+                  tick={{ fontSize: 10, fill: "#8a8a8a" }}
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={40}
+                />
+                <YAxis
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10, fill: "#8a8a8a" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={44}
+                  tickFormatter={(v: number) => `${v}%`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "#1a1a1a",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: 6,
+                    fontSize: 12,
+                  }}
+                  labelFormatter={(ts) =>
+                    new Date((ts as number) * 1000).toLocaleString()
+                  }
+                  formatter={(value, name) => {
+                    if (name === "cpu_percent")
+                      return [`${(value as number).toFixed(1)}%`, "CPU"];
+                    return [`${(value as number).toFixed(1)}%`, "Memory"];
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="cpu_percent"
+                  stroke="#22c55e"
+                  fill="#22c55e"
+                  fillOpacity={0.12}
+                  strokeWidth={1.5}
+                  isAnimationActive={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="mem_pct"
+                  stroke="#3b82f6"
+                  fill="#3b82f6"
+                  fillOpacity={0.08}
+                  strokeWidth={1.5}
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+            <div className="mt-1.5 flex items-center gap-4 text-[10px] text-text-secondary">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" /> CPU
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500" /> Memory
               </span>
             </div>
           </div>

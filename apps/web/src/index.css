@@ -83,6 +83,15 @@ a,
 
 .xterm-viewport {
   overflow-y: auto !important;
+  /* Momentum scrolling on iOS for the scrollbar/keyboard paths. */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* We drive scrolling ourselves via touch handlers (the render layer sits above
+   the viewport), so keep the browser from also treating drags as page pans or
+   pull-to-refresh on the terminal surface. */
+.xterm .xterm-screen {
+  touch-action: none;
 }
 
 /* Scrollbar */

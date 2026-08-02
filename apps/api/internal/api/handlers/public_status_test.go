@@ -244,7 +244,7 @@ func TestPublicStatusEmbedMeta(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, needle := range []string{
-		`<meta property="og:title" content="Survival World — Offline">`,
+		`<meta property="og:title" content="Survival World is Offline">`,
 		`<meta property="og:image" content="https://panel.example.com/status/survival/og.png">`,
 		`<meta property="og:url" content="https://panel.example.com/status/survival">`,
 		`<meta name="theme-color" content="#ef4444">`,

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useNotifications } from "@/store/notifications";
@@ -332,9 +333,7 @@ export function AccessTab({ serverId }: { serverId: string }) {
         </div>
 
         {isLoading ? (
-          <div className="flex justify-center py-12">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          </div>
+          <SkeletonList rows={4} />
         ) : (
           <>
             {owner && (

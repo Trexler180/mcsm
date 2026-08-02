@@ -3,7 +3,13 @@ import { clsx } from 'clsx'
 export function Card({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={clsx('rounded-lg border border-border bg-surface', className)}
+      className={clsx(
+        // Flat dark surfaces read as one plane; a hairline top highlight plus a
+        // soft ambient shadow lifts cards off the background without looking
+        // skeuomorphic. The inset white edge fakes light coming from above.
+        'rounded-lg border border-border bg-surface shadow-[0_1px_2px_0_rgb(0_0_0/0.3),inset_0_1px_0_0_rgb(255_255_255/0.03)]',
+        className,
+      )}
       {...props}
     >
       {children}

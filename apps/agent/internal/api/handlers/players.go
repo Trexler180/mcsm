@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -64,16 +65,41 @@ func (h *PlayersHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // Meta reports the server's Bedrock-bridge setup (Geyser/Floodgate install and
-// the Bedrock username prefix), letting the UI show that Bedrock players are
-// supported even when none are currently in the roster.
+// the Bedrock username prefix) plus whether the whitelist is switched on,
+// letting the UI show that Bedrock players are supported even when none are
+// currently in the roster.
 func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	info, err := h.mgr.GeyserInfo(id)
+	info, err := h.mgr.PlayersMeta(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// ResolveBedrock looks up an Xbox gamertag and returns the Java-side identity
+// Floodgate would give that player on this server: their XUID, the UUID minted
+// from it, and the prefixed username. Read-only — it changes nothing, so the UI
+// can call it while the admin types to preview the entry before writing it.
+//
+// The two failure sentinels map onto distinct statuses so the panel can tell the
+// admin whether the gamertag is wrong or the lookup simply couldn't be made.
+func (h *PlayersHandlers) ResolveBedrock(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ident, err := h.mgr.ResolveBedrock(id, r.URL.Query().Get("q"))
+	if err != nil {
+		status := http.StatusBadRequest
+		switch {
+		case errors.Is(err, process.ErrGamertagNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, process.ErrBedrockLookupUnavailable):
+			status = http.StatusBadGateway
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ident)
 }
 
 // Bans returns the server's consolidated ban state: player bans
@@ -93,7 +119,8 @@ func (h *PlayersHandlers) Bans(w http.ResponseWriter, r *http.Request) {
 // Action performs a player administration action (op/deop/ban/pardon/kick/
 // ban_ip/pardon_ip/whitelist add or remove). When the server is online it is
 // issued as a console command; when offline the relevant config file is edited
-// directly.
+// directly. A Bedrock whitelist change is the exception and always edits the
+// file, because the console command cannot resolve a Floodgate name.
 func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
@@ -107,13 +134,35 @@ func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
 		// 0 means "use the default". It only applies to offline ops.json edits —
 		// a live server's /op command grants the server's default level.
 		Level int `json:"level"`
+		// Bedrock marks a whitelist change as targeting a Bedrock player, sent
+		// from the panel's explicit edition choice rather than inferred here.
+		Bedrock bool `json:"bedrock"`
+		// Gamertag is the Xbox gamertag to resolve for a Bedrock whitelist add.
+		Gamertag string `json:"gamertag"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.mgr.ApplyPlayerAction(id, body.Action, body.Name, body.UUID, body.Reason, body.IP, body.Level); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	err := h.mgr.ApplyPlayerAction(id, process.PlayerAction{
+		Action:   body.Action,
+		Name:     body.Name,
+		UUID:     body.UUID,
+		Reason:   body.Reason,
+		IP:       body.IP,
+		Level:    body.Level,
+		Bedrock:  body.Bedrock,
+		Gamertag: body.Gamertag,
+	})
+	if err != nil {
+		// A failed gamertag lookup is not the caller's mistake, so it is not a
+		// 400: the panel distinguishes "no such gamertag" from "couldn't check"
+		// and tells the admin whether retrying is worth it.
+		status := http.StatusBadRequest
+		if errors.Is(err, process.ErrBedrockLookupUnavailable) {
+			status = http.StatusBadGateway
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -73,9 +73,17 @@ func (h *PlayersHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // Meta proxies the server's Bedrock-bridge info (Geyser/Floodgate install +
-// username prefix).
+// username prefix) and whether its whitelist is switched on.
 func (h *PlayersHandlers) Meta(w http.ResponseWriter, r *http.Request) {
 	h.proxy(w, r, "/players/meta")
+}
+
+// ResolveBedrock proxies a read-only Xbox gamertag lookup, used by the whitelist
+// UI to preview the Floodgate identity that would be written. It changes
+// nothing, so it sits under plain players read access like the other GETs; the
+// write it informs is still gated on players.whitelist by Action.
+func (h *PlayersHandlers) ResolveBedrock(w http.ResponseWriter, r *http.Request) {
+	h.proxy(w, r, "/players/bedrock/resolve")
 }
 
 // Bans proxies the server's consolidated ban state (player + IP bans). Read

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -132,11 +133,37 @@ func main() {
 	// restart or upgrade, so a deploy doesn't take servers down (P0).
 	mgr.Reattach()
 
-	// Servers dial the agent back over loopback regardless of what address the
-	// agent advertises publicly: the JVM is always on this host, and pointing a
-	// spawned server at a routable address would send a credential over the
-	// network for no reason.
-	process.LinkAgentURL = fmt.Sprintf("http://127.0.0.1:%s", port)
+	// Servers dial the agent back on this host — the JVM is always local, so
+	// loopback is preferred: it keeps the credential off the network entirely.
+	// But loopback only reaches a listener that is actually bound to it, so when
+	// the agent is pinned to a single non-loopback interface the spawned servers
+	// must dial that address instead. (A wildcard bind fails net.ParseIP's
+	// loopback check but does include loopback, so it still gets 127.0.0.1.)
+	linkHost := "127.0.0.1"
+	if host != "" && host != "0.0.0.0" && host != "::" && !isLoopbackHost(host) {
+		linkHost = host
+	}
+	linkScheme := "http"
+	if tlsEnabled {
+		// The mod upgrades http→ws and https→wss; a TLS-only listener must be
+		// advertised as such or the handshake dies at the first byte.
+		linkScheme = "https"
+		// ...and it must be advertised under a name the certificate covers, or the
+		// mod's own hostname verification rejects a link it would otherwise make.
+		resolved, reason := linkHostForTLS(certFile, linkHost)
+		if reason != "" {
+			log.Printf("helper mod link over TLS: %s", reason)
+		}
+		linkHost = resolved
+	}
+	if linkHost == "" {
+		// No advertisable host. linkEnviron treats an empty URL as "stay dormant",
+		// which leaves servers on the log-scraping and stdin paths rather than
+		// having every one of them retry a handshake that cannot succeed.
+		process.LinkAgentURL = ""
+	} else {
+		process.LinkAgentURL = fmt.Sprintf("%s://%s:%s", linkScheme, linkHost, port)
+	}
 
 	// Helper mod build resolution. The mod is released from its own repository,
 	// so new Minecraft versions are supported by publishing a build there rather
@@ -170,9 +197,40 @@ func main() {
 		mgr.SetLinkRoster(serverID, players)
 	})
 
+	// The roster entry has a freshness TTL, but waiting it out means up to 45s
+	// of a stopped server still "showing" players. A disconnect is a positive
+	// signal that mod data is no longer live — act on it immediately and let the
+	// console path take over.
+	linkSink.OnDisconnectFunc(mgr.ClearLinkRoster)
+
+	// A disconnect keeps the last snapshot on purpose; a purge means the server
+	// is gone for good, so drop the entry rather than let it outlive the server.
+	mgr.OnUnregisterFunc(linkSink.Forget)
+
 	links := link.NewRegistry(linkSink, mgr)
 
-	router := agentapi.NewRouter(token, mgr, collector, serverRoot, links)
+	// Route console commands through the mod when one is linked. This is the only
+	// production caller of the RPC path: player actions stay on stdin, because
+	// nothing about touching the console should quietly reroute moderation.
+	//
+	// The error mapping is the load-bearing part. Only link.ErrNoSession and
+	// link.ErrNotDelivered mean the command provably never reached the server, and
+	// only those become ErrLinkUnavailable — the sentinel that authorises a stdin
+	// retry. A timeout is passed through as an ordinary error precisely so it does
+	// not earn one, since the command may already have run.
+	mgr.SetLinkExec(func(ctx context.Context, serverID, cmd string) (process.ExecOutcome, error) {
+		result, err := links.ExecCommand(ctx, serverID, cmd)
+		switch {
+		case err == nil:
+			return process.ExecOutcome{ViaMod: true, Success: result.Success, Output: result.Output}, nil
+		case errors.Is(err, link.ErrNoSession), errors.Is(err, link.ErrNotDelivered):
+			return process.ExecOutcome{}, fmt.Errorf("%w: %v", process.ErrLinkUnavailable, err)
+		default:
+			return process.ExecOutcome{}, err
+		}
+	})
+
+	router := agentapi.NewRouter(token, mgr, collector, serverRoot, links, linkSink)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", host, port),

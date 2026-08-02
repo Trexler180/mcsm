@@ -4,11 +4,55 @@ import { Server, Activity, ArrowLeftRight, ShieldAlert } from "lucide-react";
 import { Route as rootRoute } from "./__root";
 import { Header } from "@/components/layout/header";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { AttentionCard } from "@/components/dashboard/attention-card";
 import { FleetGrid } from "@/components/dashboard/fleet-grid";
 import { NodeHealthCard } from "@/components/dashboard/node-health";
 import { ActivityFeed } from "@/components/dashboard/activity-feed";
 import { api } from "@/lib/api";
+
+// Placeholder for the region below the stat tiles while the overview loads:
+// an attention banner, the fleet grid, and the two bottom panels.
+function DashboardSkeleton() {
+  return (
+    <>
+      <Card>
+        <CardContent className="py-5">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="mt-3 h-4 w-full max-w-md" />
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i}>
+            <CardContent className="py-5">
+              <div className="flex items-center justify-between gap-3">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="mt-4 h-2 w-full" />
+              <Skeleton className="mt-3 h-3 w-24" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <Card key={i}>
+            <CardContent className="space-y-3 py-5">
+              <Skeleton className="h-4 w-32" />
+              {Array.from({ length: 4 }).map((_, j) => (
+                <Skeleton key={j} className="h-3 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
 
 function DashboardPage() {
   const navigate = useNavigate();
@@ -61,7 +105,14 @@ function DashboardPage() {
       <div className="space-y-6 p-4 sm:p-6">
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {stats.map((s) => (
-            <Card key={s.label}>
+            <Card
+              key={s.label}
+              className={
+                s.danger
+                  ? "border-red-500/30 bg-red-500/[0.03]"
+                  : undefined
+              }
+            >
               {/* Tighter gap on phones so two stat cards fit ~360px without crowding. */}
               <CardContent className="flex items-center gap-3 py-4 sm:gap-4">
                 <div
@@ -84,7 +135,11 @@ function DashboardPage() {
                   />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-2xl font-bold text-text-primary">
+                  <p
+                    className={`text-2xl font-bold tabular-nums ${
+                      s.danger ? "text-red-400" : "text-text-primary"
+                    }`}
+                  >
                     {s.value}
                   </p>
                   <p className="truncate text-sm text-text-secondary">
@@ -96,7 +151,7 @@ function DashboardPage() {
           ))}
         </div>
 
-        {overview && (
+        {overview ? (
           <>
             <AttentionCard
               overview={overview}
@@ -115,6 +170,8 @@ function DashboardPage() {
               />
             </div>
           </>
+        ) : (
+          <DashboardSkeleton />
         )}
       </div>
     </div>

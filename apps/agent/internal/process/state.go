@@ -69,20 +69,36 @@ func readBannedIPs(dir string) []bannedIPEntry {
 	return readJSONList[bannedIPEntry](filepath.Join(dir, "banned-ips.json"))
 }
 
-// onlineMode reports the server's online-mode setting (default true when the
-// property or file is absent, matching vanilla). Drives offline UUID handling.
-func onlineMode(dir string) bool {
+// serverProperty reads a single key out of server.properties. Returns ok=false
+// when the file or the key is absent, so each caller applies vanilla's own
+// default for that setting rather than a shared guess.
+func serverProperty(dir, key string) (string, bool) {
 	data, err := os.ReadFile(filepath.Join(dir, "server.properties"))
 	if err != nil {
-		return true
+		return "", false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "online-mode="); ok {
-			return strings.TrimSpace(v) != "false"
+		if v, ok := strings.CutPrefix(line, key+"="); ok {
+			return strings.TrimSpace(v), true
 		}
 	}
-	return true
+	return "", false
+}
+
+// onlineMode reports the server's online-mode setting (default true when the
+// property or file is absent, matching vanilla). Drives offline UUID handling.
+func onlineMode(dir string) bool {
+	v, ok := serverProperty(dir, "online-mode")
+	return !ok || v != "false"
+}
+
+// whitelistEnabled reports the server's white-list setting (default false when
+// absent, matching vanilla). Surfaced to the UI so an admin who adds a player
+// while the whitelist is switched off is told the entry enforces nothing yet.
+func whitelistEnabled(dir string) bool {
+	v, ok := serverProperty(dir, "white-list")
+	return ok && strings.EqualFold(v, "true")
 }
 
 // playerState is the op/whitelist/ban status read from a server's config files,

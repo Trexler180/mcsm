@@ -3,6 +3,8 @@ package link
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -58,6 +60,50 @@ func (r *Registry) Connected(serverID string) bool {
 	return ok
 }
 
+// ExecCommand runs a console command through a server's helper mod and returns
+// what the command actually replied — the thing writing to stdin can never tell
+// us.
+//
+// The error contract is the important part, because the caller's fallback is to
+// run the same command again over stdin. ErrNoSession and ErrNotDelivered both
+// mean the mod provably never received the request, so retrying is safe. Every
+// other error — a timeout above all — means the command may already have run,
+// and re-issuing it would execute it twice. Callers must not fall back on those.
+//
+// A command the server understood and rejected is not an error here: it comes
+// back as ExecResult.Success false, which is a fact about the command rather
+// than about the link.
+func (r *Registry) ExecCommand(ctx context.Context, serverID, cmd string) (ExecResult, error) {
+	session, ok := r.Get(serverID)
+	if !ok {
+		return ExecResult{}, ErrNoSession
+	}
+
+	resp, err := session.Call(ctx, MethodCommandExec, map[string]string{"command": cmd})
+	if err != nil {
+		return ExecResult{}, err
+	}
+	if !resp.OK {
+		// The mod refused the request outright (unknown method, bad params). It
+		// did not execute anything, so this is safe to retry — an older mod that
+		// predates command.exec must not strand the console.
+		msg := "mod rejected command"
+		if resp.Error != nil {
+			msg = resp.Error.Code + ": " + resp.Error.Message
+		}
+		return ExecResult{}, fmt.Errorf("%w: %s", ErrNotDelivered, msg)
+	}
+
+	var result ExecResult
+	if len(resp.Result) > 0 {
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			// The command ran; only our reading of the reply failed. Not retryable.
+			return ExecResult{}, fmt.Errorf("link: decode exec result: %w", err)
+		}
+	}
+	return result, nil
+}
+
 // Handle serves the mod link endpoint. Mount it at /agent/v1/link/{id}.
 //
 // Authentication happens before the WebSocket upgrade, so a bad token never
@@ -83,6 +129,11 @@ func (r *Registry) Handle(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	// Every early return below closes the connection explicitly, but the ordinary
+	// path — serve() returning after a read error — did not, leaving it to the
+	// library to notice. CloseNow is idempotent and cheap, so make release
+	// unconditional rather than dependent on which way the session ended.
+	defer conn.CloseNow()
 	conn.SetReadLimit(maxFrameBytes)
 
 	// The handshake must not hang a goroutine forever on a peer that connects
@@ -93,7 +144,16 @@ func (r *Registry) Handle(w http.ResponseWriter, req *http.Request) {
 
 	hello, err := readHello(handshakeCtx, conn)
 	if err != nil {
-		_ = conn.Close(CloseBadVersion, "expected hello")
+		// 4400 means "this agent will never speak your protocol" and tells the
+		// mod to stop retrying forever, so it is reserved for an actual version
+		// mismatch. Every other handshake failure — a timeout, a malformed frame,
+		// a network hiccup — is transient, and closing it with 4400 would
+		// permanently disable a mod that a simple retry would have connected.
+		if errors.Is(err, errBadVersion) {
+			_ = conn.Close(CloseBadVersion, "unsupported protocol version")
+		} else {
+			_ = conn.Close(websocket.StatusProtocolError, "expected hello")
+		}
 		return
 	}
 
@@ -107,15 +167,23 @@ func (r *Registry) Handle(w http.ResponseWriter, req *http.Request) {
 		_ = conn.Close(CloseDuplicate, "session already established")
 		return
 	}
-	defer r.unregister(serverID, session)
 
 	if err := sendWelcome(ctx, session); err != nil {
+		r.unregister(serverID, session)
 		_ = conn.Close(websocket.StatusInternalError, "welcome failed")
 		return
 	}
 
 	r.sink.OnConnect(serverID, hello)
-	defer r.sink.OnDisconnect(serverID)
+	defer func() {
+		// Order matters, and defers run last-registered-first, so these are one
+		// closure rather than two statements: the registry must already report
+		// the server unlinked before the sink tells the rest of the agent to stop
+		// trusting mod data. Reversed, a consumer reacting to OnDisconnect would
+		// still find a live session in the registry and could re-derive from it.
+		r.unregister(serverID, session)
+		r.sink.OnDisconnect(serverID)
+	}()
 
 	log.Printf("helper mod linked: server=%s mc=%s loader=%s/%s mod=%s",
 		serverID, hello.MCVersion, hello.Loader, hello.LoaderVersion, hello.ModVersion)
@@ -159,8 +227,11 @@ func readHello(ctx context.Context, conn *websocket.Conn) (Hello, error) {
 	if err := json.Unmarshal(data, &env); err != nil {
 		return Hello{}, err
 	}
-	if env.V != ProtocolVersion || env.Type != TypeHello {
+	if env.Type != TypeHello {
 		return Hello{}, errBadHandshake
+	}
+	if env.V != ProtocolVersion {
+		return Hello{}, errBadVersion
 	}
 
 	var hello Hello
@@ -176,7 +247,7 @@ func readHello(ctx context.Context, conn *websocket.Conn) (Hello, error) {
 func sendWelcome(ctx context.Context, s *Session) error {
 	welcome := Welcome{
 		HeartbeatMS:          heartbeatInterval.Milliseconds(),
-		AcceptedCapabilities: s.hello.Capabilities,
+		AcceptedCapabilities: knownCapabilities(s.hello.Capabilities),
 		MaxFrameBytes:        maxFrameBytes,
 	}
 
@@ -200,8 +271,37 @@ func bearerToken(header string) string {
 	return strings.TrimSpace(header[len(prefix):])
 }
 
-type handshakeError struct{}
+// knownCapabilities filters what the mod announced down to what this agent
+// actually understands, so accepted_capabilities is a real negotiation result
+// rather than an echo — a newer mod learns which of its features this agent
+// will use, instead of being told "all of them" by an agent that won't.
+func knownCapabilities(announced []string) []string {
+	known := map[string]bool{
+		CapVitals:       true,
+		CapPlayerEvents: true,
+		CapRPC:          true,
+		CapCommandExec:  true,
+	}
+	accepted := make([]string, 0, len(announced))
+	for _, c := range announced {
+		if known[c] {
+			accepted = append(accepted, c)
+		}
+	}
+	return accepted
+}
 
-func (handshakeError) Error() string { return "link: bad handshake" }
+var (
+	errBadHandshake = errors.New("link: bad handshake")
+	// errBadVersion is the one handshake failure the mod must not retry.
+	errBadVersion = errors.New("link: unsupported protocol version")
 
-var errBadHandshake = handshakeError{}
+	// ErrNoSession means the server has no helper mod linked at all.
+	ErrNoSession = errors.New("link: no session")
+
+	// ErrNotDelivered means an RPC request never reached the mod. It is the
+	// caller's licence to retry a side-effecting call down a different path;
+	// absence of it means the call may have taken effect, so a retry could
+	// duplicate it.
+	ErrNotDelivered = errors.New("link: request not delivered")
+)

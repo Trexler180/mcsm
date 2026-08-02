@@ -5,18 +5,22 @@ import (
 	"time"
 )
 
+// registerInstance plants a bare instance so the manager considers the server
+// running. The link-roster path never dereferences it — which these tests rely
+// on, since a real Instance needs a live process behind it.
+func registerInstance(m *Manager, id string) {
+	m.mu.Lock()
+	m.instances[id] = &Instance{ID: id}
+	m.mu.Unlock()
+}
+
 // The symptom this guards against: with the helper mod connected, the players
 // tab was still typing `/list` into the server console. A mod-reported roster
 // must take over that job entirely — otherwise the mod is installed, linked,
 // and pointless.
 func TestRefreshPlayersPrefersLinkRoster(t *testing.T) {
 	m := NewManager(t.TempDir())
-
-	// No instance is registered, so the console path can only return nil. If the
-	// link roster is used, we get players back — which is the whole assertion.
-	if got := m.RefreshPlayers("srv1", time.Millisecond); got != nil {
-		t.Fatalf("precondition: expected no roster without a link, got %v", got)
-	}
+	registerInstance(m, "srv1")
 
 	m.SetLinkRoster("srv1", []Player{
 		{Name: "Steve", UUID: "11111111-2222-3333-4444-555555555555", Online: true},
@@ -32,6 +36,19 @@ func TestRefreshPlayersPrefersLinkRoster(t *testing.T) {
 	}
 	if !m.HasLinkRoster("srv1") {
 		t.Error("HasLinkRoster should report the mod as the roster source")
+	}
+}
+
+// A roster entry that outlives its server — the disconnect signal and a stop
+// can race — must never make a stopped server report players online.
+func TestStoppedServerServesNoLinkRoster(t *testing.T) {
+	m := NewManager(t.TempDir())
+
+	// Fresh roster, but no instance: the server is not running.
+	m.SetLinkRoster("srv1", []Player{{Name: "Steve", Online: true}})
+
+	if got := m.RefreshPlayers("srv1", time.Millisecond); got != nil {
+		t.Errorf("a stopped server reported players: %v", got)
 	}
 }
 
@@ -70,6 +87,7 @@ func TestClearLinkRoster(t *testing.T) {
 // stored roster must not be aliased into their slice.
 func TestLinkRosterReturnsACopy(t *testing.T) {
 	m := NewManager(t.TempDir())
+	registerInstance(m, "srv1")
 	m.SetLinkRoster("srv1", []Player{{Name: "Steve", Online: true}})
 
 	first := m.RefreshPlayers("srv1", time.Millisecond)

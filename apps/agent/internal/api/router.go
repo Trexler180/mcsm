@@ -15,8 +15,9 @@ import (
 // NewRouter builds the agent's HTTP surface.
 //
 // links may be nil, in which case the helper-mod endpoint is simply not mounted
-// and every server falls back to log scraping and stdin.
-func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector, serverRoot string, links *link.Registry) http.Handler {
+// and every server falls back to log scraping and stdin. linkSink may likewise
+// be nil; the vitals endpoint then reports every server as unlinked.
+func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector, serverRoot string, links *link.Registry, linkSink *link.MemorySink) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
@@ -35,10 +36,12 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 
 	h := handlers.NewServerHandlers(mgr, serverRoot)
 	ch := handlers.NewConsoleHandlers(mgr, serverRoot)
-	mh := handlers.NewMetricsHandlers(mgr, collector)
+	mh := handlers.NewMetricsHandlers(mgr, collector, linkSink)
 	fh := handlers.NewFileHandlers(mgr)
 	bh := handlers.NewBackupHandlers(mgr, serverRoot)
+	wh := handlers.NewWorldHandlers(mgr)
 	ph := handlers.NewPlayersHandlers(mgr)
+	vh := handlers.NewVitalsHandlers(linkSink)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(token))
@@ -70,6 +73,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				r.Get("/players", ph.List)
 				r.Get("/players/meta", ph.Meta)
 				r.Get("/players/bans", ph.Bans)
+				r.Get("/players/bedrock/resolve", ph.ResolveBedrock)
 				r.Post("/players/action", ph.Action)
 				r.Get("/players/{uuid}", ph.Detail)
 				r.Delete("/players/{uuid}", ph.Delete)
@@ -77,6 +81,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				r.Get("/console", ch.Console)
 				r.Get("/metrics", mh.ServerMetrics)
 				r.Get("/stats", mh.Stats)
+				r.Get("/vitals", vh.Vitals)
 
 				r.Get("/files", fh.List)
 				r.Get("/files/tree", fh.Tree)
@@ -88,6 +93,11 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				r.Post("/files/hashes", fh.Hashes)
 				r.Get("/files/download", fh.Download)
 				r.Post("/files/upload", fh.Upload)
+
+				// Worlds get their own upload route rather than reusing the file
+				// upload: the zip has to be validated and unpacked into a folder,
+				// not dropped on disk as-is.
+				r.Post("/worlds/upload", wh.Upload)
 			})
 		})
 	})

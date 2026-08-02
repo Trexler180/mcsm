@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -509,9 +510,7 @@ export function TasksTab({ serverId }: { serverId: string }) {
       )}
 
       {isLoading ? (
-        <div className="flex justify-center py-8">
-          <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList rows={4} />
       ) : tasks.length === 0 ? (
         <EmptyState
           icon={CalendarClock}

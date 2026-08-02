@@ -17,12 +17,12 @@ func TestRollupKeepsHistoryPastPrune(t *testing.T) {
 	oldHour := time.Now().Add(-40 * 24 * time.Hour).Truncate(time.Hour)
 	for i := 0; i < 4; i++ {
 		ts := oldHour.Add(time.Duration(i*15) * time.Minute)
-		if err := s.InsertServerMetric(ctx, srv.ID, ts, float64(10*(i+1)), int64(1000+i*100), 8192, i); err != nil {
+		if err := s.InsertServerMetric(ctx, srv.ID, ts, float64(10*(i+1)), int64(1000+i*100), 8192, i, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	now := time.Now()
-	if err := s.InsertServerMetric(ctx, srv.ID, now, 50, 2000, 8192, 5); err != nil {
+	if err := s.InsertServerMetric(ctx, srv.ID, now, 50, 2000, 8192, 5, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,17 +140,17 @@ func TestStatsAggregates(t *testing.T) {
 	// (peaks 4 then 8) plus a raw sample now (peak 2).
 	h1 := now.Add(-26 * time.Hour).Truncate(time.Hour)
 	for i := 0; i < 30; i++ {
-		if err := s.InsertServerMetric(ctx, srv.ID, h1.Add(time.Duration(i)*time.Minute), 20, 1024, 8192, 4); err != nil {
+		if err := s.InsertServerMetric(ctx, srv.ID, h1.Add(time.Duration(i)*time.Minute), 20, 1024, 8192, 4, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.InsertServerMetric(ctx, srv.ID, h1.Add(time.Hour+time.Duration(i)*time.Minute), 20, 1024, 8192, 8); err != nil {
+		if err := s.InsertServerMetric(ctx, srv.ID, h1.Add(time.Hour+time.Duration(i)*time.Minute), 20, 1024, 8192, 8, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := s.RollupServerMetricsHourly(ctx, h1.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.InsertServerMetric(ctx, srv.ID, now, 10, 1024, 8192, 2); err != nil {
+	if err := s.InsertServerMetric(ctx, srv.ID, now, 10, 1024, 8192, 2, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -33,7 +33,7 @@ const FileName = "mcsm-helper.jar"
 // there are several.
 const (
 	// ModVersion is the embedded build's own version.
-	ModVersion = "1.0.0"
+	ModVersion = "1.0.2"
 	// ProtocolVersion is the link protocol this build speaks. It bounds which
 	// published builds the agent is willing to install.
 	ProtocolVersion = 1

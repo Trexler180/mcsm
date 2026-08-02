@@ -40,10 +40,21 @@ token is rejected before a WebSocket session exists.
 | Code | Meaning | Mod's reaction |
 |---|---|---|
 | `1000` / `1001` | Normal / agent going away | Reconnect with backoff |
+| `1002` | Handshake failed for a transient reason (timeout, malformed first frame) | Reconnect with backoff |
 | `4400` | Unsupported protocol version | **Stop permanently.** Do not retry; log once. |
 | `4401` | Bad or expired token | **Stop permanently.** Retrying cannot help. |
-| `4409` | Another live session already exists for this server id | Stop; a duplicate is a bug, not a race to win |
+| `4409` | Another live session already exists for this server id | Reconnect with backoff; log a warning |
 | anything else | Unexpected | Reconnect with backoff |
+
+`4400` is reserved for an actual version mismatch — it is the one close code that
+tells the mod to give up for the rest of the server's life, so the agent must
+never use it for a handshake that merely timed out or arrived garbled.
+
+`4409` is retryable because the usual cause is the mod's own previous connection
+not yet torn down on the agent side. The agent evicts any session that sends
+nothing for **4× the heartbeat interval** (a healthy mod sends a snapshot every
+heartbeat, so silence that long means the connection is dead), which bounds how
+long a reconnect can keep colliding with its own ghost.
 
 Reconnect backoff: 1s, doubling to a 60s ceiling, with jitter. The mod must never
 reconnect in a tight loop and must never log more than once per backoff step.
@@ -117,6 +128,20 @@ versions. A future Paper adapter that cannot report MSPT simply omits `vitals`.
 The agent dictates `heartbeat_ms` so snapshots align with the existing metric
 sample interval. The mod must honour it, not its own default.
 
+`accepted_capabilities` is the intersection of what the mod announced and what
+the agent understands — not an echo. A mod that announces a capability the agent
+does not list back must not expect the agent to act on it.
+
+`max_frame_bytes` is binding, not advisory. The agent enforces it as a read
+limit, and a frame over it **closes the session** rather than arriving
+truncated — so a mod that ignores the value and periodically exceeds it does not
+lose one frame, it loses the link, and reconnects only to lose it again on the
+next heartbeat. The mod therefore measures each snapshot before queueing it and
+degrades to fit: `players.list` is trimmed first (`players.online` still carries
+the true count), then `dimensions` is dropped. It also uses the value to bound
+inbound frame reassembly, so a peer cannot decide how much of the server's heap
+to consume.
+
 If the agent will not accept the session it closes with a code from §1 instead of
 sending `welcome`.
 
@@ -173,6 +198,13 @@ Never rely on an event for durable state; that is the snapshot's job.
 | `player_death` | `uuid`, `name`, `message` (rendered death message) |
 | `server_ready` | — (fired when the server finishes starting) |
 | `server_stopping` | — |
+
+Events produced while the link is down are held in the outbound queue and flushed
+after the next `hello`, so `server_ready` — which is necessarily queued before the
+first connection exists — is delivered rather than discarded. Frames belonging to
+a session are dropped when *that* session ends, which also stops an
+`rpc_response` outliving its request: the agent restarts correlation ids per
+session, so a stale id could otherwise be matched against a live call.
 
 ### 3.5 `rpc_request` — agent → mod
 
@@ -260,7 +292,13 @@ is helping is worse than no mod.
    path may iterate all entities on the tick thread on demand; entity and chunk
    counts are gathered on the tick that precedes a heartbeat, cheaply.
 5. All logging is rate-limited. A disconnected agent must not produce log spam,
-   because the log is also what the panel shows the user.
+   because the log is also what the panel shows the user. A condition that
+   recurs every heartbeat — an unknown frame type, an oversized snapshot — is
+   logged once per session, not once per occurrence.
+6. Shutdown does not wait on the network. The mod gives the IO thread a bounded
+   grace period to flush `server_stopping`, but only when a session is actually
+   live and something is queued on it. A server whose agent was never reachable
+   must stop exactly as fast as it would without the mod installed.
 
 ---
 

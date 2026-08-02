@@ -4,6 +4,7 @@ import { HardDrive, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { Backup } from "@/lib/types";
@@ -79,9 +80,7 @@ export function BackupsTab({ serverId }: { serverId: string }) {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-8">
-          <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-        </div>
+        <SkeletonList rows={4} />
       ) : backups.length === 0 ? (
         <EmptyState
           icon={HardDrive}

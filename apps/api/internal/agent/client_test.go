@@ -85,3 +85,31 @@ func TestGetStatusSurfacesAgentError(t *testing.T) {
 		t.Fatalf("agent error not surfaced, got %v", err)
 	}
 }
+
+func TestGetServerStatsDecodesEmbeddedVitals(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"status":"online",
+			"cpu_percent":12.5,
+			"ram_used_mb":1024,
+			"ram_total_mb":8192,
+			"players":[],
+			"vitals":{
+				"linked":true,
+				"tps":{"m1":19.9,"m5":19.8,"m15":19.7},
+				"mspt":{"avg":32.1,"p50":30,"p95":45,"p99":50,"max":60}
+			}
+		}`))
+	})
+
+	stats, err := c.GetServerStats(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("GetServerStats: %v", err)
+	}
+	if stats.Vitals == nil || !stats.Vitals.Linked || stats.Vitals.TPS == nil || stats.Vitals.MSPT == nil {
+		t.Fatalf("embedded vitals were not decoded: %#v", stats.Vitals)
+	}
+	if stats.Vitals.TPS.M1 != 19.9 || stats.Vitals.MSPT.P95 != 45 {
+		t.Fatalf("unexpected vitals: %#v", stats.Vitals)
+	}
+}

@@ -146,6 +146,11 @@ export interface MetricPoint {
   ram_used_mb: number;
   ram_total_mb: number;
   players: number;
+  // Tick health from the helper mod. null = the mod was not reporting for that
+  // bucket (vanilla server, mod not installed yet, history predating it).
+  tps: number | null;
+  mspt_avg: number | null;
+  mspt_p95: number | null;
 }
 
 export interface MetricsHistory {
@@ -275,6 +280,15 @@ export interface FileTree {
   path: string;
   entries: FileTreeEntry[];
   truncated: boolean;
+}
+
+/** Outcome of unpacking an uploaded world archive into the server root. */
+export interface WorldUploadResult {
+  name: string;
+  files: number;
+  bytes: number;
+  /** True when the upload replaced a world folder that already existed. */
+  replaced: boolean;
 }
 
 export interface InstalledMod {
@@ -666,13 +680,38 @@ export interface Player {
   bedrock?: boolean;
 }
 
-/** Geyser/Floodgate (Bedrock bridge) status for a server. */
+/**
+ * Geyser/Floodgate (Bedrock bridge) status for a server, plus whether the
+ * whitelist is actually switched on.
+ *
+ * `geyser` and `floodgate` mean different things for player identity. Geyser
+ * alone bridges the connection but leaves Bedrock players signing in with their
+ * own Java account, so they arrive with an ordinary Java UUID. Only Floodgate
+ * mints the Bedrock-specific identity that can be whitelisted before a first
+ * join — so Bedrock whitelisting gates on `floodgate`, not `installed`.
+ */
 export interface GeyserInfo {
   installed: boolean;
   geyser: boolean;
   floodgate: boolean;
   /** Floodgate username prefix applied to Bedrock players (default "."). */
   prefix?: string;
+  /** `white-list` in server.properties. A whitelist entry is inert while off. */
+  whitelist_enabled?: boolean;
+}
+
+/**
+ * The Java-side identity Floodgate gives a Bedrock player, resolved from their
+ * Xbox gamertag. This is what makes a whitelist entry match: vanilla keys the
+ * whitelist on the profile UUID, so the minted `uuid` matters more than `name`.
+ */
+export interface BedrockIdentity {
+  gamertag: string;
+  /** Decimal string, not a number: XUIDs are 64-bit and JSON numbers round. */
+  xuid: string;
+  uuid: string;
+  /** Floodgate prefix + gamertag, spaces substituted and truncated to 16. */
+  name: string;
 }
 
 /** A player administration action the backend can apply (live or offline). */
@@ -909,4 +948,20 @@ export interface NotificationItem {
   dedupe_key: string;
   created_at: string;
   read_at: string | null;
+}
+
+// Live telemetry pushed by the helper mod. The snapshot fields are only present
+// once the mod has reported at least once; `linked` alone distinguishes "mod
+// connected right now" from "serving the last snapshot across a reconnect".
+export interface ServerVitals {
+  linked: boolean;
+  mod_version?: string;
+  snapshot_age_ms?: number;
+  uptime_ms?: number;
+  tps?: { m1: number; m5: number; m15: number };
+  mspt?: { avg: number; p50: number; p95: number; p99: number; max: number };
+  heap?: { used_mb: number; committed_mb: number; max_mb: number };
+  chunks?: number;
+  entities?: number;
+  players?: { online: number; max: number };
 }

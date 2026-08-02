@@ -15,6 +15,11 @@ type State struct {
 	LastEvent    Event
 	LastEventAt  time.Time
 	SnapshotSeen bool
+	// SnapshotSeq counts snapshots received for this server, so a consumer
+	// polling faster than the mod reports can tell a new reading from the same
+	// one restated. SnapshotAt cannot do that job: two snapshots landing in one
+	// millisecond share a timestamp, and the consumer would silently drop one.
+	SnapshotSeq uint64
 }
 
 // MemorySink keeps the latest state per server in memory.
@@ -29,8 +34,9 @@ type MemorySink struct {
 
 	// onSnapshot lets the agent forward vitals into the metrics pipeline without
 	// this type having to know anything about it.
-	onSnapshot func(serverID string, snap Snapshot)
-	onEvent    func(serverID string, ev Event)
+	onSnapshot   func(serverID string, snap Snapshot)
+	onEvent      func(serverID string, ev Event)
+	onDisconnect func(serverID string)
 }
 
 // NewMemorySink builds a sink. Both callbacks may be nil.
@@ -50,6 +56,15 @@ func (s *MemorySink) OnEventFunc(fn func(serverID string, ev Event)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onEvent = fn
+}
+
+// OnDisconnectFunc registers a callback invoked when a mod's session ends. This
+// is how derived state elsewhere — the manager's link roster, for one — learns
+// it must stop trusting mod data the moment the mod stops talking.
+func (s *MemorySink) OnDisconnectFunc(fn func(serverID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onDisconnect = fn
 }
 
 // State returns a copy of the current view for a server.
@@ -81,10 +96,28 @@ func (s *MemorySink) OnConnect(serverID string, hello Hello) {
 // routine reconnect. Callers distinguish stale from live via Connected.
 func (s *MemorySink) OnDisconnect(serverID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if st, ok := s.states[serverID]; ok {
 		st.Connected = false
 	}
+	fn := s.onDisconnect
+	s.mu.Unlock()
+
+	if fn != nil {
+		fn(serverID)
+	}
+}
+
+// Forget drops all state for a server.
+//
+// OnDisconnect deliberately keeps the last snapshot so the panel does not flip
+// to "unknown" during a routine reconnect, which means nothing here ever shrinks
+// on its own. Forget is the other half of that bargain: when a server is purged
+// it is not coming back, and its entry would otherwise sit in the map for the
+// lifetime of the agent process.
+func (s *MemorySink) Forget(serverID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.states, serverID)
 }
 
 // OnSnapshot implements Sink.
@@ -98,6 +131,7 @@ func (s *MemorySink) OnSnapshot(serverID string, snap Snapshot) {
 	st.Snapshot = snap
 	st.SnapshotAt = time.Now()
 	st.SnapshotSeen = true
+	st.SnapshotSeq++
 	fn := s.onSnapshot
 	s.mu.Unlock()
 

@@ -11,9 +11,21 @@ import {
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useNotificationFeed } from '@/store/notification-feed'
+
+// A springy ease with a touch of overshoot so the moving highlight "lands" on
+// the target link with momentum instead of a flat slide. Matches the server
+// section switcher.
+const SPRING = 'cubic-bezier(0.34, 1.35, 0.5, 1)'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
@@ -32,6 +44,67 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const currentPath = router.location.pathname
   const unread = useNotificationFeed((s) => s.unread)
 
+  // The visible items (admin-only entries are hidden for non-admins) and which
+  // one the current route lands on. The sliding highlight tracks this link.
+  const visible = nav.filter(
+    ({ adminOnly }) => !adminOnly || user?.role === 'admin',
+  )
+  const activeTo =
+    visible.find(({ to, exact }) =>
+      exact ? currentPath === to : currentPath.startsWith(to) && to !== '/',
+    )?.to ?? null
+
+  // A single highlight element sits behind the links; on route change we
+  // measure the active link and glide the highlight to it.
+  const navRef = useRef<HTMLElement | null>(null)
+  const linkRefs = useRef(new Map<string, HTMLElement>())
+  const [ind, setInd] = useState<{ top: number; height: number } | null>(null)
+  // Suppress the transition on first paint so it appears in place.
+  const [animate, setAnimate] = useState(false)
+
+  const registerLink = useCallback(
+    (to: string) => (el: HTMLElement | null) => {
+      if (el) linkRefs.current.set(to, el)
+      else linkRefs.current.delete(to)
+    },
+    [],
+  )
+
+  const measure = useCallback(() => {
+    const navEl = navRef.current
+    const linkEl = activeTo ? linkRefs.current.get(activeTo) : null
+    if (!navEl || !linkEl) {
+      setInd(null)
+      return
+    }
+    const navRect = navEl.getBoundingClientRect()
+    const linkRect = linkEl.getBoundingClientRect()
+    setInd({
+      top: linkRect.top - navRect.top + navEl.scrollTop,
+      height: linkRect.height,
+    })
+  }, [activeTo])
+
+  useLayoutEffect(() => {
+    measure()
+  }, [measure, user?.role])
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimate(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
+
+  useEffect(() => {
+    const onResize = () => measure()
+    window.addEventListener('resize', onResize)
+    const ro = new ResizeObserver(() => measure())
+    if (navRef.current) ro.observe(navRef.current)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      ro.disconnect()
+    }
+  }, [measure])
+
   return (
     <>
       {/* Logo */}
@@ -43,7 +116,20 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
+      <nav ref={navRef} className="relative flex-1 overflow-y-auto p-3 space-y-0.5">
+        {ind && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-3 top-0 rounded-md bg-accent/10"
+            style={{
+              height: ind.height,
+              transform: `translateY(${ind.top}px)`,
+              transition: animate
+                ? `transform 360ms ${SPRING}, height 360ms ${SPRING}`
+                : 'none',
+            }}
+          />
+        )}
         {nav.map(({ to, label, icon: Icon, exact, adminOnly, badge }) => {
           if (adminOnly && user?.role !== 'admin') return null
           const active = exact ? currentPath === to : currentPath.startsWith(to) && to !== '/'
@@ -51,11 +137,12 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <Link
               key={to}
               to={to}
+              ref={registerLink(to)}
               onClick={onNavigate}
               className={clsx(
-                'flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors',
+                'relative z-10 flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors',
                 active
-                  ? 'bg-accent/10 text-accent'
+                  ? 'text-accent'
                   : 'text-text-secondary hover:text-text-primary hover:bg-surface-2',
               )}
             >

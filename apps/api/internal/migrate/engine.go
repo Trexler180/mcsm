@@ -581,7 +581,10 @@ func (e *Engine) stopServer(ctx context.Context, c agentAPI, serverID string) {
 // startAndWatch boots the server and classifies the result: healthy means it
 // reached "online" and stayed there for stableFor.
 func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Server) health {
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
+	// Shared builder — see StartConfigForServer. A migration that quietly
+	// stripped the helper mod or an imported server's no-install flag would be
+	// the same bug in a different engine.
+	cfg := agent.StartConfigForServer(srv)
 	e.setStatus(srv.ID, "starting")
 	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
 		e.setStatus(srv.ID, "offline")

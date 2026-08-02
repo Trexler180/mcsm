@@ -18,6 +18,8 @@ package com.mcsm.helper.fabric;
  */
 public final class TickStats {
 
+	private static final int M1_SECONDS = 60;
+	private static final int M5_SECONDS = 300;
 	private static final int WINDOW_SECONDS = 900; // 15 minutes
 
 	private final long[] buckets = new long[WINDOW_SECONDS];
@@ -53,10 +55,17 @@ public final class TickStats {
 			// Close out the elapsed second, and zero any seconds we skipped
 			// entirely — a stalled server must show as lost ticks, not as a gap
 			// that quietly disappears from the average.
-			for (long s = currentSecond; s < second; s++) {
+			//
+			// The write loop is clamped to one window: past that every bucket has
+			// already been zeroed, and re-zeroing them is work done on the tick
+			// thread proportional to how long the server was already frozen —
+			// precisely when it can least afford it.
+			long gap = second - currentSecond;
+			long from = gap > WINDOW_SECONDS ? second - WINDOW_SECONDS : currentSecond;
+			for (long s = from; s < second; s++) {
 				buckets[(int) Math.floorMod(s, WINDOW_SECONDS)] = (s == currentSecond) ? ticksThisSecond : 0L;
-				secondsElapsed++;
 			}
+			secondsElapsed += gap;
 			currentSecond = second;
 			ticksThisSecond = 0;
 		}
@@ -64,18 +73,72 @@ public final class TickStats {
 		ticksThisSecond++;
 	}
 
+	/** The three trailing averages the protocol reports. */
+	public record Rates(double m1, double m5, double m15) {
+	}
+
 	/**
-	 * Average ticks per second over the trailing window.
+	 * All three averages from one backward walk of the buckets.
 	 *
-	 * @param seconds window length; clamped to what has actually been observed,
-	 *                so a server up for 30s reports a real 30s average rather
-	 *                than one diluted by 14.5 minutes of zeroes
+	 * <p>The windows nest — one minute inside five inside fifteen — so the same
+	 * running total answers all three at their boundaries. Calling {@link #tps}
+	 * three times instead re-walks the array from scratch each time, doing 1,260
+	 * bucket reads and as many {@code floorMod} divisions on the server thread per
+	 * heartbeat where 900 reads and no divisions suffice.
+	 */
+	public Rates rates() {
+		int window = (int) Math.min(WINDOW_SECONDS, secondsElapsed);
+		if (window <= 0) {
+			// Too early to have a meaningful average; report the nominal rate
+			// rather than a misleading zero.
+			return new Rates(20.0, 20.0, 20.0);
+		}
+
+		// Walk backwards with a plain decrementing index and a manual wrap, which
+		// is the same arithmetic floorMod does without the per-step division.
+		int index = (int) Math.floorMod(currentSecond - 1, WINDOW_SECONDS);
+		long total = 0;
+		long m1Total = 0;
+		long m5Total = 0;
+		for (int i = 1; i <= window; i++) {
+			total += buckets[index];
+			if (i == M1_SECONDS) {
+				m1Total = total;
+			}
+			if (i == M5_SECONDS) {
+				m5Total = total;
+			}
+			if (--index < 0) {
+				index = WINDOW_SECONDS - 1;
+			}
+		}
+
+		// A window longer than the uptime falls back to the whole observed span,
+		// so a server up for 30s reports a real 30s average rather than one
+		// diluted by 14.5 minutes of zeroes.
+		return new Rates(
+				average(window < M1_SECONDS ? total : m1Total, Math.min(window, M1_SECONDS)),
+				average(window < M5_SECONDS ? total : m5Total, Math.min(window, M5_SECONDS)),
+				average(total, window));
+	}
+
+	private static double average(long ticks, int seconds) {
+		// A tick rate above nominal is an artefact of bucket boundaries, not a
+		// server running fast.
+		return Math.min((double) ticks / seconds, 20.0);
+	}
+
+	/**
+	 * Average ticks per second over one trailing window.
+	 *
+	 * <p>Kept for tests and one-off queries; {@link #rates} is what the snapshot
+	 * path uses.
+	 *
+	 * @param seconds window length; clamped to what has actually been observed
 	 */
 	public double tps(int seconds) {
 		int window = (int) Math.min(Math.min(seconds, WINDOW_SECONDS), secondsElapsed);
 		if (window <= 0) {
-			// Too early to have a meaningful average; report the nominal rate
-			// rather than a misleading zero.
 			return 20.0;
 		}
 
@@ -83,10 +146,7 @@ public final class TickStats {
 		for (int i = 1; i <= window; i++) {
 			total += buckets[(int) Math.floorMod(currentSecond - i, WINDOW_SECONDS)];
 		}
-		double rate = (double) total / window;
-		// A tick rate above nominal is an artefact of bucket boundaries, not a
-		// server running fast.
-		return Math.min(rate, 20.0);
+		return average(total, window);
 	}
 
 	/** Whether enough time has passed for any average to be meaningful. */

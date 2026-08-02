@@ -30,7 +30,6 @@ import java.lang.management.MemoryUsage;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.function.Consumer;
 
 /**
@@ -125,12 +124,12 @@ public final class FabricAdapter implements ServerFacade {
 			}
 			Messages.Event event = Messages.Event.player(
 					Messages.EVENT_PLAYER_DEATH, player.getUUID().toString(), player.getName().getString());
-			event.message = safeDeathMessage(player, damageSource);
+			event.message = safeDeathMessage(player);
 			client.enqueueEvent(event);
 		});
 	}
 
-	private static String safeDeathMessage(ServerPlayer player, Object damageSource) {
+	private static String safeDeathMessage(ServerPlayer player) {
 		try {
 			return player.getCombatTracker().getDeathMessage().getString();
 		} catch (Throwable t) {
@@ -236,10 +235,11 @@ public final class FabricAdapter implements ServerFacade {
 	}
 
 	private Messages.Tps sampleTps() {
+		TickStats.Rates rates = tickStats.rates();
 		Messages.Tps tps = new Messages.Tps();
-		tps.m1 = round2(tickStats.tps(60));
-		tps.m5 = round2(tickStats.tps(300));
-		tps.m15 = round2(tickStats.tps(900));
+		tps.m1 = round2(rates.m1());
+		tps.m5 = round2(rates.m5());
+		tps.m15 = round2(rates.m15());
 		return tps;
 	}
 
@@ -494,11 +494,6 @@ public final class FabricAdapter implements ServerFacade {
 
 	private static double round2(double value) {
 		return Math.round(value * 100.0d) / 100.0d;
-	}
-
-	@SuppressWarnings("unused")
-	private static String lower(String value) {
-		return value == null ? "" : value.toLowerCase(Locale.ROOT);
 	}
 
 	/** Adapts SLF4J to the core's tiny logging seam. */

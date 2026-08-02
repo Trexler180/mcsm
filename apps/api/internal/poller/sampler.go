@@ -83,8 +83,20 @@ func (sm *sampler) sampleAll(ctx context.Context, s *store.Store, engine *notify
 			continue
 		}
 
+		// Helper-mod vitals ride on the stats response, avoiding a second agent
+		// round trip per running server. When the mod isn't linked the row is
+		// written with NULL vitals, which history queries skip rather than
+		// averaging as zero.
+		var tps, msptAvg, msptP95 *float64
+		if stats.Vitals != nil && stats.Vitals.Linked && stats.Vitals.TPS != nil && stats.Vitals.MSPT != nil {
+			tps = &stats.Vitals.TPS.M1
+			msptAvg = &stats.Vitals.MSPT.Avg
+			msptP95 = &stats.Vitals.MSPT.P95
+		}
+
 		if err := s.InsertServerMetric(ctx, srv.ID, now,
-			stats.CPUPercent, stats.RAMUsedMB, stats.RAMTotalMB, len(stats.Players)); err != nil {
+			stats.CPUPercent, stats.RAMUsedMB, stats.RAMTotalMB, len(stats.Players),
+			tps, msptAvg, msptP95); err != nil {
 			log.Printf("sampler: insert metric %s: %v", srv.ID, err)
 		}
 

@@ -266,9 +266,9 @@ func fmtDurShort(seconds int64) string {
 
 func embedTitle(v *publicStatusView) string {
 	if v.Online {
-		return v.Name + " — Online"
+		return v.Name + " is Online"
 	}
-	return v.Name + " — Offline"
+	return v.Name + " is Offline"
 }
 
 func embedDescription(v *publicStatusView, now int64) string {

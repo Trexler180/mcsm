@@ -134,3 +134,37 @@ export class ServerMetrics {
     this.ws?.close()
   }
 }
+
+type MetricsStreamEntry = {
+  stream: ServerMetrics
+  subscribers: number
+}
+
+// A server page renders live metrics in both its header and dashboard. Share
+// one authenticated WebSocket between those consumers so each open page uses
+// one ticket, one proxy connection, and one metrics frame instead of two.
+const metricsStreams = new Map<string, MetricsStreamEntry>()
+
+export function subscribeServerMetrics(serverId: string, listener: Listener) {
+  let entry = metricsStreams.get(serverId)
+  if (!entry) {
+    entry = { stream: new ServerMetrics(serverId), subscribers: 0 }
+    metricsStreams.set(serverId, entry)
+    void entry.stream.connect()
+  }
+
+  entry.subscribers++
+  const unsubscribeListener = entry.stream.on(listener)
+  let subscribed = true
+
+  return () => {
+    if (!subscribed) return
+    subscribed = false
+    unsubscribeListener()
+    entry!.subscribers--
+    if (entry!.subscribers === 0) {
+      entry!.stream.disconnect()
+      metricsStreams.delete(serverId)
+    }
+  }
+}

@@ -202,6 +202,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// same authority as other settings changes.
 					r.With(viewAccess).Get("/helper-mod", serverH.HelperModStatus)
 					r.With(settingsAccess).Post("/helper-mod", serverH.SetHelperMod)
+					// Live TPS/MSPT/heap from the helper mod; served from agent
+					// memory, so polling it is free for the Minecraft server.
+					r.With(viewAccess).Get("/vitals", serverH.Vitals)
 					r.With(settingsAccess).Post("/reinstall", serverH.Reinstall)
 					r.With(settingsAccess).Post("/migrate", migrateH.Migrate)
 					r.With(viewAccess).Get("/migrations", migrateH.List)
@@ -226,6 +229,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(playersRead).Get("/players", playersH.List)
 					r.With(playersRead).Get("/players/meta", playersH.Meta)
 					r.With(playersRead).Get("/players/bans", playersH.Bans)
+					r.With(playersRead).Get("/players/bedrock/resolve", playersH.ResolveBedrock)
 					// Panel-tracked visit history (opened/closed by the poller).
 					r.With(playersRead).Get("/players/sessions", playersH.Sessions)
 					r.With(playersRead).Post("/players/action", playersH.Action)
@@ -242,6 +246,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(filesWrite).Post("/files/mkdir", fileH.Mkdir)
 					r.With(filesRead).Get("/files/download", fileH.Download)
 					r.With(filesWrite).Post("/files/upload", fileH.Upload)
+
+					// Worlds
+					r.With(filesWrite).Post("/worlds/upload", fileH.UploadWorld)
 
 					// Mods
 					r.With(modsRead).Get("/mods", modH.List)

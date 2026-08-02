@@ -16,6 +16,24 @@ import (
 // can't collide with real Java accounts.
 const defaultBedrockPrefix = "."
 
+// defaultReplaceSpaces is Floodgate's out-of-the-box handling of gamertags
+// containing spaces. Xbox gamertags may contain them and Java usernames may not,
+// so Floodgate substitutes underscores.
+const defaultReplaceSpaces = true
+
+// floodgateCfg is the subset of Floodgate's config.yml that determines a Bedrock
+// player's Java-side identity, and therefore what has to be written into
+// whitelist.json for that player to be recognised.
+type floodgateCfg struct {
+	Prefix        string
+	ReplaceSpaces bool
+}
+
+// defaultFloodgateCfg is what Floodgate does when no config can be read.
+func defaultFloodgateCfg() floodgateCfg {
+	return floodgateCfg{Prefix: defaultBedrockPrefix, ReplaceSpaces: defaultReplaceSpaces}
+}
+
 // isBedrockUUID reports whether a Java-side UUID was minted by Floodgate for a
 // Bedrock player. Floodgate builds it as new UUID(0, xuid): the high 64 bits are
 // all zero and the low 64 bits hold the player's non-zero Xbox XUID, giving the
@@ -45,13 +63,16 @@ func isBedrockUUID(uuid string) bool {
 	return lowNonZero
 }
 
-// readFloodgatePrefix reads the `username-prefix` value from a Floodgate
-// config.yml. Returns (prefix, true) when the key is present (an explicit empty
-// prefix yields ("", true)); ("", false) when the file or key is absent.
-func readFloodgatePrefix(path string) (string, bool) {
+// readFloodgateConfig parses the identity-affecting keys out of a Floodgate
+// config.yml. Keys absent from the file keep their Floodgate defaults.
+// prefixFound reports specifically whether `username-prefix` was present (an
+// explicit empty prefix is a real setting, so it yields ("", true)); read
+// reports whether the file could be opened at all.
+func readFloodgateConfig(path string) (cfg floodgateCfg, prefixFound, read bool) {
+	cfg = defaultFloodgateCfg()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", false
+		return cfg, false, false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		t := strings.TrimSpace(line)
@@ -59,39 +80,71 @@ func readFloodgatePrefix(path string) (string, bool) {
 			continue
 		}
 		if v, ok := strings.CutPrefix(t, "username-prefix:"); ok {
-			v = strings.TrimSpace(v)
 			// Strip surrounding quotes: `"."`/`'.'` -> `.`, `""` -> ``.
-			v = strings.Trim(v, "\"'")
-			return v, true
+			cfg.Prefix = strings.Trim(strings.TrimSpace(v), "\"'")
+			prefixFound = true
+			continue
+		}
+		if v, ok := strings.CutPrefix(t, "replace-spaces:"); ok {
+			cfg.ReplaceSpaces = strings.EqualFold(strings.Trim(strings.TrimSpace(v), "\"'"), "true")
 		}
 	}
-	return "", false
+	return cfg, prefixFound, true
 }
 
-// bedrockPrefix returns the effective Floodgate username prefix for a server and
-// whether it was read from an actual config file. Floodgate's config lives under
-// config/floodgate (mod loaders) or plugins/floodgate (Spigot/Paper). When no
-// config is found the default "." is returned with found=false.
-func bedrockPrefix(dir string) (prefix string, found bool) {
+// floodgateConfig returns the effective Floodgate settings for a server and
+// whether a username-prefix was read from an actual config file. Floodgate's
+// config lives under config/floodgate (mod loaders) or plugins/floodgate
+// (Spigot/Paper). A config that exists but sets no prefix still contributes its
+// other values, so a server that only overrides replace-spaces is honoured.
+func floodgateConfig(dir string) (floodgateCfg, bool) {
+	fallback := defaultFloodgateCfg()
 	for _, rel := range [][]string{
 		{"config", "floodgate", "config.yml"},
 		{"plugins", "floodgate", "config.yml"},
 		{"plugins", "Geyser-Floodgate", "config.yml"},
 	} {
-		if p, ok := readFloodgatePrefix(filepath.Join(dir, filepath.Join(rel...))); ok {
-			return p, true
+		cfg, prefixFound, read := readFloodgateConfig(filepath.Join(dir, filepath.Join(rel...)))
+		if !read {
+			continue
 		}
+		if prefixFound {
+			return cfg, true
+		}
+		fallback = cfg
 	}
-	return defaultBedrockPrefix, false
+	return fallback, false
+}
+
+// bedrockPrefix returns the effective Floodgate username prefix for a server and
+// whether it was read from an actual config file.
+func bedrockPrefix(dir string) (prefix string, found bool) {
+	cfg, found := floodgateConfig(dir)
+	return cfg.Prefix, found
 }
 
 // GeyserInfo describes a server's Bedrock-bridge setup, surfaced to the UI so it
 // can show that Bedrock players are supported even before any have joined.
+//
+// Geyser and Floodgate are reported separately because they mean different
+// things for player identity: Geyser alone bridges the connection but leaves
+// players authenticating with their own Java account, so they arrive with an
+// ordinary Java UUID. Only Floodgate mints the Bedrock-specific identity that
+// can be whitelisted ahead of a first join.
 type GeyserInfo struct {
 	Installed bool   `json:"installed"`
 	Geyser    bool   `json:"geyser"`
 	Floodgate bool   `json:"floodgate"`
 	Prefix    string `json:"prefix,omitempty"`
+}
+
+// PlayersMeta is everything the players UI needs about a server that isn't about
+// an individual player. WhitelistEnabled rides along because a whitelist entry
+// is inert while the server's white-list property is off — a successful add that
+// enforces nothing is the same class of silent no-op as a malformed entry.
+type PlayersMeta struct {
+	GeyserInfo
+	WhitelistEnabled bool `json:"whitelist_enabled"`
 }
 
 // detectGeyser scans a server's plugins/ and mods/ directories for the Geyser
@@ -146,6 +199,20 @@ func stampBedrock(p *Player, prefix string) {
 func hasUnsafeChar(s string) bool {
 	for _, r := range s {
 		if r <= ' ' || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// hasControlChar is the weaker check for names that only ever reach a JSON
+// config file, never stdin. A Floodgate name legitimately contains a space when
+// the server sets replace-spaces: false, so rejecting spaces there would refuse
+// valid players; control characters are still refused because they would corrupt
+// the file the server parses.
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < ' ' || r == 0x7f {
 			return true
 		}
 	}

@@ -19,7 +19,14 @@ import { Input } from "@/components/ui/input";
 import { ResourceChart } from "@/components/charts/resource-chart";
 import { MetricsHistoryChart } from "@/components/charts/history-chart";
 import { TaskTimeline } from "./task-timeline";
+import { VitalsPanel } from "./vitals-panel";
 import { SafeUpdateDialog } from "@/components/mods/safe-update-dialog";
+import {
+  BedrockWhitelistNotes,
+  PlayerNameField,
+  usePlayerName,
+  type PlayerNameSelection,
+} from "@/components/players/name-field";
 import { api } from "@/lib/api";
 import { durationSince } from "@/lib/time";
 import { useNotifications } from "@/store/notifications";
@@ -31,36 +38,43 @@ import type {
 } from "@/lib/types";
 import { Panel, StatTile, type ServerSection } from "./shared";
 
-// Mirrors the validation the Players panel uses: a plain Java name. The agent
-// re-validates, so this just guards obvious typos before the request.
-const NAME_RE = /^[A-Za-z0-9_]{1,16}$/;
-
-// A focused, single-purpose capture for the whitelist quick action — just a name
-// and submit. For operator/ban or Bedrock-prefixed names, the Players tab's
-// fuller dialog still applies.
+// The whitelist quick action. Name capture, edition handling and the Bedrock
+// gamertag lookup all come from the Players panel's shared field, so this
+// surface and the fuller Add-player dialog cannot drift apart — a gamertag
+// typed here behaves exactly as it would there.
 function WhitelistQuickAddDialog({
   open,
   onClose,
   onSubmit,
   busy,
+  serverId,
   serverOnline,
 }: {
   open: boolean;
   onClose: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (sel: PlayerNameSelection) => void;
   busy: boolean;
+  serverId: string;
   serverOnline: boolean;
 }) {
-  const [name, setName] = useState("");
-  const trimmed = name.trim();
-  const valid = NAME_RE.test(trimmed);
+  const { data: meta } = useQuery({
+    queryKey: ["players-meta", serverId],
+    queryFn: () => api.players.meta(serverId),
+    enabled: open,
+    staleTime: 5 * 60_000,
+  });
+  const nameState = usePlayerName(serverId, meta);
+  const valid = nameState.selection.valid;
 
   useEffect(() => {
-    if (open) setName("");
+    if (open) nameState.reset();
+    // Resetting on open only; re-running as the hook changes would wipe the
+    // field mid-typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const submit = () => {
-    if (valid) onSubmit(trimmed);
+    if (valid && !busy) onSubmit(nameState.selection);
   };
 
   return (
@@ -70,28 +84,18 @@ function WhitelistQuickAddDialog({
       title="Add to whitelist"
       description={
         serverOnline
-          ? "Applied live with /whitelist add."
+          ? "Applied to the running server straight away."
           : "Written to whitelist.json — takes effect on next start."
       }
       titleIcon={<UserPlus className="h-5 w-5 text-accent" />}
     >
-      <label className="mb-1 block text-xs font-medium text-text-secondary">
-        Player name
-      </label>
-      <Input
-        placeholder="e.g. Notch"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") submit();
-        }}
-        autoFocus
-      />
-      {trimmed && !valid && (
-        <p className="mt-1 text-xs text-red-400">
-          Names are 1–16 characters: letters, digits, underscore.
-        </p>
-      )}
+      <div className="space-y-4">
+        <PlayerNameField state={nameState} onSubmit={submit} autoFocus />
+        <BedrockWhitelistNotes
+          edition={nameState.edition}
+          whitelistEnabled={meta?.whitelist_enabled}
+        />
+      </div>
       <div className="mt-6 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose} disabled={busy}>
           Cancel
@@ -322,14 +326,28 @@ export function DashboardTab({
   }, [updateRuns, qc, server.id]);
 
   const whitelist = useMutation({
-    mutationFn: (name: string) =>
-      api.players.action(server.id, { action: "whitelist_add", name }),
-    onSuccess: (_d, name) => {
+    mutationFn: (sel: PlayerNameSelection) =>
+      api.players.action(server.id, {
+        action: "whitelist_add",
+        name: sel.name,
+        bedrock: sel.edition === "bedrock" || undefined,
+        // Sent so the agent resolves the gamertag itself rather than trusting
+        // the name this client derived from a preview.
+        gamertag: sel.edition === "bedrock" ? sel.gamertag : undefined,
+      }),
+    onSuccess: (_d, sel) => {
       qc.invalidateQueries({ queryKey: ["players", server.id] });
-      success(
-        `Whitelisted ${name}`,
-        isOnline ? "Command sent to the live server" : "Edited whitelist.json",
-      );
+      // A Bedrock entry is written to whitelist.json either way, so don't claim
+      // a console command was sent.
+      const detail =
+        sel.edition === "bedrock"
+          ? isOnline
+            ? "Updated whitelist.json and reloaded it"
+            : "Updated whitelist.json"
+          : isOnline
+            ? "Command sent to the live server"
+            : "Edited whitelist.json";
+      success(`Whitelisted ${sel.name}`, detail);
       setWhitelistOpen(false);
     },
     onError: (e: Error) => error("Whitelist failed", e.message),
@@ -418,6 +436,10 @@ export function DashboardTab({
         />
       </div>
 
+      {/* Renders nothing unless the helper mod has reported, so servers
+          without it keep their exact previous layout. */}
+      <VitalsPanel serverId={server.id} online={isOnline} />
+
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.3fr_1fr]">
         <Panel
           title="Resources"
@@ -428,6 +450,7 @@ export function DashboardTab({
               serverId={server.id}
               ramMaxMb={server.ram_mb_max}
               status={server.status}
+              showTps
             />
             <MetricsHistoryChart
               serverId={server.id}
@@ -540,17 +563,20 @@ export function DashboardTab({
               title="Scheduled Tasks"
               description="Upcoming and recent runs. Manage in Tasks."
               onClick={() => onSection("tasks")}
-              className="flex min-h-0 flex-1 flex-col"
-              bodyClassName="min-h-0 flex-1 overflow-y-auto"
+              // Capped and scrolling rather than stretching to fill the column:
+              // the panels below it now take that space, and a handful of tasks
+              // should not be spaced out across half a screen to fill a gap.
+              bodyClassName="max-h-64 overflow-y-auto"
             >
               <TaskTimeline tasks={tasks} compact />
             </Panel>
           )}
-        </div>
-      </div>
 
-      {(() => {
-        const serverDetails = (
+          {/* Server Details and Latest Backup live in this column instead of a
+              full-width row underneath. They are short, read-only cards, so
+              stacking them beside the tall Resources panel balances the two
+              columns — which is what stops everything above from being
+              stretched out to meet the bottom of the page. */}
           <Panel
             title="Server Details"
             description="Edit name, directory, and runtime in Options."
@@ -573,8 +599,7 @@ export function DashboardTab({
               </dd>
             </dl>
           </Panel>
-        );
-        const latestBackupPanel = (
+
           <Panel
             title="Latest Backup"
             description="View and manage all backups."
@@ -607,24 +632,16 @@ export function DashboardTab({
               <p className="text-sm text-text-secondary">No backups yet.</p>
             )}
           </Panel>
-        );
-
-        // Scheduled Tasks now lives beside Resources (under Quick Actions), so
-        // the info cards keep the full-width 2-up row here.
-        return (
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            {serverDetails}
-            {latestBackupPanel}
-          </div>
-        );
-      })()}
+        </div>
+      </div>
 
       <WhitelistQuickAddDialog
         open={whitelistOpen}
         onClose={() => setWhitelistOpen(false)}
         busy={whitelist.isPending}
+        serverId={server.id}
         serverOnline={isOnline}
-        onSubmit={(name) => whitelist.mutate(name)}
+        onSubmit={(sel) => whitelist.mutate(sel)}
       />
 
       <SendCommandDialog

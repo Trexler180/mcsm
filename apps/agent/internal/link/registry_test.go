@@ -469,3 +469,225 @@ func TestIgnoresGarbageFrames(t *testing.T) {
 		t.Fatal("link stopped working after a malformed frame")
 	}
 }
+
+// TestWelcomeFiltersUnknownCapabilities pins that accepted_capabilities is a
+// negotiation result, not an echo: a mod announcing something this agent has
+// never heard of must not be told it was accepted.
+func TestWelcomeFiltersUnknownCapabilities(t *testing.T) {
+	h := newHarness(t, "srv1", "secret-token")
+	ctx := testContext(t)
+
+	conn, _, err := h.dial(t, ctx, "srv1", "secret-token")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeFrame(t, ctx, conn, Envelope{
+		V:    ProtocolVersion,
+		Type: TypeHello,
+		TS:   time.Now().UnixMilli(),
+		Data: mustMarshal(Hello{
+			ModVersion:   "9.9.9",
+			Capabilities: []string{CapVitals, "quantum_telemetry", CapRPC},
+		}),
+	})
+
+	env := readFrame(t, ctx, conn)
+	var welcome Welcome
+	if err := json.Unmarshal(env.Data, &welcome); err != nil {
+		t.Fatalf("decode welcome: %v", err)
+	}
+
+	want := []string{CapVitals, CapRPC}
+	if len(welcome.AcceptedCapabilities) != len(want) {
+		t.Fatalf("accepted %v, want %v", welcome.AcceptedCapabilities, want)
+	}
+	for i, c := range want {
+		if welcome.AcceptedCapabilities[i] != c {
+			t.Errorf("accepted %v, want %v", welcome.AcceptedCapabilities, want)
+		}
+	}
+}
+
+// TestVersionMismatchClosesPermanently pins that 4400 — the one close code that
+// makes the mod give up for the rest of the server's life — is sent for an
+// actual protocol version mismatch.
+func TestVersionMismatchClosesPermanently(t *testing.T) {
+	h := newHarness(t, "srv1", "secret-token")
+	ctx := testContext(t)
+
+	conn, _, err := h.dial(t, ctx, "srv1", "secret-token")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	writeFrame(t, ctx, conn, Envelope{
+		V:    ProtocolVersion + 1,
+		Type: TypeHello,
+		TS:   time.Now().UnixMilli(),
+		Data: mustMarshal(Hello{ModVersion: "99.0.0"}),
+	})
+
+	_, _, readErr := conn.Read(ctx)
+	if readErr == nil {
+		t.Fatal("session with a wrong protocol version was not closed")
+	}
+	if status := websocket.CloseStatus(readErr); status != CloseBadVersion {
+		t.Errorf("close status %d, want %d", status, CloseBadVersion)
+	}
+}
+
+// TestGarbledHandshakeClosesRetryably pins the flip side: a first frame that is
+// merely malformed must NOT be closed with 4400, because the mod treats 4400 as
+// permanent and a transient glitch would disable the link until the server
+// restarts.
+func TestGarbledHandshakeClosesRetryably(t *testing.T) {
+	h := newHarness(t, "srv1", "secret-token")
+	ctx := testContext(t)
+
+	conn, _, err := h.dial(t, ctx, "srv1", "secret-token")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte("{not a frame")); err != nil {
+		t.Fatalf("write garbage: %v", err)
+	}
+
+	_, _, readErr := conn.Read(ctx)
+	if readErr == nil {
+		t.Fatal("garbled handshake was not closed")
+	}
+	if status := websocket.CloseStatus(readErr); status == CloseBadVersion {
+		t.Error("garbled handshake closed with 4400; that permanently disables a mod a retry would have connected")
+	}
+}
+
+// TestIdleSessionEvicted pins the deadline that makes CloseDuplicate safe to
+// retry: a session that stops sending frames is torn down by the agent, so a
+// reconnecting mod cannot bounce off its own ghost forever.
+func TestIdleSessionEvicted(t *testing.T) {
+	restore := idleTimeout
+	idleTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { idleTimeout = restore })
+
+	h := newHarness(t, "srv1", "secret-token")
+	ctx := testContext(t)
+
+	conn, _, err := h.dial(t, ctx, "srv1", "secret-token")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	sendHello(t, ctx, conn)
+
+	select {
+	case <-h.sink.connectCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink never saw the connection")
+	}
+
+	// Send nothing. The registry slot must free without the client closing.
+	deadline := time.Now().Add(5 * time.Second)
+	for h.registry.Connected("srv1") {
+		if time.Now().After(deadline) {
+			t.Fatal("idle session was never evicted")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// And a fresh connection for the same server must now be accepted.
+	replacement, _, err := h.dial(t, ctx, "srv1", "secret-token")
+	if err != nil {
+		t.Fatalf("reconnect after eviction: %v", err)
+	}
+	defer replacement.Close(websocket.StatusNormalClosure, "")
+	sendHello(t, ctx, replacement)
+
+	if !h.registry.Connected("srv1") {
+		t.Error("replacement session did not register after the idle one was evicted")
+	}
+}
+
+// orderProbeSink asks the registry what it thinks, at the moment it is told the
+// mod went away.
+type orderProbeSink struct {
+	registry *Registry
+
+	mu               sync.Mutex
+	connects         int
+	disconnects      int
+	connectedAtEvent bool
+	done             chan struct{}
+}
+
+func (s *orderProbeSink) OnConnect(string, Hello) {
+	s.mu.Lock()
+	s.connects++
+	s.mu.Unlock()
+}
+
+func (s *orderProbeSink) OnDisconnect(serverID string) {
+	s.mu.Lock()
+	s.disconnects++
+	s.connectedAtEvent = s.registry.Connected(serverID)
+	s.mu.Unlock()
+	close(s.done)
+}
+
+func (s *orderProbeSink) OnSnapshot(string, Snapshot) {}
+func (s *orderProbeSink) OnEvent(string, Event)       {}
+
+// TestDisconnectFiresAfterTheRegistrySlotIsFreed pins the ordering between the
+// two things that happen when a session ends.
+//
+// OnDisconnect is what tells the rest of the agent to stop trusting mod data —
+// it is wired to the manager's link roster. If the registry still held a live
+// session at that moment, a consumer reacting to the disconnect could turn
+// straight round, find the mod "connected", and re-derive the state it was just
+// told to drop. Defers run last-registered-first, which made this easy to get
+// backwards.
+func TestDisconnectFiresAfterTheRegistrySlotIsFreed(t *testing.T) {
+	sink := &orderProbeSink{done: make(chan struct{})}
+	registry := NewRegistry(sink, fakeTokens{serverID: "srv1", token: "secret-token"})
+	sink.registry = registry
+
+	router := chi.NewRouter()
+	router.Get("/agent/v1/link/{id}", registry.Handle)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	ctx := testContext(t)
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/agent/v1/link/srv1",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret-token"}}})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	sendHello(t, ctx, conn)
+
+	if err := conn.Close(websocket.StatusNormalClosure, "done"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	select {
+	case <-sink.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink was never told the mod disconnected")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.connectedAtEvent {
+		t.Error("registry still reported the server as linked while announcing the disconnect")
+	}
+	if sink.connects != 1 || sink.disconnects != 1 {
+		t.Errorf("got %d connects and %d disconnects, want exactly one of each",
+			sink.connects, sink.disconnects)
+	}
+	if registry.Connected("srv1") {
+		t.Error("registry still holds the session after the mod disconnected")
+	}
+}

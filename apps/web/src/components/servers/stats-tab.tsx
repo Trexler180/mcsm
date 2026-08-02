@@ -20,6 +20,13 @@ import type {
 } from "@/lib/types";
 import { Panel, StatTile } from "./shared";
 import { GaplessBar } from "@/components/charts/gapless-bar";
+import {
+  avgOrNull,
+  hasTickData,
+  maxOrNull,
+  TickHealthCharts,
+  tickSummary,
+} from "@/components/charts/tick-health-chart";
 
 // Chart palette (validated for the dark surface): players wear amber, CPU
 // green, memory blue — the same hue families as the rest of the panel, one
@@ -52,6 +59,12 @@ function fmtDuration(s: number): string {
   const d = Math.floor(h / 24);
   const rh = h % 24;
   return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+}
+
+// Minecraft caps at 20 TPS but rolling averages float a hair above; showing
+// "20.1" would just make the number look broken.
+function fmtTps(n: number): string {
+  return Math.min(n, 20).toFixed(2);
 }
 
 function fmtTick(ts: number, windowHours: number): string {
@@ -94,6 +107,9 @@ type HistoryPoint = {
   cpu_percent: number;
   mem_pct: number;
   players: number;
+  tps: number | null;
+  mspt_avg: number | null;
+  mspt_p95: number | null;
 };
 
 // The API returns ≤360 bucketed points; consolidate further so player bars
@@ -113,6 +129,12 @@ function consolidate(points: HistoryPoint[]): HistoryPoint[] {
       cpu_percent: bucket.reduce((s, p) => s + p.cpu_percent, 0) / n,
       mem_pct: bucket.reduce((s, p) => s + p.mem_pct, 0) / n,
       players: bucket.reduce((m, p) => Math.max(m, p.players), 0),
+      // Tick rate and tick time average over the reporting samples only (a
+      // bucket with none stays null and breaks the line); p95 takes the peak
+      // so a bad minute is not smoothed away by the good ones beside it.
+      tps: avgOrNull(bucket.map((p) => p.tps)),
+      mspt_avg: avgOrNull(bucket.map((p) => p.mspt_avg)),
+      mspt_p95: maxOrNull(bucket.map((p) => p.mspt_p95)),
     });
   }
   return out;
@@ -677,6 +699,9 @@ export function StatsTab({
       ts: p.ts,
       cpu_percent: p.cpu_percent,
       players: p.players,
+      tps: p.tps ?? null,
+      mspt_avg: p.mspt_avg ?? null,
+      mspt_p95: p.mspt_p95 ?? null,
       mem_pct:
         ramMaxMb && ramMaxMb > 0
           ? Math.min(100, (p.ram_used_mb / ramMaxMb) * 100)
@@ -685,6 +710,11 @@ export function StatsTab({
             : 0,
     })),
   );
+
+  // Tick health only exists for servers running the helper mod; everything
+  // below is gated on this being non-null so a vanilla server's Stats tab is
+  // byte-for-byte the page it was before.
+  const tick = hasTickData(points) ? tickSummary(points) : null;
 
   const s = stats?.summary;
   const windowSeconds = stats
@@ -764,6 +794,52 @@ export function StatsTab({
         since={stats?.since ?? Math.floor(Date.now() / 1000) - 86400}
         now={Math.floor(Date.now() / 1000)}
       />
+
+      {/* Tick health leads the charts: it is the measure of whether the server
+          was actually pleasant to play on. Players and host resources follow as
+          the context for it. Hidden entirely when the helper mod reported
+          nothing in this window. */}
+      {tick && (
+        <Panel
+          title="Tick health"
+          description="Server tick rate and how long each tick took, reported by the helper mod."
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatTile
+                label="Average TPS"
+                value={fmtTps(tick.avgTps)}
+                detail="20 is full speed"
+              />
+              <StatTile
+                label="Worst TPS"
+                value={fmtTps(tick.worstTps)}
+                detail="lowest interval in this window"
+              />
+              <StatTile
+                label="Average tick time"
+                value={`${tick.avgMspt.toFixed(1)} ms`}
+                detail="of the 50 ms budget"
+              />
+              <StatTile
+                label="Worst p95 tick"
+                value={`${tick.worstP95.toFixed(1)} ms`}
+                detail={
+                  tick.worstP95 > 50
+                    ? "over budget — players would feel this"
+                    : "inside the budget"
+                }
+              />
+            </div>
+            <TickHealthCharts
+              points={points}
+              formatTick={(ts) => fmtTick(ts, windowHours)}
+              formatLabel={fmtWhen}
+              height={160}
+            />
+          </div>
+        </Panel>
+      )}
 
       {/* Players over time */}
       <Panel

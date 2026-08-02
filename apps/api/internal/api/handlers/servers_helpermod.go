@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mcsm/api/internal/agent"
 )
 
 // helperModFileName must match apps/agent/internal/helperjar.FileName. It is
@@ -22,23 +23,18 @@ func isManagerOwnedMod(fileName string) bool {
 	return name == helperModFileName || name == helperModFileName+disabledSuffix
 }
 
-// helperModMCSeries mirrors the agent's constant and the jar's own
-// fabric.mod.json. All three must move together.
-const helperModMCSeries = "26.2"
+// The helper-mod predicates live in the agent package alongside the start-config
+// builder that consumes them, so the answer the UI shows and the answer the
+// start payload carries cannot drift apart. Aliased here to keep call sites in
+// this file readable.
+const helperModMCSeries = agent.HelperModMCSeries
 
-// helperModCompatible reports whether the shipped jar can load on a server.
-//
-// Fabric Loader treats an unsatisfied dependency as fatal, so enabling the mod
-// on the wrong Minecraft version would prevent that server from starting at
-// all. The agent enforces this too; checking here as well is what lets the UI
-// explain why the option is unavailable instead of accepting a toggle that
-// silently does nothing.
 func helperModCompatible(platform, mcVersion string) bool {
-	if platform != "fabric" {
-		return false
-	}
-	v := strings.TrimSpace(mcVersion)
-	return v == helperModMCSeries || strings.HasPrefix(v, helperModMCSeries+".")
+	return agent.HelperModCompatible(platform, mcVersion)
+}
+
+func helperModEnabled(settings json.RawMessage, platform, mcVersion string) bool {
+	return agent.HelperModEnabled(settings, platform, mcVersion)
 }
 
 // HelperModStatus reports whether the helper mod is enabled for a server.

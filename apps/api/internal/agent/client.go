@@ -189,11 +189,12 @@ func (c *Client) KillServer(ctx context.Context, serverID string) error {
 // process resource usage plus the passively-tracked online roster. Fields are
 // zero when the process is down or the collector has no baseline yet.
 type ServerStats struct {
-	Status     string      `json:"status"`
-	CPUPercent float64     `json:"cpu_percent"`
-	RAMUsedMB  int64       `json:"ram_used_mb"`
-	RAMTotalMB int64       `json:"ram_total_mb"`
-	Players    []PlayerRef `json:"players"`
+	Status     string        `json:"status"`
+	CPUPercent float64       `json:"cpu_percent"`
+	RAMUsedMB  int64         `json:"ram_used_mb"`
+	RAMTotalMB int64         `json:"ram_total_mb"`
+	Players    []PlayerRef   `json:"players"`
+	Vitals     *ServerVitals `json:"vitals,omitempty"`
 }
 
 type PlayerRef struct {
@@ -213,6 +214,47 @@ func (c *Client) GetServerStats(ctx context.Context, serverID string) (*ServerSt
 	var out ServerStats
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("agent stats: %w", err)
+	}
+	return &out, nil
+}
+
+// ServerVitals is the helper mod's tick-health snapshot as relayed by the
+// agent. Linked reports whether a mod is currently connected; TPS and MSPT are
+// nil when no snapshot exists (mod absent or link down), which callers must
+// treat as "no data" rather than zero. The agent sends more fields (heap,
+// chunks, entities, players) — only the ones the metrics pipeline persists are
+// decoded here.
+type ServerVitals struct {
+	Linked bool `json:"linked"`
+	TPS    *struct {
+		M1  float64 `json:"m1"`
+		M5  float64 `json:"m5"`
+		M15 float64 `json:"m15"`
+	} `json:"tps"`
+	MSPT *struct {
+		Avg float64 `json:"avg"`
+		P50 float64 `json:"p50"`
+		P95 float64 `json:"p95"`
+		P99 float64 `json:"p99"`
+		Max float64 `json:"max"`
+	} `json:"mspt"`
+}
+
+// GetServerVitals fetches the latest helper-mod vitals snapshot for a server.
+// New sampling code reads the same shape embedded in GetServerStats; this
+// standalone method remains for callers that need the full vitals endpoint.
+func (c *Client) GetServerVitals(ctx context.Context, serverID string) (*ServerVitals, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/servers/"+serverID+"/vitals", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
+	var out ServerVitals
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("agent vitals: %w", err)
 	}
 	return &out, nil
 }

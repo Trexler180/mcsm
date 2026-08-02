@@ -288,9 +288,19 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.mgr.SendCommand(id, body.Command); err != nil {
+	outcome, err := h.mgr.ExecCommand(r.Context(), id, body.Command)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	// A command the server understood and rejected is a 200 with success:false,
+	// not a 4xx: it was delivered and executed, and the failure belongs to the
+	// command rather than to the request. Only the mod path can tell the two
+	// apart at all, so via_mod is what says whether success/output mean anything.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      "true",
+		"via_mod": outcome.ViaMod,
+		"success": outcome.Success,
+		"output":  outcome.Output,
+	})
 }

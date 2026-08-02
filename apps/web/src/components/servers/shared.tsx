@@ -36,13 +36,15 @@ export type ServerSection =
 
 // Canonical list of the sections within a server, shared by the server-detail
 // sidebar/picker and the command palette so they never drift apart.
-export const SERVER_SECTIONS: Array<{
+export type ServerSectionItem = {
   value: ServerSection;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   group: string;
   permission: ServerPermission;
-}> = [
+};
+
+export const SERVER_SECTIONS: Array<ServerSectionItem> = [
   { value: "dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Operate", permission: "view" },
   { value: "console", label: "Console", icon: Terminal, group: "Operate", permission: "console" },
   { value: "logs", label: "Logs", icon: FileText, group: "Operate", permission: "files" },

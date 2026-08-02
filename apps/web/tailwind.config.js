@@ -23,7 +23,13 @@ export default {
         'text-secondary': '#9ca3af',
       },
       fontFamily: {
-        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+        mono: [
+          'JetBrains Mono Variable',
+          'JetBrains Mono',
+          'Fira Code',
+          'Consolas',
+          'monospace',
+        ],
       },
     },
   },

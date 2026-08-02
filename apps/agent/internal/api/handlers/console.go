@@ -59,8 +59,30 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Commands are executed on their own goroutine rather than inline in the
+	// reader. Writing to stdin was effectively instant, but ExecCommand may wait
+	// on an RPC reply from the helper mod, and doing that inline would let one
+	// wedged mod freeze console input for the length of its timeout.
+	//
+	// A single worker, not one goroutine per command: the operator's commands
+	// must execute in the order they were typed, and fanning out would let a slow
+	// command be overtaken by the next one. The queue is bounded, so a mod that
+	// has stopped answering eventually applies backpressure to the reader
+	// instead of growing without limit — that is the extreme case, not the
+	// one-slow-command case this exists to handle.
+	commands := make(chan string, 32)
+	go func() {
+		for cmd := range commands {
+			// The reply is discarded rather than echoed back: whatever the command
+			// prints reaches this console anyway through the log tail, and
+			// injecting the RPC's captured output too would show every line twice.
+			_, _ = h.mgr.ExecCommand(ctx, id, cmd)
+		}
+	}()
+
 	// reader: commands from client
 	go func() {
+		defer close(commands)
 		for {
 			var msg wsMsg
 			if err := wsjson.Read(ctx, conn, &msg); err != nil {
@@ -71,7 +93,11 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 					Command string `json:"command"`
 				}
 				if err := json.Unmarshal(msg.Data, &d); err == nil && d.Command != "" {
-					_ = h.mgr.SendCommand(id, d.Command)
+					select {
+					case commands <- d.Command:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}

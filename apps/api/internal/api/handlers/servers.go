@@ -110,65 +110,6 @@ func stopForRuntimeChange(ctx context.Context, c *agent.Client, serverID string)
 	}
 }
 
-// applyImportConfig threads a server's import metadata into the agent start
-// payload: the detected jar to run and the no-install flag that stops the agent
-// re-provisioning over the user's files.
-func applyImportConfig(cfg map[string]any, settings json.RawMessage) {
-	if len(settings) == 0 {
-		return
-	}
-	var s struct {
-		Import *struct {
-			JarFile   string `json:"jar_file"`
-			NoInstall bool   `json:"no_install"`
-		} `json:"import"`
-	}
-	if err := json.Unmarshal(settings, &s); err != nil || s.Import == nil {
-		return
-	}
-	if s.Import.JarFile != "" {
-		cfg["jar_file"] = s.Import.JarFile
-	}
-	if s.Import.NoInstall {
-		cfg["no_install"] = true
-	}
-}
-
-// helperModEnabled reports whether a server should run the manager's helper mod.
-//
-// An explicit choice in settings always wins. With no choice recorded, the
-// default is on for Fabric servers the panel created and off for imported ones:
-// an imported directory is somebody's existing, possibly curated instance, and
-// adding a jar to it without being asked is not ours to do.
-func helperModEnabled(settings json.RawMessage, platform, mcVersion string) bool {
-	var s struct {
-		HelperMod *bool           `json:"helper_mod"`
-		Import     json.RawMessage `json:"import"`
-	}
-	if len(settings) > 0 {
-		if err := json.Unmarshal(settings, &s); err == nil && s.HelperMod != nil {
-			return *s.HelperMod
-		}
-	}
-
-	// Only default it on where it can actually load. The agent independently
-	// refuses to install onto an incompatible version, so a wrong default here
-	// would be inert rather than dangerous — but it would still show the user a
-	// switch that claims something untrue.
-	if !helperModCompatible(platform, mcVersion) {
-		return false
-	}
-	return len(s.Import) == 0
-}
-
-// applyHelperModConfig threads the helper-mod decision into the agent start
-// payload. The agent installs or removes the embedded jar accordingly.
-func applyHelperModConfig(cfg map[string]any, settings json.RawMessage, platform, mcVersion string) {
-	if helperModEnabled(settings, platform, mcVersion) {
-		cfg["helper_mod"] = true
-	}
-}
-
 // setHelperModSetting records an explicit on/off choice in a server's settings,
 // preserving whatever else is stored there.
 func setHelperModSetting(settings json.RawMessage, enabled bool) (json.RawMessage, error) {
@@ -620,13 +561,10 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
-	// Imported servers carry their existing jar + a no-install flag, so the agent
-	// runs what's already on disk instead of fetching a runtime over it.
-	applyImportConfig(cfg, srv.Settings)
-	// Tells the agent to install (or remove) the embedded helper mod for this
-	// server before the JVM starts.
-	applyHelperModConfig(cfg, srv.Settings, srv.Platform, srv.MCVersion)
+	// One builder for every start path: it carries the imported server's jar and
+	// no-install flag, and the helper-mod decision, so none of them can be
+	// dropped by forgetting a line here.
+	cfg := agent.StartConfigForServer(srv)
 
 	// Long deadline because the agent may auto-install the server runtime on
 	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
@@ -839,9 +777,7 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 	// Send the current configuration rather than letting the agent reuse what it
 	// was given at the last start, so a setting changed in the panel since then
 	// (the helper mod toggle, for one) is actually applied by this restart.
-	cfg := agent.StartConfig(srv.DirectoryPath, srv.JavaBinary, srv.JVMArgs, srv.Platform, srv.MCVersion, srv.LoaderVersion, srv.RAMMbMin, srv.RAMMbMax)
-	applyImportConfig(cfg, srv.Settings)
-	applyHelperModConfig(cfg, srv.Settings, srv.Platform, srv.MCVersion)
+	cfg := agent.StartConfigForServer(srv)
 
 	if err := c.RestartServer(ctx, id, cfg); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

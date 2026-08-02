@@ -13,6 +13,12 @@ type usercacheEntry struct {
 	UUID string `json:"uuid"`
 }
 
+// LevelName reads the world directory name from server.properties, defaulting
+// to "world" when the file or the level-name key is absent. This is the world
+// the server has open while it runs, which callers outside this package need in
+// order to refuse edits to it.
+func LevelName(dir string) string { return levelName(dir) }
+
 // levelName reads the world directory name from server.properties, defaulting
 // to "world" when the file or the level-name key is absent.
 func levelName(dir string) string {

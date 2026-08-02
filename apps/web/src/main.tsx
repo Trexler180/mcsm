@@ -5,6 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { registerSW } from 'virtual:pwa-register'
 import { routeTree } from './routeTree'
 import { AppErrorBoundary, RouteErrorFallback } from './components/error-boundary'
+// Self-hosted mono (variable, one file for all weights). Referenced by
+// fontFamily.mono — used across the console, editors, audit log and charts.
+// Self-hosted rather than a CDN so it works offline and under the strict CSP.
+import '@fontsource-variable/jetbrains-mono'
 import './index.css'
 
 // Auto-update service worker: new deployments activate on the next load

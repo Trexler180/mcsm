@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "@tanstack/react-router";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
@@ -10,14 +10,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
-import { ServerTerminal } from "@/components/console/terminal";
-import { FileBrowser } from "@/components/files/browser";
-import { FileEditor } from "@/components/files/editor";
-import { DatViewer } from "@/components/files/dat-viewer";
-import { ModSearch } from "@/components/mods/search";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ModConflictDialog } from "@/components/mods/conflict-dialog";
-import { PlayersPanel } from "@/components/players/panel";
-import { ConfigsTab } from "@/components/configs/configs-tab";
 import { ResourceChart } from "@/components/charts/resource-chart";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -26,20 +20,112 @@ import {
   type ServerSection,
   SERVER_SECTIONS,
 } from "@/components/servers/shared";
-import { BackupsTab } from "@/components/servers/backups-tab";
-import { DashboardTab } from "@/components/servers/dashboard-tab";
-import { StatsTab } from "@/components/servers/stats-tab";
-import { TasksTab } from "@/components/servers/tasks-tab";
-import { LogsTab } from "@/components/servers/logs-tab";
-import { WorldsTab } from "@/components/servers/worlds-tab";
-import { OptionsTab } from "@/components/servers/options/options-tab";
-import { PropertiesTab } from "@/components/servers/options/properties-panel";
-import { VersionTab } from "@/components/servers/version-migration";
-import { AccessTab } from "@/components/servers/access-tab";
+import { SectionNav } from "@/components/servers/section-nav";
 import type { ServerPermission } from "@/lib/types";
 import { can as hasPermission } from "@/lib/permissions";
 
+const ServerTerminal = lazy(() =>
+  import("@/components/console/terminal").then((m) => ({ default: m.ServerTerminal })),
+);
+const FileBrowser = lazy(() =>
+  import("@/components/files/browser").then((m) => ({ default: m.FileBrowser })),
+);
+const FileEditor = lazy(() =>
+  import("@/components/files/editor").then((m) => ({ default: m.FileEditor })),
+);
+const DatViewer = lazy(() =>
+  import("@/components/files/dat-viewer").then((m) => ({ default: m.DatViewer })),
+);
+const ModSearch = lazy(() =>
+  import("@/components/mods/search").then((m) => ({ default: m.ModSearch })),
+);
+const PlayersPanel = lazy(() =>
+  import("@/components/players/panel").then((m) => ({ default: m.PlayersPanel })),
+);
+const ConfigsTab = lazy(() =>
+  import("@/components/configs/configs-tab").then((m) => ({ default: m.ConfigsTab })),
+);
+const BackupsTab = lazy(() =>
+  import("@/components/servers/backups-tab").then((m) => ({ default: m.BackupsTab })),
+);
+const DashboardTab = lazy(() =>
+  import("@/components/servers/dashboard-tab").then((m) => ({ default: m.DashboardTab })),
+);
+const StatsTab = lazy(() =>
+  import("@/components/servers/stats-tab").then((m) => ({ default: m.StatsTab })),
+);
+const TasksTab = lazy(() =>
+  import("@/components/servers/tasks-tab").then((m) => ({ default: m.TasksTab })),
+);
+const LogsTab = lazy(() =>
+  import("@/components/servers/logs-tab").then((m) => ({ default: m.LogsTab })),
+);
+const WorldsTab = lazy(() =>
+  import("@/components/servers/worlds-tab").then((m) => ({ default: m.WorldsTab })),
+);
+const OptionsTab = lazy(() =>
+  import("@/components/servers/options/options-tab").then((m) => ({ default: m.OptionsTab })),
+);
+const PropertiesTab = lazy(() =>
+  import("@/components/servers/options/properties-panel").then((m) => ({ default: m.PropertiesTab })),
+);
+const VersionTab = lazy(() =>
+  import("@/components/servers/version-migration").then((m) => ({ default: m.VersionTab })),
+);
+const AccessTab = lazy(() =>
+  import("@/components/servers/access-tab").then((m) => ({ default: m.AccessTab })),
+);
+
 // ── Main page ─────────────────────────────────────────────────────────────────
+
+// Shown while the server row loads. Mirrors the real shell — header bar, section
+// nav, stat tiles and content panels — so the layout holds instead of collapsing
+// to a centered spinner and jumping when data arrives.
+function ServerShellSkeleton() {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b border-border bg-surface/50 px-3 py-3 sm:gap-4 sm:px-6">
+        <Skeleton className="h-8 w-8 flex-shrink-0 rounded-md" />
+        <div className="flex-1 space-y-2">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-3 w-56" />
+        </div>
+        <Skeleton className="hidden h-10 w-64 lg:block" />
+        <Skeleton className="h-8 w-20 flex-shrink-0" />
+      </div>
+
+      <div className="flex flex-1 flex-col md:flex-row">
+        <aside className="flex-shrink-0 space-y-1.5 border-b border-border bg-surface/40 p-2 md:w-48 md:border-b-0 md:border-r md:p-3 lg:w-56">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-8 w-full" />
+          ))}
+        </aside>
+
+        <main className="flex-1 space-y-5 p-4 sm:p-6">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-20" />
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.3fr_1fr]">
+            <Skeleton className="h-56" />
+            <Skeleton className="h-56" />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function SectionFallback() {
+  return (
+    <div className="h-full space-y-4 overflow-hidden p-4 sm:p-6">
+      <Skeleton className="h-8 w-48" />
+      <Skeleton className="h-40 w-full" />
+      <Skeleton className="h-40 w-full" />
+    </div>
+  );
+}
 
 const validSections = new Set<string>(SERVER_SECTIONS.map((s) => s.value));
 
@@ -122,12 +208,6 @@ export function ServerDetailPage() {
   // can surface unresolved conflicts across servers. The store de-dupes by
   // (server, summary) while a conflict is open; disabling the jars resolves it.
   const reportedConflict = useRef<number | null>(null);
-  // Keep the active pill in view on the mobile tab strip when the section
-  // changes (e.g. via deep link or the dashboard quick-links).
-  const activeTabRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    activeTabRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
-  }, [tab]);
   useEffect(() => {
     if (!permissions) return;
     if (!allowedSectionValues.has(tab)) {
@@ -172,11 +252,7 @@ export function ServerDetailPage() {
   });
 
   if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-full py-16">
-        <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <ServerShellSkeleton />;
   }
 
   if (!server) {
@@ -285,82 +361,12 @@ export function ServerDetailPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
-        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-44 md:border-b-0 md:border-r md:p-3 lg:w-56">
-          {/* Mobile: a horizontally scrollable strip of visible tab pills (no
-              dropdown). Every section is a labelled, tappable button; groups are
-              separated by a thin divider, and the active tab auto-scrolls into
-              view. Swipe to reach sections past the edge. */}
-          <div
-            className="-mx-2 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:hidden"
-            role="tablist"
-            aria-label="Server sections"
-          >
-            <div className="flex w-max items-center gap-1.5">
-              {sectionGroups.map((g, gi) => (
-                <Fragment key={g.group}>
-                  {gi > 0 && (
-                    <span
-                      className="mx-0.5 h-5 w-px flex-shrink-0 bg-border"
-                      aria-hidden="true"
-                    />
-                  )}
-                  {g.items.map((section) => {
-                    const Icon = section.icon;
-                    const active = tab === section.value;
-                    return (
-                      <button
-                        key={section.value}
-                        ref={active ? activeTabRef : undefined}
-                        role="tab"
-                        aria-selected={active}
-                        onClick={() => setTab(section.value)}
-                        className={`flex h-9 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm transition-colors ${
-                          active
-                            ? "bg-accent/15 text-text-primary"
-                            : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-                        }`}
-                      >
-                        <Icon className="h-4 w-4 flex-shrink-0" />
-                        {section.label}
-                      </button>
-                    );
-                  })}
-                </Fragment>
-              ))}
-            </div>
-          </div>
-
-          {/* Desktop: vertical sidebar nav, grouped with section headings. */}
-          <nav className="hidden md:flex md:flex-col md:gap-1">
-            {sectionGroups.map((g) => (
-              <div key={g.group} className="md:mb-1">
-                <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary/60">
-                  {g.group}
-                </p>
-                {g.items.map((section) => {
-                  const Icon = section.icon;
-                  const active = tab === section.value;
-                  return (
-                    <button
-                      key={section.value}
-                      onClick={() => setTab(section.value)}
-                      className={`flex h-9 w-full items-center gap-2 rounded-md px-3 text-left text-sm transition-colors ${
-                        active
-                          ? "bg-accent/15 text-text-primary"
-                          : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-                      }`}
-                    >
-                      <Icon className="h-4 w-4 flex-shrink-0" />
-                      {section.label}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </nav>
+        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-48 md:border-b-0 md:border-r md:p-3 lg:w-56">
+          <SectionNav groups={sectionGroups} active={tab} onSelect={setTab} />
         </aside>
 
         <main className="flex-1 min-w-0 min-h-0 overflow-hidden">
+          <Suspense fallback={<SectionFallback />}>
           {tab === "dashboard" && (
             <div className="h-full overflow-y-auto p-4 sm:p-6">
               <DashboardTab
@@ -448,7 +454,9 @@ export function ServerDetailPage() {
               </div>
             </div>
           )}
-          {tab === "worlds" && can("files") && <WorldsTab serverId={id} />}
+          {tab === "worlds" && can("files") && (
+            <WorldsTab serverId={id} status={server.status as ServerStatus} />
+          )}
           {tab === "mods" && can("mods") && (
             <ModSearch
               serverId={id}
@@ -472,6 +480,7 @@ export function ServerDetailPage() {
               <AccessTab serverId={id} />
             </div>
           )}
+          </Suspense>
         </main>
       </div>
 

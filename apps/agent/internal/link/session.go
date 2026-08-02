@@ -39,6 +39,15 @@ const heartbeatInterval = 15 * time.Second
 // list, small enough that a malfunctioning mod cannot exhaust agent memory.
 const maxFrameBytes = 256 * 1024
 
+// idleTimeout evicts a session whose peer has gone silent. A healthy mod sends
+// a snapshot every heartbeat, so several missed heartbeats mean the connection
+// is dead or the mod is wedged — and holding the registry slot for it would
+// make the mod's next reconnect bounce off CloseDuplicate until TCP notices,
+// which on a half-open connection can be effectively never.
+//
+// A variable rather than a const only so tests can shrink it.
+var idleTimeout = 4 * heartbeatInterval
+
 // Session is one live mod connection.
 type Session struct {
 	serverID string
@@ -81,13 +90,14 @@ func (s *Session) Done() <-chan struct{} {
 	return s.done
 }
 
-// serve runs the read loop until the connection ends. It expects the handshake
-// to have already completed.
+// serve runs the read loop until the connection ends or the peer goes silent
+// for longer than idleTimeout. It expects the handshake to have already
+// completed.
 func (s *Session) serve(ctx context.Context) error {
 	defer s.finish()
 
 	for {
-		typ, data, err := s.conn.Read(ctx)
+		typ, data, err := s.readWithDeadline(ctx)
 		if err != nil {
 			return err
 		}
@@ -125,6 +135,23 @@ func (s *Session) serve(ctx context.Context) error {
 	}
 }
 
+// readWithDeadline reads one frame, giving the peer at most idleTimeout to say
+// anything at all. Distinguishes "the peer went quiet" from "the server is
+// shutting down" so the log line points at the right culprit.
+func (s *Session) readWithDeadline(ctx context.Context) (websocket.MessageType, []byte, error) {
+	readCtx, cancel := context.WithTimeout(ctx, idleTimeout)
+	defer cancel()
+
+	typ, data, err := s.conn.Read(readCtx)
+	if err != nil && readCtx.Err() != nil && ctx.Err() == nil {
+		// Our deadline fired, not the caller's. Close the socket so a half-open
+		// connection is torn down and the registry slot frees for a reconnect.
+		_ = s.conn.Close(websocket.StatusGoingAway, "idle timeout")
+		return typ, data, fmt.Errorf("link: no frame for %s, evicting idle session", idleTimeout)
+	}
+	return typ, data, err
+}
+
 // deliverResponse routes a reply to whoever is waiting on it.
 func (s *Session) deliverResponse(env Envelope) {
 	if env.ID == "" {
@@ -155,10 +182,17 @@ func (s *Session) deliverResponse(env Envelope) {
 // *RPCError in the response with OK false. Callers should distinguish: the first
 // means the link is unhealthy, the second means the request was understood and
 // declined.
+//
+// Errors returned before the request reached the socket wrap ErrNotDelivered.
+// That distinction is not cosmetic: for a side-effecting method the caller can
+// only safely retry down another path — stdin, say — when the mod provably never
+// saw the request. A timeout or a session that died mid-flight carries no such
+// guarantee, since the command may well have executed before the reply was lost,
+// and those deliberately do not wrap the sentinel.
 func (s *Session) Call(ctx context.Context, method string, params any) (RPCResponse, error) {
 	select {
 	case <-s.done:
-		return RPCResponse{}, errors.New("link: session closed")
+		return RPCResponse{}, fmt.Errorf("%w: session closed", ErrNotDelivered)
 	default:
 	}
 
@@ -166,7 +200,7 @@ func (s *Session) Call(ctx context.Context, method string, params any) (RPCRespo
 	if params != nil {
 		encoded, err := json.Marshal(params)
 		if err != nil {
-			return RPCResponse{}, fmt.Errorf("link: encode params: %w", err)
+			return RPCResponse{}, fmt.Errorf("%w: encode params: %v", ErrNotDelivered, err)
 		}
 		raw = encoded
 	}
@@ -193,12 +227,15 @@ func (s *Session) Call(ctx context.Context, method string, params any) (RPCRespo
 	})
 	if err != nil {
 		cleanup()
-		return RPCResponse{}, fmt.Errorf("link: encode request: %w", err)
+		return RPCResponse{}, fmt.Errorf("%w: encode request: %v", ErrNotDelivered, err)
 	}
 
 	if err := s.write(ctx, frame); err != nil {
 		cleanup()
-		return RPCResponse{}, err
+		// A write that errors did not put a complete frame on the wire, and a
+		// partial one cannot parse as an envelope, so the mod cannot have acted on
+		// it either way.
+		return RPCResponse{}, fmt.Errorf("%w: %v", ErrNotDelivered, err)
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
@@ -208,6 +245,8 @@ func (s *Session) Call(ctx context.Context, method string, params any) (RPCRespo
 	case resp := <-ch:
 		return resp, nil
 	case <-callCtx.Done():
+		// Deliberately not ErrNotDelivered: the request is already on the wire, so
+		// the mod may have executed it and merely failed to answer in time.
 		cleanup()
 		return RPCResponse{}, fmt.Errorf("link: %s timed out", method)
 	case <-s.done:

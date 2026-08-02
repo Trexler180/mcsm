@@ -27,19 +27,52 @@ var knownActions = map[string]bool{
 	"whitelist_add": true, "whitelist_remove": true,
 }
 
+// PlayerAction describes one player administration request. It is a struct
+// rather than a parameter list because the fields are mostly action-specific:
+// only ban/kick read Reason, only ban_ip/pardon_ip read IP, only op reads Level,
+// and only a Bedrock whitelist change reads Gamertag.
+type PlayerAction struct {
+	Action string
+	Name   string
+	UUID   string
+	Reason string
+
+	// IP is the target address for ban_ip / pardon_ip.
+	IP string
+
+	// Level is the desired operator permission level (1–4) for op; 0 means "use
+	// the default". It only applies to offline ops.json edits — a live server's
+	// /op command grants the server's own default level.
+	Level int
+
+	// Bedrock routes a whitelist change through the Floodgate identity path
+	// instead of the console. It comes from the panel's explicit Java/Bedrock
+	// choice rather than being guessed from the name: a Floodgate prefix that is
+	// empty or alphanumeric cannot be told apart from an ordinary Java name, and
+	// guessing wrong would whitelist the wrong person.
+	Bedrock bool
+
+	// Gamertag is the Xbox gamertag to resolve for a Bedrock whitelist add. When
+	// empty, an already-known Floodgate UUID is used instead — which is the case
+	// for a player who is already in the roster.
+	Gamertag string
+}
+
 // ApplyPlayerAction performs an op/whitelist/ban-style action against a player.
 // When the server is running, the action is issued as a console command so the
 // live server applies and persists it. When the server is stopped, the relevant
 // config file (ops.json / whitelist.json / banned-players.json) is edited
 // directly so the change still takes effect on next boot. kick is the one
-// online-only action.
-func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason, ip string, level int) error {
-	name = strings.TrimSpace(name)
-	ip = strings.TrimSpace(ip)
-	if !knownActions[action] {
-		return fmt.Errorf("unknown action %q", action)
+// online-only action; Bedrock whitelist changes are the one action that ignores
+// this split entirely (see applyBedrockWhitelist).
+func (m *Manager) ApplyPlayerAction(id string, req PlayerAction) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.IP = strings.TrimSpace(req.IP)
+	req.Gamertag = strings.TrimSpace(req.Gamertag)
+	if !knownActions[req.Action] {
+		return fmt.Errorf("unknown action %q", req.Action)
 	}
-	reason = sanitizeReason(reason)
+	req.Reason = sanitizeReason(req.Reason)
 
 	dir, ok := m.GetDir(id)
 	if !ok {
@@ -48,31 +81,120 @@ func (m *Manager) ApplyPlayerAction(id, action, name, uuid, reason, ip string, l
 
 	// IP bans operate on an address rather than a player, so they take a separate
 	// path that validates the IP (which also reaches stdin) instead of a name.
-	if action == "ban_ip" || action == "pardon_ip" {
-		return m.applyIPAction(id, dir, action, name, ip, reason)
+	if req.Action == "ban_ip" || req.Action == "pardon_ip" {
+		return m.applyIPAction(id, dir, req.Action, req.Name, req.IP, req.Reason)
+	}
+
+	if req.Bedrock && isWhitelistAction(req.Action) {
+		return m.applyBedrockWhitelist(id, dir, req)
 	}
 
 	// validName covers Java accounts; validPlayerName also accepts a Bedrock
 	// player's Floodgate-prefixed name while still rejecting anything that could
 	// inject a second console command.
-	if !validPlayerName(dir, name) {
+	if !validPlayerName(dir, req.Name) {
 		return fmt.Errorf("invalid player name")
 	}
 
 	switch m.Status(id).Status {
 	case StatusOnline, StatusStarting:
-		cmd, err := onlineCommand(action, name, reason)
+		cmd, err := onlineCommand(req.Action, req.Name, req.Reason)
 		if err != nil {
 			return err
 		}
 		return m.SendCommand(id, cmd)
 	default:
-		if err := applyOfflineAction(dir, action, name, uuid, reason, level); err != nil {
+		if err := applyOfflineAction(dir, req.Action, req.Name, req.UUID, req.Reason, req.Level); err != nil {
 			return err
 		}
 		m.dropRosterCache(id)
 		return nil
 	}
+}
+
+func isWhitelistAction(action string) bool {
+	return action == "whitelist_add" || action == "whitelist_remove"
+}
+
+// applyBedrockWhitelist edits whitelist.json directly and then has a running
+// server re-read it, taking the same path whether the server is up or down.
+//
+// This deliberately breaks the online/offline split every other action follows.
+// The console route cannot work here: `whitelist add <name>` makes the server
+// resolve the name against Mojang, which has no record of a Floodgate name, so
+// it fails for exactly the players this feature exists to admit. `whitelist
+// reload` takes no arguments, so it is safe to send for a player the server
+// could never have looked up itself.
+func (m *Manager) applyBedrockWhitelist(id, dir string, req PlayerAction) error {
+	wl := readWhitelist(dir)
+
+	if req.Action == "whitelist_remove" {
+		// Match on UUID first. A player who changes their gamertag keeps their
+		// XUID, so the stored name can be stale while the UUID stays correct —
+		// matching by name alone would leave the entry unremovable from the UI.
+		switch {
+		case isBedrockUUID(req.UUID):
+			wl = without(wl, func(e whitelistEntry) bool { return !sameUUID(e.UUID, req.UUID) })
+		case req.Name != "":
+			wl = without(wl, func(e whitelistEntry) bool { return !strings.EqualFold(e.Name, req.Name) })
+		default:
+			return fmt.Errorf("a uuid or name is required to remove a whitelist entry")
+		}
+		return m.commitWhitelist(id, dir, wl)
+	}
+
+	uuid, name := req.UUID, req.Name
+	if req.Gamertag != "" {
+		// Resolved here rather than trusting a UUID the panel looked up moments
+		// ago: the entry written is then always what the resolver actually
+		// returns, so a stale preview cannot put the wrong person on the
+		// whitelist. The lookup is memoised, so this is normally free.
+		ident, err := m.ResolveBedrock(id, req.Gamertag)
+		if err != nil {
+			return err
+		}
+		uuid, name = ident.UUID, ident.Name
+	}
+
+	// No usable identity means no entry. Writing a name-only record here would
+	// reproduce the defect this path exists to fix: vanilla keys the whitelist on
+	// the profile UUID, so such an entry looks right in the UI and admits nobody.
+	if !isBedrockUUID(uuid) {
+		return fmt.Errorf("could not determine this player's Floodgate identity")
+	}
+	// hasControlChar rather than hasUnsafeChar: this name only ever reaches a
+	// JSON file, and a server with replace-spaces disabled has spaces in it.
+	if name == "" || hasControlChar(name) {
+		return fmt.Errorf("invalid player name")
+	}
+
+	// Replace any existing entry for this UUID so a gamertag change refreshes the
+	// stored name instead of leaving a duplicate behind.
+	wl = without(wl, func(e whitelistEntry) bool { return !sameUUID(e.UUID, uuid) })
+	wl = append(wl, whitelistEntry{UUID: uuid, Name: name})
+	return m.commitWhitelist(id, dir, wl)
+}
+
+// commitWhitelist persists whitelist.json and asks a running server to re-read
+// it, so the change takes effect immediately rather than at next boot.
+func (m *Manager) commitWhitelist(id, dir string, wl []whitelistEntry) error {
+	if err := writeJSONList(filepath.Join(dir, "whitelist.json"), wl); err != nil {
+		return err
+	}
+	m.dropRosterCache(id)
+
+	switch m.Status(id).Status {
+	case StatusOnline, StatusStarting:
+		return m.SendCommand(id, "whitelist reload")
+	}
+	return nil
+}
+
+// sameUUID compares two UUIDs ignoring case and dashes, since a minted UUID and
+// one read back out of a config file are not always written the same way.
+func sameUUID(a, b string) bool {
+	norm := func(s string) string { return strings.ReplaceAll(strings.ToLower(s), "-", "") }
+	return a != "" && norm(a) == norm(b)
 }
 
 // DeletePlayerData permanently removes a player's saved data from disk: their

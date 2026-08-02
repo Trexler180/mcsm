@@ -24,6 +24,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -423,6 +424,72 @@ function UptimeHint({ server }: { server: ServerType }) {
   );
 }
 
+// Mirrors the real layout: stacked cards on phones, a table on md+. Same shape
+// as the loaded content so nothing shifts when the data lands.
+function ServersSkeleton() {
+  return (
+    <>
+      <div className="space-y-3 md:hidden">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-lg border border-border bg-surface p-4">
+            <div className="flex items-center justify-between gap-3">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+            <Skeleton className="mt-2 h-3 w-48" />
+            <div className="mt-3 border-t border-border/50 pt-2">
+              <Skeleton className="h-7 w-40" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Platform</TableHead>
+              <TableHead>Version</TableHead>
+              <TableHead>Port</TableHead>
+              <TableHead>RAM</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: 5 }).map((_, i) => (
+              <TableRow key={i}>
+                <TableCell>
+                  <Skeleton className="h-4 w-28" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-16" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-12" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-12" />
+                </TableCell>
+                <TableCell>
+                  <Skeleton className="h-4 w-16" />
+                </TableCell>
+                <TableCell className="text-right">
+                  <Skeleton className="ml-auto h-7 w-32" />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  );
+}
+
 function ServersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const user = useAuthStore((s) => s.user);
@@ -449,9 +516,7 @@ function ServersPage() {
       />
       <div className="p-4 sm:p-6">
         {isLoading ? (
-          <div className="flex justify-center py-16">
-            <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          </div>
+          <ServersSkeleton />
         ) : servers.length === 0 ? (
           <div className="text-center py-16 text-text-secondary">
             <Server className="h-10 w-10 mx-auto mb-3 opacity-30" />
