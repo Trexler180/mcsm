@@ -9,19 +9,21 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Package,
 } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
-import type { ModConflict } from "@/lib/types";
+import type { ConflictSuggestion, ModConflict } from "@/lib/types";
 
 // ModConflictDialog surfaces a startup failure the agent detected while
-// starting the server — either a Fabric incompatible-mods block or a mod that
-// crashed startup (e.g. a broken mixin). Each suggestion names a mod that can
-// be disabled (its jar renamed to .disabled) to fix it; the user picks which to
-// disable, then optionally restarts.
+// starting the server: a Fabric incompatible-mods block, a mod that crashed
+// startup (e.g. a broken mixin), a Java version mismatch, or a required
+// dependency that isn't installed. Suggestions carry the fix — install the
+// named mod, or disable it (its jar renamed to .disabled) — and the dialog
+// offers to apply it and restart in one step.
 export function ModConflictDialog({
   serverId,
   conflict,
@@ -37,23 +39,35 @@ export function ModConflictDialog({
 
   const isJava = conflict.kind === "java_version";
   const isCrash = conflict.kind === "crash";
+  const isMissingDep = conflict.kind === "missing_dependency";
   // Older agents send null instead of [] when nothing was parsed.
   const suggestions = conflict.suggestions ?? [];
   const rawLog = conflict.raw ?? [];
+  // A suggestion is fixed either by installing the named mod (a dependency the
+  // server needs but doesn't have) or by disabling it (a mod that clashes or
+  // crashes). Split on the action rather than the conflict kind so a block that
+  // mixes both — Fabric can emit one — offers both fixes.
+  const installs = suggestions.filter((s) => s.action === "install");
+  const disables = suggestions.filter((s) => s.action !== "install");
+
   const title = isJava
     ? "Server needs a newer version of Java"
-    : isCrash
-      ? "A mod crashed the server"
-      : "Incompatible mods detected";
+    : isMissingDep
+      ? "Missing required dependency"
+      : isCrash
+        ? "A mod crashed the server"
+        : "Incompatible mods detected";
   const banner = isJava
     ? "This Minecraft build was compiled for a newer version of Java than the one used to launch it. No mods are at fault — switch this server to the required Java version, then restart."
-    : isCrash
-      ? "The server crashed on startup because a mod failed to load (often a broken or outdated mixin). Disable the mod below, then restart."
-      : "The server stopped because Fabric found mods that can't run together. Disable one or more of the conflicting mods, then restart.";
+    : isMissingDep
+      ? "The server can't start because one or more installed mods need another mod that isn't there. Install the missing dependency below, then restart."
+      : isCrash
+        ? "The server crashed on startup because a mod failed to load (often a broken or outdated mixin). Disable the mod below, then restart."
+        : "The server stopped because Fabric found mods that can't run together. Disable one or more of the conflicting mods, then restart.";
 
   // De-dupe mod ids across suggestions; default every conflicting mod selected.
   const modIds = Array.from(
-    new Set(suggestions.map((s) => s.mod_id).filter(Boolean)),
+    new Set(disables.map((s) => s.mod_id).filter(Boolean)),
   );
   const [selected, setSelected] = useState<Set<string>>(() => new Set(modIds));
 
@@ -107,6 +121,14 @@ export function ModConflictDialog({
         />
       )}
 
+      {installs.length > 0 && (
+        <MissingDepsFix
+          serverId={serverId}
+          suggestions={installs}
+          onClose={onClose}
+        />
+      )}
+
       {!isJava && (
       <div className="mt-4 space-y-2">
         {suggestions.length === 0 && (
@@ -114,7 +136,12 @@ export function ModConflictDialog({
             Couldn't parse individual mods — see the raw log below.
           </p>
         )}
-        {suggestions.map((s, i) => (
+        {disables.length > 0 && installs.length > 0 && (
+          <p className="pt-2 text-sm font-medium text-text-primary">
+            Mods to disable
+          </p>
+        )}
+        {disables.map((s, i) => (
           <label
             key={`${s.mod_id}-${i}`}
             className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-2 px-3 py-2.5"
@@ -173,9 +200,9 @@ export function ModConflictDialog({
 
       <div className="mt-5 flex flex-wrap justify-end gap-3">
         <Button variant="outline" onClick={onClose} disabled={apply.isPending}>
-          {isJava ? "Close" : "Dismiss"}
+          {isJava || isMissingDep ? "Close" : "Dismiss"}
         </Button>
-        {!isJava && (
+        {!isJava && disables.length > 0 && (
           <>
             <Button
               variant="outline"
@@ -196,6 +223,157 @@ export function ModConflictDialog({
         )}
       </div>
     </Dialog>
+  );
+}
+
+// MissingDepsFix is the body of the dialog when the loader named a mod the
+// server needs but doesn't have — nearly always Fabric API. The loader reports
+// it as a bare mod id ("fabric"), which is not something the operator can act
+// on, so this resolves each id to a real Modrinth project (pinned to a build
+// that fits this server's Minecraft version) and offers to install and restart.
+function MissingDepsFix({
+  serverId,
+  suggestions,
+  onClose,
+}: {
+  serverId: string;
+  suggestions: ConflictSuggestion[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const { success, error } = useNotifications();
+
+  const modIds = Array.from(
+    new Set(suggestions.map((s) => s.mod_id).filter(Boolean)),
+  );
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["missing-deps", serverId, modIds.join(",")],
+    queryFn: () => api.mods.resolveMissing(serverId, modIds),
+    staleTime: 30_000,
+  });
+
+  // Only entries with a pinned version can be installed; the rest carry an
+  // explanation (no build for this Minecraft version, already installed, …).
+  const installable = (data ?? []).filter((d) => d.found && d.version_id);
+
+  const install = useMutation({
+    mutationFn: async (restart: boolean) => {
+      // Sequential, not concurrent: each install uploads a jar through the
+      // agent and records rows, and a failure part-way should stop rather than
+      // race the others.
+      const done: string[] = [];
+      for (const dep of installable) {
+        await api.mods.install(
+          serverId,
+          "modrinth",
+          dep.project_id!,
+          dep.version_id!,
+          true,
+        );
+        done.push(dep.title || dep.mod_id);
+      }
+      if (restart) await api.servers.start(serverId);
+      return done;
+    },
+    onSuccess: (done, restart) => {
+      qc.invalidateQueries({ queryKey: ["agent-status", serverId] });
+      qc.invalidateQueries({ queryKey: ["server", serverId] });
+      qc.invalidateQueries({ queryKey: ["mods", serverId] });
+      success(
+        `Installed ${done.join(", ")}`,
+        restart ? "Restarting server…" : undefined,
+      );
+      onClose();
+    },
+    onError: (e: Error) => error("Install failed", e.message),
+  });
+
+  return (
+    <div className="mt-4 space-y-3">
+      {isLoading && (
+        <p className="flex items-center gap-2 text-sm text-text-secondary">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          Looking up the missing {modIds.length === 1 ? "mod" : "mods"}…
+        </p>
+      )}
+
+      {isError && (
+        <p className="text-sm text-text-secondary">
+          Couldn't reach Modrinth to look up{" "}
+          {modIds.map((m) => `"${m}"`).join(", ")}. Install{" "}
+          {modIds.length === 1 ? "it" : "them"} from the Mods tab, then restart.
+        </p>
+      )}
+
+      {(data ?? []).map((dep) => {
+        const suggestion = suggestions.find((s) => s.mod_id === dep.mod_id);
+        return (
+          <div
+            key={dep.mod_id}
+            className="flex items-start gap-3 rounded-md border border-border bg-surface-2 px-3 py-2.5"
+          >
+            {dep.icon_url ? (
+              <img
+                src={dep.icon_url}
+                alt=""
+                className="mt-0.5 h-9 w-9 flex-shrink-0 rounded"
+              />
+            ) : (
+              <Package className="mt-0.5 h-9 w-9 flex-shrink-0 text-text-secondary" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="break-words text-sm font-medium text-text-primary">
+                  {dep.title || dep.mod_id}
+                </span>
+                <Badge variant="muted" className="font-mono">
+                  {dep.mod_id}
+                </Badge>
+                {dep.version_number && (
+                  <span className="font-mono text-xs text-text-secondary">
+                    {dep.version_number}
+                  </span>
+                )}
+              </div>
+              {suggestion?.required_by && suggestion.required_by.length > 0 && (
+                <p className="mt-1 text-xs text-text-secondary">
+                  Required by: {suggestion.required_by.join(", ")}
+                </p>
+              )}
+              {dep.error && (
+                <p className="mt-1 text-xs text-yellow-400">{dep.error}</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {data && installable.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-3 pt-1">
+          <Button
+            variant="outline"
+            onClick={() => install.mutate(false)}
+            loading={install.isPending}
+          >
+            Install only
+          </Button>
+          <Button
+            onClick={() => install.mutate(true)}
+            loading={install.isPending}
+          >
+            Install &amp; restart
+          </Button>
+        </div>
+      )}
+
+      {data && data.length > 0 && installable.length === 0 && (
+        <p className="text-sm text-text-secondary">
+          Nothing here can be installed automatically — see the reason on each
+          entry above, and the raw log below.
+        </p>
+      )}
+    </div>
   );
 }
 

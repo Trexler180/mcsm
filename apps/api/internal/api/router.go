@@ -277,6 +277,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(modsInstall).Post("/mods/install", modH.Install)
 					r.With(modsInstall).Post("/mods/upload", modH.UploadCustom)
 					r.With(modsUpdate).Post("/mods/disable-conflict", modH.DisableConflict)
+					r.With(modsRead).Post("/mods/resolve-missing", modH.ResolveMissingDeps)
 					r.With(modsRead).Get("/mods/conflicts", modH.ListConflicts)
 					r.With(modsUpdate).Post("/mods/conflicts", modH.RecordConflict)
 					r.With(modsInstall).Post("/mods/install-modpack", modH.InstallModpack)

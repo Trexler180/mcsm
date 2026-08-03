@@ -102,6 +102,23 @@ export interface ConflictSuggestion {
   mod_name: string;
   version?: string;
   requirements?: string[];
+  // For action "install": the installed mods that declared this dependency.
+  required_by?: string[];
+}
+
+// One missing loader mod id mapped to an installable Modrinth project. found is
+// false when nothing matched; error is set either way when the dependency can't
+// be installed as-is (no build for this Minecraft version, already installed…).
+export interface MissingDepResolution {
+  mod_id: string;
+  found: boolean;
+  project_id?: string;
+  slug?: string;
+  title?: string;
+  icon_url?: string;
+  version_id?: string;
+  version_number?: string;
+  error?: string;
 }
 
 export interface ModConflict {
@@ -109,8 +126,10 @@ export interface ModConflict {
   // "incompatible" = Fabric incompatible-mods block; "crash" = a mod (e.g. a
   // broken mixin) crashed the server on startup (both fixed by disabling the
   // named mod(s)); "java_version" = the jar needs a newer Java than the runtime
-  // that launched it (fixed by switching Java, not by disabling mods).
-  kind?: "incompatible" | "crash" | "java_version";
+  // that launched it (fixed by switching Java, not by disabling mods);
+  // "missing_dependency" = a required mod (typically Fabric API) isn't
+  // installed, fixed by installing it rather than disabling anything.
+  kind?: "incompatible" | "crash" | "java_version" | "missing_dependency";
   summary: string;
   // Null from agents that detected a conflict but parsed no suggestions.
   suggestions: ConflictSuggestion[] | null;

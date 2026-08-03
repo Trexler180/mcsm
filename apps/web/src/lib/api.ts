@@ -19,6 +19,7 @@ import type {
   Session,
   LogEvent,
   MetricsHistory,
+  MissingDepResolution,
   ModCategory,
   Overview,
   ServerConflict,
@@ -820,6 +821,11 @@ export const api = {
     disableConflict: (serverId: string, modIds: string[]) =>
       post<{ disabled: string[] }>(
         `/servers/${serverId}/mods/disable-conflict`,
+        { mod_ids: modIds },
+      ),
+    resolveMissing: (serverId: string, modIds: string[]) =>
+      post<MissingDepResolution[]>(
+        `/servers/${serverId}/mods/resolve-missing`,
         { mod_ids: modIds },
       ),
     conflicts: (serverId: string, activeOnly = false) =>

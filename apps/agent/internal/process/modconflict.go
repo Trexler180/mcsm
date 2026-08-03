@@ -21,6 +21,10 @@ type ConflictSuggestion struct {
 	ModName      string   `json:"mod_name"`
 	Version      string   `json:"version,omitempty"`
 	Requirements []string `json:"requirements,omitempty"`
+	// RequiredBy names the installed mods that declared this dependency, taken
+	// from the loader's "More details" listing. Only set for action "install",
+	// where it answers the operator's first question: what needs this?
+	RequiredBy []string `json:"required_by,omitempty"`
 }
 
 // ModConflict captures a startup failure parsed from the server log, so the
@@ -29,8 +33,12 @@ type ConflictSuggestion struct {
 // server on startup, e.g. a broken mixin ("crash"); both fixes are "disable the
 // named mod(s)", so they share the same downstream UI and disable flow.
 type ModConflict struct {
-	Detected    bool                 `json:"detected"`
-	Kind        string               `json:"kind"` // "incompatible" | "crash" | "java_version"
+	Detected bool `json:"detected"`
+	// "incompatible" | "crash" | "java_version" | "missing_dependency". The last
+	// is the same loader block as "incompatible" but every suggested fix is an
+	// install rather than a disable, so the panel offers to fetch the missing
+	// mods instead of turning existing ones off.
+	Kind        string               `json:"kind"`
 	Summary     string               `json:"summary"`
 	Suggestions []ConflictSuggestion `json:"suggestions"`
 	// RequiredJava is the Java feature release the server needs, set only for
@@ -49,7 +57,54 @@ var (
 	conflictTriggerRe = regexp.MustCompile(`Incompatible mods found!|incompatible with the game or each other`)
 	// `- Replace mod 'Async' (async) 0.2.2+alpha-26.1.2 with any version ...`
 	conflictSuggestionRe = regexp.MustCompile(`(?i)-\s*(Replace|Remove|Install)\s+mod\s+'([^']+)'\s+\(([^)]+)\)(?:\s+(\S+))?`)
+
+	// A missing dependency is the one solution the loader states by bare mod id,
+	// because the mod isn't installed so it has no name or version to print:
+	// Messages.properties has `resolution.solution.addMod=Install {0}, {1}.`
+	// with {0}=mod id and {1}=version requirement, rendering as
+	// `\t - Install fabric, any version.` That shape does not match
+	// conflictSuggestionRe (no `mod '<name>' (<id>)`), which is why a server
+	// missing Fabric API used to report a conflict with zero suggestions.
+	installSolutionRe = regexp.MustCompile(`(?i)^-\s*Install\s+([A-Za-z0-9_.\-]+)\s*,\s*(.+?)\.?$`)
+
+	// `resolution.depends.missing={0} {1} requires {3} of {2}, which is missing!`
+	// → `- Mod 'AppleSkin' (appleskin) 2.5.1 requires any version of fabric,
+	// which is missing!`. This names both the missing dependency and the mod
+	// that wants it, and appears even when no solution block was printed.
+	missingDepRe = regexp.MustCompile(`(?i)mod\s+'([^']+)'\s+\(([^)]+)\)\s+(\S+)\s+requires\s+(.+?)\s+of\s+([A-Za-z0-9_.\-]+),\s*which is missing!`)
+
+	// `resolution.depends.suggestion=You need to install {3} of {2}.` — the last
+	// fallback when neither of the above parsed.
+	needInstallRe = regexp.MustCompile(`(?i)You need to install\s+(.+?)\s+of\s+([A-Za-z0-9_.\-]+)\.`)
 )
+
+// loaderModDisplayNames gives a human title to the handful of loader mod ids
+// that are near-universal dependencies, so the summary reads "Fabric API" and
+// not "fabric". Anything not listed falls back to the raw id, which the panel
+// replaces with the real project title once it resolves the mod.
+var loaderModDisplayNames = map[string]string{
+	"fabric":     "Fabric API",
+	"fabric-api": "Fabric API",
+}
+
+// loaderModDisplayName returns the friendly name for a loader mod id.
+func loaderModDisplayName(id string) string {
+	if n, ok := loaderModDisplayNames[strings.ToLower(id)]; ok {
+		return n
+	}
+	return id
+}
+
+// uninstallableModIDs are dependency ids that name the platform rather than a
+// mod anyone can install. When the loader reports one of these as missing the
+// real problem is a wrong Minecraft/loader version, so offering to download it
+// would send the operator down a dead end.
+var uninstallableModIDs = map[string]bool{
+	"minecraft":     true,
+	"java":          true,
+	"fabricloader":  true,
+	"fabric-loader": true,
+}
 
 // conflictDetector is a tiny line-fed state machine. Feed it every console line;
 // when it has captured a full incompatibility block it returns the parsed
@@ -102,6 +157,26 @@ func (d *conflictDetector) feed(line string) *ModConflict {
 		return nil
 	}
 
+	// `- Install fabric, any version.` — a missing dependency, named by bare id.
+	if m := installSolutionRe.FindStringSubmatch(trim); m != nil {
+		d.addInstall(m[1], m[2], "")
+		return nil
+	}
+
+	// `- Mod 'X' (x) 1.0 requires any version of fabric, which is missing!`
+	// Checked regardless of section: it is the only line present when the loader
+	// prints the unmet-dependency listing without a solution block.
+	if m := missingDepRe.FindStringSubmatch(line); m != nil {
+		d.addInstall(m[5], m[4], m[1])
+		return nil
+	}
+
+	// `You need to install any version of fabric.`
+	if m := needInstallRe.FindStringSubmatch(line); m != nil {
+		d.addInstall(m[2], m[1], "")
+		return nil
+	}
+
 	// Sub-bullets under a suggestion (the "compatible with:" requirements) —
 	// only while still inside the solution section, not the "More details" dump.
 	if !d.inDetails && len(d.sugg) > 0 && strings.HasPrefix(trim, "-") {
@@ -111,10 +186,75 @@ func (d *conflictDetector) feed(line string) *ModConflict {
 	return nil
 }
 
+// addInstall records a missing dependency, merging repeats: the same dependency
+// is usually named once in the solution block and again by every mod that wants
+// it, and each mention contributes a different piece (version requirement,
+// dependent name).
+func (d *conflictDetector) addInstall(modID, versionReq, requiredBy string) {
+	modID = strings.TrimSpace(modID)
+	if modID == "" || uninstallableModIDs[strings.ToLower(modID)] {
+		return
+	}
+	versionReq = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(versionReq), "."))
+
+	for i := range d.sugg {
+		s := &d.sugg[i]
+		if s.Action != "install" || !strings.EqualFold(s.ModID, modID) {
+			continue
+		}
+		if versionReq != "" {
+			s.Requirements = appendUniqueStr(s.Requirements, versionReq)
+		}
+		if requiredBy != "" {
+			s.RequiredBy = appendUniqueStr(s.RequiredBy, requiredBy)
+		}
+		return
+	}
+
+	s := ConflictSuggestion{
+		Action:  "install",
+		ModID:   modID,
+		ModName: loaderModDisplayName(modID),
+	}
+	if versionReq != "" {
+		s.Requirements = []string{versionReq}
+	}
+	if requiredBy != "" {
+		s.RequiredBy = []string{requiredBy}
+	}
+	d.sugg = append(d.sugg, s)
+}
+
 func (d *conflictDetector) build() *ModConflict {
+	// A block whose every fix is "install X" is a missing dependency, not a
+	// clash between installed mods — different cause, different one-click fix.
+	installs, others := 0, 0
+	for _, s := range d.sugg {
+		if s.Action == "install" {
+			installs++
+		} else {
+			others++
+		}
+	}
+
+	kind := "incompatible"
 	summary := "Incompatible mods detected"
-	if n := len(d.sugg); n > 0 {
-		summary = fmt.Sprintf("%d mod conflict(s) detected", n)
+	switch {
+	case installs > 0 && others == 0:
+		kind = "missing_dependency"
+		names := make([]string, 0, installs)
+		for _, s := range d.sugg {
+			if s.Action == "install" {
+				names = append(names, s.ModName)
+			}
+		}
+		if installs == 1 {
+			summary = fmt.Sprintf("%s is required but not installed", names[0])
+		} else {
+			summary = fmt.Sprintf("%d required dependencies are missing: %s", installs, strings.Join(names, ", "))
+		}
+	case len(d.sugg) > 0:
+		summary = fmt.Sprintf("%d mod conflict(s) detected", len(d.sugg))
 	}
 	// Zero parsed suggestions must marshal to [] not null — the web maps over
 	// suggestions (same contract as the java-version detector).
@@ -128,7 +268,7 @@ func (d *conflictDetector) build() *ModConflict {
 	}
 	return &ModConflict{
 		Detected:    true,
-		Kind:        "incompatible",
+		Kind:        kind,
 		Summary:     summary,
 		Suggestions: sugg,
 		Raw:         raw,
