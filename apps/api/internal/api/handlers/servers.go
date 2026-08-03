@@ -352,14 +352,15 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort: ask the agent to create the server directory and write
-	// eula.txt. Failure here doesn't break server creation — user can fix
-	// manually and retry the start. Skipped for imports: the directory already
-	// exists and must not be modified (writing eula.txt would step on it).
+	// Best-effort: ask the agent to create the server directory, write eula.txt,
+	// and seed server.properties with the chosen port. Failure here doesn't break
+	// server creation — the user can fix it manually, and the port is applied
+	// again at every start. Skipped for imports: the directory already exists and
+	// must not be modified (writing eula.txt would step on it).
 	if !body.ImportExisting {
 		if c, err := h.agentClient(r.Context(), h.store, created.NodeID); err == nil {
 			setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-			_ = c.Setup(setupCtx, created.ID, created.DirectoryPath)
+			_ = c.Setup(setupCtx, created.ID, created.DirectoryPath, created.Port)
 			cancel()
 		}
 	}
@@ -476,8 +477,10 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		record("jvm_args", strings.Join(existing.JVMArgs, " "), strings.Join(body.JVMArgs, " "))
 		existing.JVMArgs = body.JVMArgs
 	}
+	portChanged := false
 	if body.Port != nil {
 		record("port", existing.Port, *body.Port)
+		portChanged = *body.Port != existing.Port
 		existing.Port = *body.Port
 	}
 	if body.RAMMbMin != nil {
@@ -548,6 +551,19 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "update server", err)
 		return
 	}
+
+	// Push a new port straight into server.properties so the file and the panel
+	// agree immediately — otherwise the properties tab would keep showing the old
+	// port until the next start. Best-effort: the port is applied again at every
+	// launch, so an unreachable node here delays the change rather than losing it.
+	if portChanged && existing.Port > 0 {
+		if c, err := h.agentClient(r.Context(), h.store, existing.NodeID); err == nil {
+			portCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			_ = c.ApplyPort(portCtx, existing.ID, existing.DirectoryPath, existing.Port)
+			cancel()
+		}
+	}
+
 	if len(changes) > 0 {
 		audit(h.store, r, id, "server.update", map[string]any{"changes": changes})
 	}

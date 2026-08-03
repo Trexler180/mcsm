@@ -72,6 +72,24 @@ func TestStartConfigCarriesImportFlags(t *testing.T) {
 	}
 }
 
+// Without the port in the payload the agent has nothing to write into
+// server.properties, so a server created on a custom port comes up on vanilla's
+// 25565 while the panel keeps pinging the port the operator chose.
+func TestStartConfigCarriesPort(t *testing.T) {
+	srv := fabricServer(`{}`)
+	srv.Port = 25570
+
+	if cfg := StartConfigForServer(srv); cfg["port"] != 25570 {
+		t.Errorf("port missing from start config: %v", cfg)
+	}
+}
+
+func TestStartConfigOmitsUnsetPort(t *testing.T) {
+	if cfg := StartConfigForServer(fabricServer(`{}`)); cfg["port"] != nil {
+		t.Errorf("an unset port should leave server.properties alone: %v", cfg)
+	}
+}
+
 func TestStartConfigRejectsIncompatibleVersions(t *testing.T) {
 	srv := fabricServer(`{}`)
 	srv.MCVersion = "1.21.4"

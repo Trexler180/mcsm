@@ -66,6 +66,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				r.Post("/mods/disable", h.DisableMods)
 				r.Post("/register", ch.RegisterDir)
 				r.Post("/setup", bh.Setup)
+				r.Post("/port", bh.ApplyPort)
 				r.Post("/backup", bh.Backup)
 				r.Post("/backups/{backupId}/restore", bh.Restore)
 				r.Delete("/backups/{backupId}", bh.DeleteBackup)

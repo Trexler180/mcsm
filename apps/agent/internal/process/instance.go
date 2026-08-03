@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mcsm/agent/internal/install"
 	"github.com/mcsm/agent/internal/java"
 )
 
@@ -88,6 +89,11 @@ type StartConfig struct {
 	JVMArgs    []string `json:"jvm_args"`
 	JarFile    string   `json:"jar_file"`
 	StartArgs  []string `json:"start_args"`
+	// Port is the port the panel shows for this server. server.properties is the
+	// only place the JVM looks for it, and it regenerates missing keys with
+	// vanilla's 25565 — so the agent writes this value into the file before every
+	// launch. 0 means "not specified": leave the file's own value alone.
+	Port int `json:"port,omitempty"`
 	// Platform + MCVersion let the agent auto-fetch a server JAR if the
 	// directory is empty (paper, purpur, vanilla supported).
 	Platform  string `json:"platform,omitempty"`
@@ -297,6 +303,14 @@ func (inst *Instance) start() error {
 		javaNote = strings.TrimSpace(javaNote + "\n" + note)
 	}
 
+	// Bind the port the panel shows. Done on every launch rather than once at
+	// creation because server.properties can be regenerated (first boot, a wiped
+	// directory, a restored backup) and would otherwise come back on 25565 while
+	// the panel kept pinging the port the operator chose.
+	if note := applyConfiguredPort(inst.Config.Directory, inst.Config.Port); note != "" {
+		javaNote = strings.TrimSpace(javaNote + "\n" + note)
+	}
+
 	// Mint this launch's helper-mod credentials. A failure here is deliberately
 	// non-fatal: the mod simply stays dormant and the server runs exactly as it
 	// did before the mod existed. Losing telemetry is never a reason to refuse
@@ -358,6 +372,27 @@ func (inst *Instance) start() error {
 	go inst.watchExit()
 
 	return nil
+}
+
+// applyConfiguredPort writes the panel's port into server.properties and
+// returns a console note describing what it did, or "" when there was nothing
+// to say. A failure is reported and then ignored: an unwritable properties file
+// is a reason to warn the operator, not to refuse to start their server.
+func applyConfiguredPort(dir string, port int) string {
+	if port <= 0 {
+		return ""
+	}
+	changed, previous, err := install.ApplyServerPort(dir, port)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("[mcsm] warning: could not set server-port in server.properties: %v", err)
+	case !changed:
+		return ""
+	case previous > 0:
+		return fmt.Sprintf("[mcsm] server.properties: server-port %d -> %d (from panel settings)", previous, port)
+	default:
+		return fmt.Sprintf("[mcsm] server.properties: server-port set to %d (from panel settings)", port)
+	}
 }
 
 // reattachInstance adopts a server that kept running across an agent restart.

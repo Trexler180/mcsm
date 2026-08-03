@@ -409,7 +409,7 @@ export function ServerDetailPage() {
               className="h-full overflow-y-auto px-4 pb-4 pt-0 sm:px-6 sm:pb-6 sm:pt-0"
               data-server-scroll
             >
-              <PropertiesTab serverId={id} />
+              <PropertiesTab server={server} />
             </div>
           )}
           {tab === "configs" && can("files") && <ConfigsTab serverId={id} />}

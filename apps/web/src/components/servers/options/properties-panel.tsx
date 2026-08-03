@@ -10,11 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
-import type { } from "@/lib/types";
+import type { Server } from "@/lib/types";
 import {
   type PropertiesMap,
   type PropertyField,
-  defaultServerProperties,
+  defaultServerPropertiesFor,
   parseProperties,
   serializeProperties,
   getPropertyGroups,
@@ -97,7 +97,8 @@ function PropertyFieldControl({
   );
 }
 
-export function ServerPropertiesPanel({ serverId }: { serverId: string }) {
+export function ServerPropertiesPanel({ server }: { server: Server }) {
+  const serverId = server.id;
   const qc = useQueryClient();
   const { success, error } = useNotifications();
   const [values, setValues] = useState<PropertiesMap>({});
@@ -144,6 +145,17 @@ export function ServerPropertiesPanel({ serverId }: { serverId: string }) {
     return () => observer.disconnect();
   }, []);
 
+  // Saving server-port here also moves the panel's own port (the API adopts it
+  // from the write), so the server record has to be refetched alongside the
+  // file — otherwise the Options tab would keep showing the old number.
+  const invalidateSaved = () => {
+    qc.invalidateQueries({
+      queryKey: ["file-content", serverId, "/server.properties"],
+    });
+    qc.invalidateQueries({ queryKey: ["server", serverId] });
+    qc.invalidateQueries({ queryKey: ["servers"] });
+  };
+
   const saveMutation = useMutation({
     mutationFn: () =>
       api.files.writeContent(
@@ -152,9 +164,7 @@ export function ServerPropertiesPanel({ serverId }: { serverId: string }) {
         serializeProperties(original, values),
       ),
     onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["file-content", serverId, "/server.properties"],
-      });
+      invalidateSaved();
       success("server.properties saved");
     },
     onError: (e: Error) => error("Save failed", e.message),
@@ -165,12 +175,12 @@ export function ServerPropertiesPanel({ serverId }: { serverId: string }) {
       api.files.writeContent(
         serverId,
         "/server.properties",
-        defaultServerProperties,
+        // Seeded with this server's port rather than vanilla's default, so the
+        // file it creates matches what the panel shows.
+        defaultServerPropertiesFor(server.port),
       ),
     onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["file-content", serverId, "/server.properties"],
-      });
+      invalidateSaved();
       success("server.properties created");
     },
     onError: (e: Error) => error("Create failed", e.message),
@@ -314,10 +324,10 @@ export function ServerPropertiesPanel({ serverId }: { serverId: string }) {
 
 // VersionSelect shows a dropdown of known versions but keeps a "Custom…" escape
 
-export function PropertiesTab({ serverId }: { serverId: string }) {
+export function PropertiesTab({ server }: { server: Server }) {
   return (
     <div className="max-w-5xl pt-4 sm:pt-6">
-      <ServerPropertiesPanel serverId={serverId} />
+      <ServerPropertiesPanel server={server} />
     </div>
   );
 }

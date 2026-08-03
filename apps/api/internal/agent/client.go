@@ -319,9 +319,28 @@ func (c *Client) RegisterDir(ctx context.Context, serverID, directory string) er
 	return checkError(resp)
 }
 
-// Setup creates the server directory and writes eula.txt if missing.
-func (c *Client) Setup(ctx context.Context, serverID, directory string) error {
+// Setup creates the server directory, writes eula.txt if missing, and seeds
+// server.properties with port so the server's first boot binds the port the
+// panel recorded instead of vanilla's default. A port of 0 leaves the file
+// alone.
+func (c *Client) Setup(ctx context.Context, serverID, directory string, port int) error {
 	path := fmt.Sprintf("/agent/v1/servers/%s/setup?dir=%s", serverID, url.QueryEscape(directory))
+	if port > 0 {
+		path += fmt.Sprintf("&port=%d", port)
+	}
+	resp, err := c.do(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkError(resp)
+}
+
+// ApplyPort writes port into the server's server.properties, touching nothing
+// else. Used when an operator changes the port on an existing server so the
+// file agrees with the panel right away rather than at the next start.
+func (c *Client) ApplyPort(ctx context.Context, serverID, directory string, port int) error {
+	path := fmt.Sprintf("/agent/v1/servers/%s/port?dir=%s&port=%d", serverID, url.QueryEscape(directory), port)
 	resp, err := c.do(ctx, http.MethodPost, path, nil)
 	if err != nil {
 		return err
@@ -508,6 +527,22 @@ func (c *Client) HashFiles(ctx context.Context, serverID string, paths []string)
 
 // DeleteFile removes a file in the server directory. A 404 is treated as
 // success — the file is already gone, which is what the caller wanted.
+// ReadFile returns a file from the server's directory, capped at limit bytes.
+// For the small config files the API itself needs to inspect; anything larger
+// belongs on the proxy path, which streams instead of buffering.
+func (c *Client) ReadFile(ctx context.Context, serverID, path string, limit int64) ([]byte, error) {
+	p := fmt.Sprintf("/agent/v1/servers/%s/files/content?path=%s", serverID, url.QueryEscape(path))
+	resp, err := c.do(ctx, http.MethodGet, p, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
+}
+
 func (c *Client) DeleteFile(ctx context.Context, serverID, path string) error {
 	delURL := fmt.Sprintf("%s/agent/v1/servers/%s/files?path=%s",
 		c.BaseURL, serverID, url.QueryEscape(path))

@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mcsm/agent/internal/install"
 	"github.com/mcsm/agent/internal/process"
 	"github.com/shirou/gopsutil/v4/disk"
 )
@@ -106,8 +108,9 @@ func (h *BackupHandlers) base(r *http.Request) (string, error) {
 	return dir, nil
 }
 
-// Setup creates the server directory if missing and accepts the EULA so a
-// freshly-created server is ready to start without manual filesystem prep.
+// Setup creates the server directory if missing, accepts the EULA, and seeds
+// server.properties with the port the panel assigned, so a freshly-created
+// server is ready to start — on the right port — without manual filesystem prep.
 func (h *BackupHandlers) Setup(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
@@ -115,6 +118,11 @@ func (h *BackupHandlers) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir, err := validateServerDirectory(h.serverRoot, dir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	port, err := queryPort(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -132,8 +140,73 @@ func (h *BackupHandlers) Setup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Omitted port (older panel, or a caller with nothing to say about it) leaves
+	// server.properties alone rather than guessing a default over it.
+	if port > 0 {
+		if _, _, err := install.ApplyServerPort(dir, port); err != nil {
+			writeError(w, http.StatusInternalServerError, "write server.properties: "+err.Error())
+			return
+		}
+	}
 	h.mgr.RegisterDir(chi.URLParam(r, "id"), dir)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "directory": dir})
+}
+
+// ApplyPort writes a server's panel port into its server.properties without
+// touching anything else in the directory. The panel calls this when an
+// operator changes the port so the file matches immediately, instead of the
+// change only landing at the next start.
+func (h *BackupHandlers) ApplyPort(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		writeError(w, http.StatusBadRequest, "dir required")
+		return
+	}
+	dir, err := validateServerDirectory(h.serverRoot, dir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	port, err := queryPort(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if port <= 0 {
+		writeError(w, http.StatusBadRequest, "port required")
+		return
+	}
+	// A server that has never started has no directory yet; creating it here
+	// keeps the port change from being lost before the first launch.
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		writeError(w, http.StatusInternalServerError, "create dir: "+err.Error())
+		return
+	}
+	changed, previous, err := install.ApplyServerPort(dir, port)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "write server.properties: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"port":     port,
+		"changed":  changed,
+		"previous": previous,
+	})
+}
+
+// queryPort reads an optional ?port= from a request. Absent reads as 0 so
+// callers can tell "leave it alone" apart from a real value.
+func queryPort(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("port"))
+	if raw == "" {
+		return 0, nil
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("invalid port %q", raw)
+	}
+	return port, nil
 }
 
 // Backup zips the server directory into a sibling backups folder and returns

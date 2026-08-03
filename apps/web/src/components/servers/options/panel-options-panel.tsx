@@ -67,7 +67,17 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
       qc.invalidateQueries({ queryKey: ["servers"] });
       // Moving the server changes both folders' counts.
       qc.invalidateQueries({ queryKey: ["server-folders"] });
-      success("Settings saved");
+      // A port change is written straight into server.properties by the API, so
+      // the properties tab's cached copy of that file is now stale.
+      qc.invalidateQueries({
+        queryKey: ["file-content", server.id, "/server.properties"],
+      });
+      success(
+        "Settings saved",
+        Number(form.port) !== server.port
+          ? "The port was written to server.properties — restart the server for it to take effect."
+          : undefined,
+      );
     },
     onError: (e: Error) => error("Save failed", e.message),
   });

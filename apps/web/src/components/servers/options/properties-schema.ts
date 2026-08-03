@@ -464,6 +464,14 @@ export const propertyFields: PropertyField[] = [
   },
 ];
 
+// A stock properties file, used as the base when a server has none yet.
+//
+// It deliberately carries no server-port / query.port: the listen port lives on
+// the server record in the panel, and the agent writes that value into this
+// file before every start. Hard-coding 25565 here would either be overwritten
+// on the next launch or — since the API adopts the port from any
+// server.properties write — quietly reset the operator's chosen port back to
+// the default. Use defaultServerPropertiesFor() when the port is known.
 export const defaultServerProperties = `# Minecraft server properties
 accepts-transfers=false
 allow-flight=false
@@ -505,7 +513,6 @@ pause-when-empty-seconds=60
 player-idle-timeout=0
 prevent-proxy-connections=false
 pvp=true
-query.port=25565
 rate-limit=0
 rcon.password=
 rcon.port=25575
@@ -516,7 +523,6 @@ resource-pack-id=
 resource-pack-prompt=
 resource-pack-sha1=
 server-ip=
-server-port=25565
 simulation-distance=10
 spawn-animals=true
 spawn-monsters=true
@@ -529,6 +535,19 @@ use-native-transport=true
 view-distance=10
 white-list=false
 `;
+
+// defaultServerPropertiesFor returns the stock file with the server's panel
+// port filled in, so a properties file created from the UI already names the
+// port the operator picked instead of vanilla's default.
+export function defaultServerPropertiesFor(port: number): string {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return defaultServerProperties;
+  }
+  return serializeProperties(defaultServerProperties, {
+    "server-port": String(port),
+    "query.port": String(port),
+  });
+}
 
 export function parseProperties(content: string): PropertiesMap {
   const out: PropertiesMap = {};

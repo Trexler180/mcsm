@@ -96,12 +96,14 @@ func (h *ModHandlers) Clone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort directory setup (create dir + eula.txt) like a normal create.
+	// Best-effort directory setup (dir + eula.txt + the clone's own port) like a
+	// normal create. The port matters more here than usual: a clone defaults to
+	// source port + 1 precisely so the two can run side by side.
 	node, nodeErr := h.store.GetNode(r.Context(), created.NodeID)
 	if nodeErr == nil {
 		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
 		setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		_ = c.Setup(setupCtx, created.ID, created.DirectoryPath)
+		_ = c.Setup(setupCtx, created.ID, created.DirectoryPath, created.Port)
 		cancel()
 	}
 
