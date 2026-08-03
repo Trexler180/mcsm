@@ -6,6 +6,17 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
+import {
+  WINDOW_SECONDS,
+  formatBytes,
+  formatEta,
+  formatRate,
+  useUploadStats,
+} from "@/lib/upload-stats";
+import {
+  ThroughputChart,
+  ThroughputLegend,
+} from "@/components/charts/throughput-chart";
 import { useNotifications } from "@/store/notifications";
 import {
   defaultServerProperties,
@@ -18,17 +29,6 @@ import {
 // plenty of downloaded maps have them in the folder name.
 const INVALID_NAME_CHARS = /[/\\:*?"<>|]|\p{Cc}/u;
 const INVALID_NAME_CHARS_G = /[/\\:*?"<>|]|\p{Cc}/gu;
-
-function formatSize(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = bytes;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
 
 // Derive a sensible folder name from the archive's file name: "My World.zip"
 // and "My World (1).zip" both want to land in a folder called "My World".
@@ -76,7 +76,10 @@ export function WorldUploadDialog({
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [makeActive, setMakeActive] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [progress, setProgress] = useState<number | null>(null);
+  // null once the bytes are all sent — the request is then unpacking on the
+  // node, which is the longer half of the wait for a big world.
+  const [uploading, setUploading] = useState(false);
+  const upload = useUploadStats();
   const inputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
   const { success, error } = useNotifications();
@@ -114,21 +117,18 @@ export function WorldUploadDialog({
   const uploadMutation = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("Choose a world zip first.");
-      setProgress(0);
+      upload.begin();
+      setUploading(true);
       const result = await api.worlds.upload(
         serverId,
         file,
         { name: trimmed, overwrite: conflict },
-        (p) =>
-          setProgress(
-            p.total > 0
-              ? Math.min(100, Math.round((p.loaded / p.total) * 100))
-              : 0,
-          ),
+        upload.onProgress,
       );
-      // Once the bytes are sent the request is no longer uploading, it's
-      // unpacking on the node — for a large world the longer half of the wait.
-      setProgress(null);
+      // The final numbers stay on screen through the unpack — watching the
+      // average you actually got is the fun part, and blanking the panel here
+      // would make the slowest phase the emptiest.
+      setUploading(false);
 
       if (makeActive) {
         const properties = await api.files
@@ -157,15 +157,20 @@ export function WorldUploadDialog({
           : `Uploaded world "${result.name}"`,
         makeActive
           ? "It is now the active world — restart the server to load it."
-          : `${result.files.toLocaleString()} files, ${formatSize(result.bytes)}.`,
+          : `${result.files.toLocaleString()} files, ${formatBytes(result.bytes)}.`,
       );
       onClose();
     },
     onError: (e: Error) => error("World upload failed", e.message),
-    onSettled: () => setProgress(null),
+    onSettled: () => {
+      setUploading(false);
+      upload.clear();
+    },
   });
 
   const busy = uploadMutation.isPending;
+  const stats = upload.stats;
+  const tp = stats?.throughput;
   const canSubmit =
     !!file &&
     !invalid &&
@@ -222,7 +227,7 @@ export function WorldUploadDialog({
               {file.name}
             </span>
             <span className="text-xs text-text-secondary">
-              {formatSize(file.size)} — click to choose a different file
+              {formatBytes(file.size)} — click to choose a different file
             </span>
           </>
         ) : (
@@ -332,21 +337,70 @@ export function WorldUploadDialog({
       )}
 
       {busy && (
-        <div className="mt-4">
-          <div className="mb-1 flex items-center justify-between text-xs text-text-secondary">
-            <span>
-              {progress === null ? "Unpacking on the server…" : "Uploading…"}
-            </span>
-            {progress !== null && <span>{progress}%</span>}
+        <div className="mt-4 rounded-md border border-border bg-surface-2/30 p-3">
+          <div className="mb-1.5 flex items-center justify-between text-xs text-text-secondary">
+            <span>{uploading ? "Uploading…" : "Unpacking on the server…"}</span>
+            {stats && (
+              <span className="font-mono text-text-primary">
+                {uploading ? stats.percent : 100}%
+              </span>
+            )}
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
             <div
               className={`h-full rounded-full bg-accent ${
-                progress === null ? "w-full animate-pulse" : "transition-all"
+                uploading ? "transition-all" : "w-full animate-pulse"
               }`}
-              style={progress === null ? undefined : { width: `${progress}%` }}
+              style={uploading ? { width: `${stats?.percent ?? 0}%` } : undefined}
             />
           </div>
+
+          {stats && tp && (
+            <>
+              <div className="mt-3 flex items-center gap-3">
+                {/* The headline is the smoothed live speed while bytes are
+                    moving, and the average once they've all landed — a
+                    "current" speed of zero during the unpack would read as a
+                    stall rather than as a finished transfer. */}
+                <div className="flex-shrink-0">
+                  <div className="font-mono text-xl font-medium leading-none text-text-primary">
+                    {formatRate(uploading ? tp.bps : tp.avgBps)}
+                  </div>
+                  <div className="mt-1 text-[10px] uppercase tracking-wide text-text-secondary">
+                    {uploading ? "current" : "average"}
+                  </div>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <ThroughputChart
+                    history={tp.history}
+                    avgBps={tp.avgBps}
+                    label={`Upload speed over the last ${WINDOW_SECONDS} seconds: currently ${formatRate(
+                      tp.bps,
+                    )}, averaging ${formatRate(tp.avgBps)}, peaking at ${formatRate(
+                      tp.peakBps,
+                    )}.`}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-secondary">
+                <span className="font-mono">
+                  {formatBytes(stats.loaded)} / {formatBytes(stats.total)}
+                </span>
+                <span aria-hidden="true">·</span>
+                <ThroughputLegend avgBps={tp.avgBps} />
+                <span aria-hidden="true">·</span>
+                <span>peak {formatRate(tp.peakBps)}</span>
+                {uploading && stats.etaSec !== null && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatEta(stats.etaSec)} left</span>
+                  </>
+                )}
+                <span className="ml-auto">last {WINDOW_SECONDS}s</span>
+              </div>
+            </>
+          )}
         </div>
       )}
 
