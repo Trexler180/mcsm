@@ -45,6 +45,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// Cap non-multipart request bodies at 8 MiB; uploads use the multipart path,
 	// which is proxied straight to the agent.
 	r.Use(apimw.MaxBodyBytes(8 << 20))
+	// ...and give those multipart bodies room to actually arrive: the server's
+	// 30s ReadTimeout covers the whole request, so without this a world or
+	// modpack upload is cut off mid-stream. Must stay ahead of Logger, whose
+	// wrapper the deadline has to be set through.
+	r.Use(apimw.UploadDeadline(handlers.UploadBudget))
 	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 

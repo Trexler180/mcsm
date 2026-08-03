@@ -74,6 +74,14 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return h.Hijack()
 }
 
+// Unwrap exposes the underlying ResponseWriter to http.ResponseController, which
+// is how handlers reach the connection's read/write deadlines (see
+// UploadDeadline). Without it the controller can't see past this wrapper and
+// every such call fails with ErrNotSupported.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 // Flush passes through so streaming handlers (SSE, chunked responses) work.
 func (rw *responseWriter) Flush() {
 	if f, ok := rw.ResponseWriter.(http.Flusher); ok {

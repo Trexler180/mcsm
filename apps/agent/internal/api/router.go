@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -25,6 +26,9 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 	// Cap non-multipart bodies (file-content writes, JSON) at 32 MiB; large file
 	// transfers use the multipart upload path, which streams to disk.
 	r.Use(middleware.MaxBodyBytes(32 << 20))
+	// Those streamed transfers arrive at whatever speed the user's connection
+	// manages, so they need more than the server's 30s whole-request ReadTimeout.
+	r.Use(middleware.UploadDeadline(2 * time.Hour))
 
 	// The helper-mod link is deliberately outside the agent-token group: it
 	// authenticates with the per-launch token issued to that specific server

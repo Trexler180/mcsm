@@ -23,15 +23,34 @@ func NewFileHandlers(s *store.Store) *FileHandlers {
 	return &FileHandlers{store: s}
 }
 
+// UploadBudget is how long a request carrying an upload may take end to end:
+// minutes of transfer at the user's upstream speed, then the agent writing the
+// result out. The metadata routes stay on the much tighter 60s below — this is
+// only for routes whose request body is the payload.
+//
+// It also sizes the read deadline the router installs for multipart bodies
+// (middleware.UploadDeadline), so the connection and the context expire
+// together rather than one silently cutting the other short.
+const UploadBudget = 2 * time.Hour
+
 func (h *FileHandlers) proxyToAgent(w http.ResponseWriter, r *http.Request, agentSuffix string) {
+	h.proxyToAgentWithin(w, r, agentSuffix, 60*time.Second)
+}
+
+func (h *FileHandlers) proxyToAgentWithin(w http.ResponseWriter, r *http.Request, agentSuffix string, budget time.Duration) {
 	id := chi.URLParam(r, "id")
 	srv, c, ok := serverAgent(w, r, h.store, id)
 	if !ok {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
+	// serverAgent hands back a client built for this request alone, so raising
+	// its absolute ceiling here doesn't affect any other call.
+	if budget > c.HTTP.Timeout {
+		c.HTTP.Timeout = budget
+	}
 	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
 		return
@@ -189,8 +208,10 @@ func (h *FileHandlers) Download(w http.ResponseWriter, r *http.Request) {
 	h.proxyToAgent(w, r, "/files/download")
 }
 
+// Upload takes the request body as its payload, so it runs on the upload budget
+// rather than the 60s the metadata routes share.
 func (h *FileHandlers) Upload(w http.ResponseWriter, r *http.Request) {
-	h.proxyToAgent(w, r, "/files/upload")
+	h.proxyToAgentWithin(w, r, "/files/upload", UploadBudget)
 }
 
 // worldUploadLimit caps a single world archive. Worlds run large — a
@@ -214,11 +235,11 @@ func (h *FileHandlers) UploadWorld(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, worldUploadLimit)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(r.Context(), UploadBudget)
 	defer cancel()
 	// serverAgent hands back a client built for this request alone, so raising
 	// its ceiling here doesn't affect any other call.
-	c.HTTP.Timeout = 2 * time.Hour
+	c.HTTP.Timeout = UploadBudget
 
 	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
