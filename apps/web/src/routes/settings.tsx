@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, ExternalLink, Check, Trash2 } from 'lucide-react'
 import { Route as rootRoute } from './__root'
 import { Header } from '@/components/layout/header'
+import { RequireAdmin } from '@/components/layout/require-admin'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -154,5 +155,11 @@ function SettingsPage() {
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: SettingsPage,
+  // The API refuses these routes for non-admins; this makes the page say so
+  // rather than render a wall of buttons that 403 on click.
+  component: () => (
+    <RequireAdmin title="Settings">
+      <SettingsPage />
+    </RequireAdmin>
+  ),
 })

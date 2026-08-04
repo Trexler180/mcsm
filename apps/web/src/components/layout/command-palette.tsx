@@ -33,7 +33,7 @@ const PAGES: Array<{
 }> = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/servers", label: "Servers", icon: ServerIcon },
-  { to: "/nodes", label: "Nodes", icon: Layers },
+  { to: "/nodes", label: "Nodes", icon: Layers, adminOnly: true },
   { to: "/users", label: "Users", icon: Users, adminOnly: true },
   { to: "/audit", label: "Audit Log", icon: ScrollText, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },

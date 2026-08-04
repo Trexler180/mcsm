@@ -31,7 +31,7 @@ const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
   { to: '/servers', label: 'Servers', icon: Server },
   { to: '/notifications', label: 'Notifications', icon: Bell, badge: true },
-  { to: '/nodes', label: 'Nodes', icon: Layers },
+  { to: '/nodes', label: 'Nodes', icon: Layers, adminOnly: true },
   { to: '/users', label: 'Users', icon: Users, adminOnly: true },
   { to: '/audit', label: 'Audit Log', icon: ScrollText, adminOnly: true },
   { to: '/settings', label: 'Settings', icon: Settings, adminOnly: true },
