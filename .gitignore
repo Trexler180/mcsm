@@ -61,6 +61,7 @@ apps/web/tsconfig.tsbuildinfo
 
 # Local design/animation scratchpad (not part of the app build)
 /tools/
+/design/
 
 # Local agent / dev-tool dirs (never commit)
 /.claude/
