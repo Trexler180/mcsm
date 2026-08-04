@@ -62,7 +62,9 @@ func TestServerFoldersMigrationRollsBack(t *testing.T) {
 	mustExec(`INSERT INTO servers (id, node_id, owner_id, name, platform, mc_version, directory_path, java_binary, port, folder_id)
 	          VALUES ('s1','n1','u1','bedwars','paper','1.21','servers/bedwars','java',25565,'f1')`)
 
-	if err := goose.Down(db, "."); err != nil {
+	// DownTo(23) rather than Down(): the latter only unwinds the newest
+	// migration, so this would stop testing 024 the moment a 025 landed.
+	if err := goose.DownTo(db, ".", 23); err != nil {
 		t.Fatalf("rolling back the folders migration failed: %v", err)
 	}
 

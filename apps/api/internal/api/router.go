@@ -291,6 +291,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(modsUpdate).Post("/mods/{modId}/update", modH.Update)
 					r.With(modsUpdate).Post("/mods/{modId}/pin", modH.Pin)
 					r.With(modsUpdate).Post("/mods/{modId}/enabled", modH.SetEnabled)
+					r.With(modsRead).Get("/mods/{modId}/dependents", modH.Dependents)
 					r.With(modsRemove).Delete("/mods/{modId}", modH.Uninstall)
 
 					// Backups

@@ -57,6 +57,7 @@ export function InstalledModRow({
   serverId,
   update,
   onUninstall,
+  onDisableDependency,
   onShowDetails,
   onSwitchVersion,
 }: {
@@ -64,6 +65,8 @@ export function InstalledModRow({
   serverId: string;
   update?: ModUpdate;
   onUninstall: () => void;
+  /** Escalate a disable that other installed content depends on. */
+  onDisableDependency: () => void;
   onShowDetails?: () => void;
   onSwitchVersion?: () => void;
 }) {
@@ -244,9 +247,22 @@ export function InstalledModRow({
         )}
         <Switch
           checked={mod.enabled}
-          onChange={() => enabledMutation.mutate()}
+          // Turning off something other content requires is as breaking as
+          // deleting it, so it goes through the impact dialog instead of
+          // flipping straight away. Enabling never breaks anything.
+          onChange={() =>
+            mod.enabled && mod.required_by.length > 0
+              ? onDisableDependency()
+              : enabledMutation.mutate()
+          }
           disabled={enabledMutation.isPending}
-          title={mod.enabled ? "Disable (keep file)" : "Enable"}
+          title={
+            mod.enabled
+              ? mod.required_by.length > 0
+                ? `Disable (required by ${mod.required_by.join(", ")})`
+                : "Disable (keep file)"
+              : "Enable"
+          }
           aria-label={
             mod.enabled ? `Disable ${mod.name}` : `Enable ${mod.name}`
           }

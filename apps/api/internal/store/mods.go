@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -138,17 +139,57 @@ func (s *Store) AddModDependency(ctx context.Context, serverID, dependentPID, de
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO mod_dependencies (server_id, dependent_project_id, dependency_project_id)
-		 VALUES (?,?,?)`,
-		serverID, dependentPID, dependencyPID,
+		`INSERT OR IGNORE INTO mod_dependencies (server_id, dependent_project_id, dependency_project_id, dependency_type)
+		 VALUES (?,?,?,?)`,
+		serverID, dependentPID, dependencyPID, DependencyRequired,
 	)
 	return err
+}
+
+// ReplaceModDependencies swaps every outgoing edge of one dependent for the
+// supplied set, in a single transaction — used when a mod's declared
+// dependencies are re-read from its source, so a dependency the author dropped
+// stops counting. Only DependencyProjectID and Type are read off each edge.
+func (s *Store) ReplaceModDependencies(ctx context.Context, serverID, dependentPID string, deps []ModDependency) error {
+	if dependentPID == "" {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM mod_dependencies WHERE server_id = ? AND dependent_project_id = ?`,
+		serverID, dependentPID,
+	); err != nil {
+		return err
+	}
+	for _, d := range deps {
+		if d.DependencyProjectID == "" || d.DependencyProjectID == dependentPID {
+			continue
+		}
+		depType := d.Type
+		if depType == "" {
+			depType = DependencyRequired
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO mod_dependencies (server_id, dependent_project_id, dependency_project_id, dependency_type)
+			 VALUES (?,?,?,?)`,
+			serverID, dependentPID, d.DependencyProjectID, depType,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ListModDependencies returns every dependency edge for a server.
 func (s *Store) ListModDependencies(ctx context.Context, serverID string) ([]ModDependency, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT dependent_project_id, dependency_project_id FROM mod_dependencies WHERE server_id = ?`,
+		`SELECT dependent_project_id, dependency_project_id, dependency_type
+		 FROM mod_dependencies WHERE server_id = ?`,
 		serverID,
 	)
 	if err != nil {
@@ -158,12 +199,37 @@ func (s *Store) ListModDependencies(ctx context.Context, serverID string) ([]Mod
 	var edges []ModDependency
 	for rows.Next() {
 		var e ModDependency
-		if err := rows.Scan(&e.DependentProjectID, &e.DependencyProjectID); err != nil {
+		if err := rows.Scan(&e.DependentProjectID, &e.DependencyProjectID, &e.Type); err != nil {
 			return nil, err
 		}
 		edges = append(edges, e)
 	}
 	return edges, rows.Err()
+}
+
+// ModDependencyScan reports the mod-set fingerprint the server's dependency
+// graph was last rebuilt from, and when. An empty fingerprint means never.
+func (s *Store) ModDependencyScan(ctx context.Context, serverID string) (string, time.Time, error) {
+	var fingerprint string
+	var scannedAt time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT fingerprint, scanned_at FROM mod_dependency_scans WHERE server_id = ?`, serverID,
+	).Scan(&fingerprint, &scannedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	return fingerprint, scannedAt, err
+}
+
+// SetModDependencyScan records that the graph was rebuilt for this mod set.
+func (s *Store) SetModDependencyScan(ctx context.Context, serverID, fingerprint string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO mod_dependency_scans (server_id, fingerprint, scanned_at)
+		 VALUES (?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(server_id) DO UPDATE SET fingerprint=excluded.fingerprint, scanned_at=CURRENT_TIMESTAMP`,
+		serverID, fingerprint,
+	)
+	return err
 }
 
 // DeleteModDependencyEdges removes every edge touching a project id (as either

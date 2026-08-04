@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/autoupdate"
@@ -19,20 +21,25 @@ import (
 type ModHandlers struct {
 	store      *store.Store
 	serverRoot string
-	modrinth   *modrinth.Client
-	curseforge *curseforge.Client
-	hangar     *hangar.Client
-	spigotmc   *spigotmc.Client
-	mc         *mc.Client
-	updater    *autoupdate.Engine
-	notifier   *notify.Engine
+	// Backoff for the dependency-graph refresh, so an upstream outage doesn't
+	// cost every Mods-tab load a full request timeout. See mods_deps.go.
+	depScanMu     sync.Mutex
+	depScanFailed map[string]time.Time
+	modrinth      *modrinth.Client
+	curseforge    *curseforge.Client
+	hangar        *hangar.Client
+	spigotmc      *spigotmc.Client
+	mc            *mc.Client
+	updater       *autoupdate.Engine
+	notifier      *notify.Engine
 }
 
 func NewModHandlers(s *store.Store, serverRoot string, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {
 	return &ModHandlers{
-		store:      s,
-		serverRoot: serverRoot,
-		modrinth:   modrinth.New(),
+		store:         s,
+		serverRoot:    serverRoot,
+		depScanFailed: map[string]time.Time{},
+		modrinth:      modrinth.New(),
 		// Resolve the CurseForge key lazily from the encrypted secret store,
 		// falling back to the legacy env var, so a key pasted in Settings →
 		// Integrations takes effect without a restart.
@@ -101,6 +108,10 @@ func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
 	if mods == nil {
 		mods = []*store.InstalledMod{}
 	}
+	// Re-read declared dependencies from the installed builds when the set has
+	// changed, so "required by" and the removal guard know about jars the panel
+	// didn't install itself. No-op while nothing changed.
+	h.ensureDependencyGraph(r.Context(), id, mods)
 	if err := h.annotateDependencies(r.Context(), id, mods); err != nil {
 		writeServerError(w, r, "list mods: dependencies", err)
 		return
@@ -128,6 +139,9 @@ func (h *ModHandlers) annotateDependencies(ctx context.Context, serverID string,
 	// dependency project id -> set of dependent project ids that still exist.
 	dependents := map[string]map[string]bool{}
 	for _, e := range edges {
+		if e.Type == store.DependencyOptional {
+			continue // an optional user doesn't keep a dependency alive
+		}
 		if _, ok := nameByPID[e.DependentProjectID]; !ok {
 			continue // dependent no longer installed
 		}

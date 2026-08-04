@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/store"
 )
 
 const disabledSuffix = ".disabled"
@@ -20,6 +21,13 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	modID := chi.URLParam(r, "modId")
 	var body struct {
 		Enabled bool `json:"enabled"`
+		// Force acknowledges that other content requires this mod; without it,
+		// disabling something depended on is refused with the impact report.
+		Force bool `json:"force"`
+		// DisableDependents turns the mods that require this one off as well, so
+		// the server boots with a consistent set instead of failing on the
+		// missing dependency.
+		DisableDependents bool `json:"disable_dependents"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -35,6 +43,17 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	if mod.Enabled == body.Enabled {
 		writeJSON(w, http.StatusOK, mod)
 		return
+	}
+
+	// Disabling a jar removes it from the loader's view just as surely as
+	// deleting it, so it goes through the same dependency guard. Enabling can
+	// only ever satisfy dependencies, never break them.
+	var impact *ModImpact
+	if !body.Enabled {
+		var ok bool
+		if impact, ok = h.checkDependencyImpact(w, r, serverID, mod, body.Force, "disabling"); !ok {
+			return
+		}
 	}
 
 	srv, c, ok := serverAgent(w, r, h.store, serverID)
@@ -64,14 +83,39 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "mod set enabled", err)
 		return
 	}
+
+	// Take the dependents down with it when asked. The mod itself is already
+	// disabled at this point, so a partial result here is still better than
+	// leaving dependents loaded against a dependency that is gone.
+	var alsoDisabled, failedToDisable []string
+	if !body.Enabled && body.DisableDependents && impact != nil && len(impact.Required) > 0 {
+		depCtx, depCancel := context.WithTimeout(r.Context(), 60*time.Second)
+		alsoDisabled, failedToDisable = h.disableDependents(depCtx, c, serverID, impact.Required)
+		depCancel()
+	}
+
 	action := "mod.disable"
 	if body.Enabled {
 		action = "mod.enable"
 	}
-	audit(h.store, r, serverID, action, map[string]any{"mod_id": modID, "name": mod.Name})
+	entry := map[string]any{"mod_id": modID, "name": mod.Name}
+	if len(alsoDisabled) > 0 {
+		entry["dependents_disabled"] = alsoDisabled
+	}
+	if len(failedToDisable) > 0 {
+		entry["dependents_disable_failed"] = failedToDisable
+	}
+	audit(h.store, r, serverID, action, entry)
 	mod.Enabled = body.Enabled
 	mod.FileName = newName
-	writeJSON(w, http.StatusOK, mod)
+
+	// The mod's own fields stay at the top level (the response shape callers
+	// already parse); what happened to its dependents rides alongside.
+	writeJSON(w, http.StatusOK, struct {
+		*store.InstalledMod
+		DependentsDisabled []string `json:"dependents_disabled,omitempty"`
+		DependentsFailed   []string `json:"dependents_failed,omitempty"`
+	}{mod, alsoDisabled, failedToDisable})
 }
 
 // DisableConflict applies a detected Fabric mod-conflict fix: it asks the agent
@@ -179,6 +223,14 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse to delete something other content requires unless the caller says
+	// it accepts that, and offer to take the dependents offline with it.
+	force := boolQuery(r, "force")
+	impact, ok := h.checkDependencyImpact(w, r, serverID, mod, force, "removing")
+	if !ok {
+		return
+	}
+
 	srv, c, ok := serverAgent(w, r, h.store, serverID)
 	if !ok {
 		return
@@ -210,8 +262,59 @@ func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 			audit(h.store, r, serverID, "mod.dep_cleanup_failed", map[string]any{"mod_id": modID, "error": err.Error()})
 		}
 	}
-	audit(h.store, r, serverID, "mod.uninstall", map[string]any{"mod_id": modID, "name": mod.Name})
+
+	// Optionally take the now-broken dependents offline in the same operation,
+	// so the next boot doesn't fail on a dependency that no longer exists. Their
+	// jars stay on disk, so re-installing the dependency and re-enabling them
+	// restores the previous state.
+	withDependents := boolQuery(r, "disable_dependents")
+	var alsoDisabled, failedToDisable []string
+	if withDependents && len(impact.Required) > 0 {
+		depCtx, depCancel := context.WithTimeout(r.Context(), 60*time.Second)
+		alsoDisabled, failedToDisable = h.disableDependents(depCtx, c, serverID, impact.Required)
+		depCancel()
+	}
+
+	entry := map[string]any{"mod_id": modID, "name": mod.Name}
+	if len(impact.Required) > 0 {
+		entry["broke_dependents"] = len(impact.Required)
+	}
+	if len(alsoDisabled) > 0 {
+		entry["dependents_disabled"] = alsoDisabled
+	}
+	if len(failedToDisable) > 0 {
+		entry["dependents_disable_failed"] = failedToDisable
+	}
+	audit(h.store, r, serverID, "mod.uninstall", entry)
+
+	// 204 keeps the plain delete unchanged; a delete that was asked to take
+	// dependents with it has something to report, so it answers with what it did.
+	if withDependents {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"disabled": nonNil(alsoDisabled),
+			"failed":   nonNil(failedToDisable),
+		})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// boolQuery reads a truthy query flag ("1", "true", "yes").
+func boolQuery(r *http.Request, name string) bool {
+	switch strings.ToLower(r.URL.Query().Get(name)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+// nonNil renders an empty list as [] rather than null, so clients can index it
+// without a null check.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // ── helpers ──────────────────────────────────────────────────────────

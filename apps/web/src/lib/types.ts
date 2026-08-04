@@ -332,6 +332,34 @@ export interface InstalledMod {
   orphaned: boolean;
 }
 
+/** One installed mod that declares a dependency on another. */
+export interface ModDependent {
+  mod_id: string;
+  name: string;
+  version: string;
+  source: string;
+  source_id?: string;
+  enabled: boolean;
+  dependency_type: "required" | "optional";
+}
+
+/** What else on the server is affected by removing or disabling one mod. */
+export interface ModImpact {
+  mod_id: string;
+  name: string;
+  enabled: boolean;
+  /** Installed mods that won't load without it. */
+  required: ModDependent[];
+  /** Installed mods that merely integrate with it when present. */
+  optional: ModDependent[];
+  /** Auto-installed dependencies nothing would need once it's gone. */
+  orphaning: string[];
+  /** Installed mods whose dependencies the panel can't read at all. */
+  unchecked: number;
+  /** False when the mod has no project identity, so nothing can reference it. */
+  checked: boolean;
+}
+
 export type ModProjectType =
   | "mod"
   | "plugin"

@@ -11,6 +11,7 @@ import { compatible, type DetailTarget } from "./shared";
 import { VersionSwitchDialog } from "./version-switch-dialog";
 import { InstalledTab } from "./installed-tab";
 import { BrowseTab } from "./browse-tab";
+import { ModRemovalDialog, type RemovalMode } from "./removal-dialog";
 
 interface ModSearchProps {
   serverId: string;
@@ -48,9 +49,12 @@ export function ModSearch({
   });
   const curseforgeEnabled = sources?.curseforge ?? false;
 
-  const [uninstallTarget, setUninstallTarget] = useState<InstalledMod | null>(
-    null,
-  );
+  // Removing content, and disabling content something else needs, both go
+  // through the removal dialog so the operator sees what it breaks first.
+  const [removalTarget, setRemovalTarget] = useState<{
+    mod: InstalledMod;
+    mode: RemovalMode;
+  } | null>(null);
   const [switchTarget, setSwitchTarget] = useState<InstalledMod | null>(null);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [detailConfirm, setDetailConfirm] = useState(false);
@@ -83,14 +87,57 @@ export function ModSearch({
     ]);
   };
 
-  const uninstallMutation = useMutation({
-    mutationFn: (modId: string) => api.mods.uninstall(serverId, modId),
-    onSuccess: () => {
+  // One mutation for both removal modes: confirming the dialog always forces,
+  // because the dialog is where the operator saw and accepted the impact.
+  const removalMutation = useMutation({
+    mutationFn: ({
+      mod,
+      mode,
+      disableDependents,
+    }: {
+      mod: InstalledMod;
+      mode: RemovalMode;
+      disableDependents: boolean;
+    }) =>
+      mode === "uninstall"
+        ? api.mods
+            .uninstall(serverId, mod.id, { force: true, disableDependents })
+            .then((r) => ({
+              disabled: r?.disabled ?? [],
+              failed: r?.failed ?? [],
+            }))
+        : api.mods
+            .setEnabled(serverId, mod.id, false, {
+              force: true,
+              disableDependents,
+            })
+            .then((r) => ({
+              disabled: r.dependents_disabled ?? [],
+              failed: r.dependents_failed ?? [],
+            })),
+    onSuccess: ({ disabled, failed }, { mod, mode }) => {
       qc.invalidateQueries({ queryKey: ["mods", serverId] });
-      success("Mod uninstalled");
-      setUninstallTarget(null);
+      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
+      const done =
+        mode === "uninstall" ? `Uninstalled ${mod.name}` : `Disabled ${mod.name}`;
+      success(
+        done,
+        disabled.length > 0
+          ? `${disabled.length} dependent item${disabled.length === 1 ? "" : "s"} disabled too`
+          : undefined,
+      );
+      // A dependent left running against a dependency that just went away is
+      // the exact breakage this flow exists to prevent — say so loudly.
+      if (failed.length > 0) {
+        error(
+          "Some dependents are still enabled",
+          `Couldn't disable ${failed.join(", ")} — turn them off manually before restarting.`,
+        );
+      }
+      setRemovalTarget(null);
     },
-    onError: (e: Error) => error("Uninstall failed", e.message),
+    onError: (e: Error, { mode }) =>
+      error(mode === "uninstall" ? "Uninstall failed" : "Disable failed", e.message),
   });
 
   const [customUploadPct, setCustomUploadPct] = useState<number | null>(null);
@@ -272,7 +319,10 @@ export function ModSearch({
         loadingUpdates={loadingUpdates}
         refreshingContent={refreshingContent}
         onRefresh={refreshInstalledContent}
-        onUninstall={setUninstallTarget}
+        onUninstall={(mod) => setRemovalTarget({ mod, mode: "uninstall" })}
+        onDisableDependency={(mod) =>
+          setRemovalTarget({ mod, mode: "disable" })
+        }
         onSwitchVersion={setSwitchTarget}
         onShowDetails={(mod) =>
           setDetailTarget({
@@ -299,17 +349,21 @@ export function ModSearch({
         onTotalHits={setBrowseTotal}
       />
 
-      <ConfirmDialog
-        open={uninstallTarget !== null}
-        onClose={() => setUninstallTarget(null)}
-        onConfirm={() =>
-          uninstallTarget && uninstallMutation.mutate(uninstallTarget.id)
+      <ModRemovalDialog
+        open={removalTarget !== null}
+        serverId={serverId}
+        mod={removalTarget?.mod ?? null}
+        mode={removalTarget?.mode ?? "uninstall"}
+        pending={removalMutation.isPending}
+        onClose={() => setRemovalTarget(null)}
+        onConfirm={({ disableDependents }) =>
+          removalTarget &&
+          removalMutation.mutate({
+            mod: removalTarget.mod,
+            mode: removalTarget.mode,
+            disableDependents,
+          })
         }
-        title="Uninstall mod"
-        description={`Uninstall "${uninstallTarget?.name}"? The file will be removed from the server.`}
-        confirmLabel="Uninstall"
-        variant="destructive"
-        loading={uninstallMutation.isPending}
       />
 
       <VersionSwitchDialog

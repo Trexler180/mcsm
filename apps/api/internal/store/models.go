@@ -327,11 +327,21 @@ type InstalledMod struct {
 }
 
 // ModDependency is one edge of the reverse-dependency graph: DependentProjectID
-// requires DependencyProjectID, on a given server.
+// depends on DependencyProjectID, on a given server. Type is the dependency kind
+// the source declared — "required" (the dependent won't load without it) or
+// "optional" (it uses the other mod when present). Only required edges count
+// towards orphaning and removal warnings.
 type ModDependency struct {
 	DependentProjectID  string
 	DependencyProjectID string
+	Type                string
 }
+
+// Dependency types stored in mod_dependencies.dependency_type.
+const (
+	DependencyRequired = "required"
+	DependencyOptional = "optional"
+)
 
 type BackupTarget struct {
 	ID        string          `json:"id"`

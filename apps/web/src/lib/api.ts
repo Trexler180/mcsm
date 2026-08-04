@@ -21,6 +21,7 @@ import type {
   MetricsHistory,
   MissingDepResolution,
   ModCategory,
+  ModImpact,
   Overview,
   ServerConflict,
   ModSearchParams,
@@ -812,12 +813,41 @@ export const api = {
       }),
     pin: (serverId: string, modId: string, pinned: boolean) =>
       post(`/servers/${serverId}/mods/${modId}/pin`, { pinned }),
-    setEnabled: (serverId: string, modId: string, enabled: boolean) =>
-      post<InstalledMod>(`/servers/${serverId}/mods/${modId}/enabled`, {
+    // What else on the server depends on this mod. Read-only; the removal and
+    // disable dialogs use it to say what would break before anything changes.
+    dependents: (serverId: string, modId: string) =>
+      get<ModImpact>(`/servers/${serverId}/mods/${modId}/dependents`),
+    setEnabled: (
+      serverId: string,
+      modId: string,
+      enabled: boolean,
+      opts: { force?: boolean; disableDependents?: boolean } = {},
+    ) =>
+      post<
+        InstalledMod & {
+          dependents_disabled?: string[];
+          dependents_failed?: string[];
+        }
+      >(`/servers/${serverId}/mods/${modId}/enabled`, {
         enabled,
+        // The API refuses to disable content other mods require unless the
+        // caller confirms it has seen the impact.
+        force: opts.force ?? false,
+        disable_dependents: opts.disableDependents ?? false,
       }),
-    uninstall: (serverId: string, modId: string) =>
-      del(`/servers/${serverId}/mods/${modId}`),
+    uninstall: (
+      serverId: string,
+      modId: string,
+      opts: { force?: boolean; disableDependents?: boolean } = {},
+    ) => {
+      const params = new URLSearchParams();
+      if (opts.force) params.set("force", "1");
+      if (opts.disableDependents) params.set("disable_dependents", "1");
+      const qs = params.toString();
+      return del<{ disabled?: string[]; failed?: string[] } | undefined>(
+        `/servers/${serverId}/mods/${modId}${qs ? `?${qs}` : ""}`,
+      );
+    },
     disableConflict: (serverId: string, modIds: string[]) =>
       post<{ disabled: string[] }>(
         `/servers/${serverId}/mods/disable-conflict`,

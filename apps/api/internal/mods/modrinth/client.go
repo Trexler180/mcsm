@@ -548,6 +548,40 @@ func (c *Client) GetVersionsByHashes(ctx context.Context, hashes []string, algor
 	return out, nil
 }
 
+// GetVersionsByIDs fetches several versions in one call (GET /v2/versions?ids=[...]).
+// It is how the dependency graph is rebuilt from the builds actually installed:
+// each version carries its own declared dependencies, so one request covers a
+// whole server's worth of mods. Unknown ids are simply absent from the result.
+func (c *Client) GetVersionsByIDs(ctx context.Context, ids []string) ([]Version, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	params := url.Values{"ids": {"[" + strings.Join(quoted, ",") + "]"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/versions?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("modrinth returned %d", resp.StatusCode)
+	}
+	var out []Version
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) GetVersion(ctx context.Context, versionID string) (*Version, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/version/"+versionID, nil)
 	if err != nil {

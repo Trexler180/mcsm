@@ -239,8 +239,11 @@ func annotateDepWarnings(ctx context.Context, s *store.Store, serverID string, m
 	if err != nil {
 		return
 	}
-	depsOf := map[string][]string{} // dependent project id -> its dependency project ids
+	depsOf := map[string][]string{} // dependent project id -> its required dependency project ids
 	for _, e := range edges {
+		if e.Type == store.DependencyOptional {
+			continue // losing an optional dependency doesn't break the dependent
+		}
 		depsOf[e.DependentProjectID] = append(depsOf[e.DependentProjectID], e.DependencyProjectID)
 	}
 

@@ -33,6 +33,8 @@ interface InstalledTabProps {
   refreshingContent: boolean;
   onRefresh: () => void;
   onUninstall: (mod: InstalledMod) => void;
+  /** Called instead of toggling when disabling would break other content. */
+  onDisableDependency: (mod: InstalledMod) => void;
   onSwitchVersion: (mod: InstalledMod) => void;
   onShowDetails: (mod: InstalledMod) => void;
   onUploadClick: () => void;
@@ -50,6 +52,7 @@ export function InstalledTab({
   refreshingContent,
   onRefresh,
   onUninstall,
+  onDisableDependency,
   onSwitchVersion,
   onShowDetails,
   onUploadClick,
@@ -409,6 +412,7 @@ export function InstalledTab({
                   serverId={serverId}
                   update={updatesByMod.get(mod.id)}
                   onUninstall={() => onUninstall(mod)}
+                  onDisableDependency={() => onDisableDependency(mod)}
                   onSwitchVersion={
                     mod.source_id &&
                     (mod.source === "modrinth" ||
