@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Ban, CircleCheck, Globe, Loader2, Plus, Search, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { PermissionButton } from '@/components/ui/permission'
 import { Input } from '@/components/ui/input'
 import { Dialog } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
@@ -118,9 +119,15 @@ function AddIPBanDialog({
         <Button variant="outline" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button variant="destructive" disabled={!valid || busy} loading={busy} onClick={submit}>
+        <PermissionButton
+          need="players.ban"
+          variant="destructive"
+          disabled={!valid || busy}
+          loading={busy}
+          onClick={submit}
+        >
           <Ban className="h-3.5 w-3.5" /> Ban IP
-        </Button>
+        </PermissionButton>
       </div>
     </Dialog>
   )
@@ -149,7 +156,8 @@ function PlayerBanRow({
         <p className="text-sm font-medium text-text-primary truncate">{ban.name}</p>
         <BanMeta reason={ban.reason} created={ban.created} expires={ban.expires} />
       </div>
-      <Button
+      <PermissionButton
+        need="players.ban"
         size="sm"
         variant="outline"
         className="flex-shrink-0"
@@ -157,7 +165,7 @@ function PlayerBanRow({
         onClick={onPardon}
       >
         <CircleCheck className="h-3.5 w-3.5" /> Pardon
-      </Button>
+      </PermissionButton>
     </div>
   )
 }
@@ -172,7 +180,8 @@ function IPBanRow({ ban, busy, onPardon }: { ban: BannedIP; busy: boolean; onPar
         <p className="text-sm font-medium text-text-primary truncate font-mono">{ban.ip}</p>
         <BanMeta reason={ban.reason} created={ban.created} expires={ban.expires} />
       </div>
-      <Button
+      <PermissionButton
+        need="players.ban"
         size="sm"
         variant="outline"
         className="flex-shrink-0"
@@ -180,7 +189,7 @@ function IPBanRow({ ban, busy, onPardon }: { ban: BannedIP; busy: boolean; onPar
         onClick={onPardon}
       >
         <CircleCheck className="h-3.5 w-3.5" /> Pardon
-      </Button>
+      </PermissionButton>
     </div>
   )
 }
@@ -275,14 +284,15 @@ export function BansView({ serverId, status }: BansViewProps) {
               : `Server is ${status} · edits banned-players.json / banned-ips.json`}
           </p>
         </div>
-        <Button
+        <PermissionButton
+          need="players.ban"
           size="sm"
           variant="outline"
           className="flex-shrink-0"
           onClick={() => setAddOpen(true)}
         >
           <Plus className="h-3.5 w-3.5" /> Ban IP
-        </Button>
+        </PermissionButton>
       </div>
 
       {/* Search */}

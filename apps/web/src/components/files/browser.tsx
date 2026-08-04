@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton, PermissionGate } from "@/components/ui/permission";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { api } from "@/lib/api";
@@ -163,26 +164,32 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button
+          <PermissionButton
+            need="files.write"
             size="sm"
             variant="ghost"
             onClick={() => mkdirMutation.mutate()}
             title="New folder"
           >
             <FolderPlus className="h-3.5 w-3.5" />
-          </Button>
-          <label
-            title="Upload files"
-            className="cursor-pointer inline-flex items-center justify-center h-7 px-3 text-xs rounded text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            <input
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleUpload}
-            />
-          </label>
+          </PermissionButton>
+          {/* A <label> wrapping a file input can't be disabled the way a button
+              can — clicking the label still opens the picker — so the gate has
+              to sit outside it and swallow the click. */}
+          <PermissionGate need="files.write">
+            <label
+              title="Upload files"
+              className="cursor-pointer inline-flex items-center justify-center h-7 px-3 text-xs rounded text-text-secondary hover:text-text-primary hover:bg-surface-2 transition-colors"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={handleUpload}
+              />
+            </label>
+          </PermissionGate>
         </div>
       </div>
 
@@ -296,20 +303,22 @@ export function FileBrowser({ serverId, onFileSelect }: FileBrowserProps) {
                       >
                         <Download className="h-3.5 w-3.5" />
                       </button>
-                      <button
-                        onClick={() =>
-                          setDeleteTarget(
-                            currentPath === "/"
-                              ? "/" + entry.name
-                              : currentPath + "/" + entry.name,
-                          )
-                        }
-                        title={`Delete ${entry.name}`}
-                        aria-label={`Delete ${entry.name}`}
-                        className="p-1 hover:text-red-400 text-text-secondary rounded"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <PermissionGate need="files.delete">
+                        <button
+                          onClick={() =>
+                            setDeleteTarget(
+                              currentPath === "/"
+                                ? "/" + entry.name
+                                : currentPath + "/" + entry.name,
+                            )
+                          }
+                          title={`Delete ${entry.name}`}
+                          aria-label={`Delete ${entry.name}`}
+                          className="p-1 hover:text-red-400 text-text-secondary rounded"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </PermissionGate>
                     </div>
                   </td>
                 </tr>

@@ -9,9 +9,16 @@
   granular per-server permission system (`server_members` /
   `server_permissions`): view, console, power (start/stop/restart/kill),
   settings, files (read/write/delete), mods (install/update/remove), backups
-  (create/restore/delete), players (whitelist/kick/ban/op), and tasks. Each route
-  is gated on the specific permission, and the global admin role is re-read from
-  the database on every check so a demotion takes effect immediately.
+  (create/restore/delete), players
+  (whitelist/kick/ban/op/inspect/delete), and tasks. Each route is gated on the
+  specific permission, and the global admin role is re-read from the database on
+  every check so a demotion takes effect immediately.
+
+  `players.inspect` covers reading a player's saved data — inventory, ender
+  chest, coordinates, health and visit history. It is deliberately separate from
+  the rest of the group: knowing who plays on a server is a much smaller
+  disclosure than reading what they carry and where they are, so a helper who
+  manages the whitelist does not get that by default.
 
 The granular permission model is live (not reserved). The `api_keys` table is
 still reserved for future automation use.

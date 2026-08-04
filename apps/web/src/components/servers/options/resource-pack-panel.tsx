@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -329,7 +330,8 @@ export function ResourcePackOptionsPanel({ server }: { server: Server }) {
       description="Host one zip for this server and write its URL into server.properties."
       actions={
         <div className="flex flex-shrink-0 flex-wrap justify-end gap-2">
-          <Button
+          <PermissionButton
+            need="files.write"
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
@@ -339,15 +341,18 @@ export function ResourcePackOptionsPanel({ server }: { server: Server }) {
             {uploadMutation.isPending && uploadPct !== null
               ? `${uploadPct}%`
               : "Upload"}
-          </Button>
-          <Button
+          </PermissionButton>
+          {/* Saving rewrites server.properties and the server row, so it needs
+              the file grant on top of the settings one that opens this tab. */}
+          <PermissionButton
+            need="files.write"
             size="sm"
             onClick={() => saveMutation.mutate()}
             loading={saveMutation.isPending}
           >
             {!saveMutation.isPending && <Save className="h-3.5 w-3.5" />}
             Save
-          </Button>
+          </PermissionButton>
         </div>
       }
     >

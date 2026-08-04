@@ -31,6 +31,7 @@ export type ServerPermissionLeaf =
   | "players.ban"
   | "players.op"
   | "players.delete"
+  | "players.inspect"
   | "files.read"
   | "files.write"
   | "files.delete"
@@ -275,6 +276,10 @@ export interface Server {
   created_at: string;
   updated_at: string;
   online_since?: number; // unix seconds; present while the server is online
+  // The requesting user's effective permissions on this server, resolved by the
+  // API (owners and global admins get the full set). Only the list endpoint
+  // populates it; the detail page reads /members/me instead.
+  permissions?: ServerPermission[];
 }
 
 export interface FileEntry {

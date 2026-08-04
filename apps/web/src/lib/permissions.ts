@@ -42,6 +42,7 @@ export const PERMISSION_MODEL: PermissionGroupDef[] = [
       { value: "players.kick", label: "Kick" },
       { value: "players.ban", label: "Ban / pardon (players & IPs)" },
       { value: "players.op", label: "Op / deop" },
+      { value: "players.inspect", label: "View saved data" },
       { value: "players.delete", label: "Delete saved data" },
     ],
   },
@@ -83,6 +84,36 @@ export const PERMISSION_MODEL: PermissionGroupDef[] = [
 export const ALL_PERMISSIONS: ServerPermission[] = PERMISSION_MODEL.flatMap(
   (g) => [g.group, ...g.leaves.map((l) => l.value)],
 );
+
+// Human labels for every permission, phrased the way the Access tab presents
+// them so a denial message names the exact checkbox an admin would tick. Leaves
+// are qualified by their group ("Power · Stop") because several groups reuse
+// short verbs like Delete.
+const PERMISSION_LABELS = new Map<ServerPermission, string>(
+  PERMISSION_MODEL.flatMap((g): Array<[ServerPermission, string]> => [
+    [g.group, g.label],
+    ...g.leaves.map(
+      (l): [ServerPermission, string] => [l.value, `${g.label} · ${l.label}`],
+    ),
+  ]),
+);
+
+export function permissionLabel(p: ServerPermission): string {
+  return PERMISSION_LABELS.get(p) ?? p;
+}
+
+// deniedReason is the sentence shown on a gated control's tooltip and in the
+// toast a tap produces on touch devices, where tooltips never open. Several
+// permissions means the control needs any one of them.
+export function deniedReason(p: ServerPermission | ServerPermission[]): string {
+  const needed = Array.isArray(p) ? p : [p];
+  const quoted = needed.map((n) => `"${permissionLabel(n)}"`);
+  const list =
+    quoted.length > 1
+      ? `${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}`
+      : quoted[0];
+  return `You don't have the ${list} permission on this server.`;
+}
 
 const ORDER = new Map<ServerPermission, number>(
   ALL_PERMISSIONS.map((p, i) => [p, i]),

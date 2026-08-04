@@ -12,6 +12,7 @@ import {
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
@@ -280,7 +281,8 @@ export function InstalledTab({
               onChange={(e) => setInstalledFilter(e.target.value)}
             />
           </div>
-          <Button
+          <PermissionButton
+            need="mods.update"
             size="sm"
             variant="ghost"
             onClick={() => updateAllMutation.mutate()}
@@ -294,8 +296,9 @@ export function InstalledTab({
           >
             <Download className="h-3.5 w-3.5" />
             Update all
-          </Button>
-          <Button
+          </PermissionButton>
+          <PermissionButton
+            need="mods.update"
             size="sm"
             variant="outline"
             onClick={() => setShowSafeUpdate(true)}
@@ -309,7 +312,7 @@ export function InstalledTab({
           >
             <ShieldCheck className="h-3.5 w-3.5" />
             {activeRun ? "Safe update running…" : "Safe update"}
-          </Button>
+          </PermissionButton>
           {skippedVersions.length > 0 && (
             <button
               onClick={() => setShowSkipped(true)}
@@ -376,7 +379,8 @@ export function InstalledTab({
             <div className="text-center py-12 text-text-secondary">
               <Package className="h-8 w-8 mx-auto mb-2 opacity-30" />
               <p className="text-sm">No content installed</p>
-              <Button
+              <PermissionButton
+                need="mods.install"
                 size="sm"
                 variant="outline"
                 className="mt-3"
@@ -387,7 +391,7 @@ export function InstalledTab({
                 {uploadPending && uploadPct !== null
                   ? `${uploadPct}%`
                   : "Upload jar"}
-              </Button>
+              </PermissionButton>
             </div>
           ) : visibleInstalled.length === 0 ? (
             <div className="text-center py-12 text-text-secondary">
@@ -477,7 +481,8 @@ export function InstalledTab({
                     </div>
                   )}
                 </div>
-                <Button
+                <PermissionButton
+                  need="mods.update"
                   size="sm"
                   variant="outline"
                   onClick={() =>
@@ -489,7 +494,7 @@ export function InstalledTab({
                   loading={unskipMutation.isPending}
                 >
                   Allow again
-                </Button>
+                </PermissionButton>
               </li>
             ))}
           </ul>

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Compass, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { ModDetailDialog } from "@/components/mods/detail";
 import { api } from "@/lib/api";
@@ -285,7 +286,8 @@ export function ModSearch({
           {browseTotal !== null && ` (${browseTotal})`}
         </button>
         <div className="ml-auto flex items-center gap-2 mr-2">
-          <Button
+          <PermissionButton
+            need="mods.install"
             size="sm"
             variant={activeTab === "installed" ? "outline" : "ghost"}
             onClick={() => uploadInputRef.current?.click()}
@@ -296,7 +298,7 @@ export function ModSearch({
             {uploadCustomMutation.isPending && customUploadPct !== null
               ? `${customUploadPct}%`
               : "Upload jar"}
-          </Button>
+          </PermissionButton>
           {activeTab === "installed" && (
             <Button
               size="sm"

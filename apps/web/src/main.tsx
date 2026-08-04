@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import * as Tooltip from '@radix-ui/react-tooltip'
 import { registerSW } from 'virtual:pwa-register'
 import { routeTree } from './routeTree'
 import { AppErrorBoundary, RouteErrorFallback } from './components/error-boundary'
@@ -46,7 +47,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <AppErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        {/* Permission-gated controls explain themselves through a tooltip, and
+            they appear on nearly every server view — so the provider belongs at
+            the root rather than in each panel that happens to hold one. */}
+        <Tooltip.Provider delayDuration={120}>
+          <RouterProvider router={router} />
+        </Tooltip.Provider>
       </QueryClientProvider>
     </AppErrorBoundary>
   </React.StrictMode>,

@@ -198,6 +198,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					filesWrite := requireServerPermission(s, store.ServerPermissionFilesWrite)
 					filesDelete := requireServerPermission(s, store.ServerPermissionFilesDelete)
 					playersDelete := requireServerPermission(s, store.ServerPermissionPlayersDelete)
+					playersInspect := requireServerPermission(s, store.ServerPermissionPlayersInspect)
 					modsInstall := requireServerPermission(s, store.ServerPermissionModsInstall)
 					modsUpdate := requireServerPermission(s, store.ServerPermissionModsUpdate)
 					modsRemove := requireServerPermission(s, store.ServerPermissionModsRemove)
@@ -246,10 +247,13 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(playersRead).Get("/players/meta", playersH.Meta)
 					r.With(playersRead).Get("/players/bans", playersH.Bans)
 					r.With(playersRead).Get("/players/bedrock/resolve", playersH.ResolveBedrock)
-					// Panel-tracked visit history (opened/closed by the poller).
-					r.With(playersRead).Get("/players/sessions", playersH.Sessions)
+					// A player's saved data (inventory, ender chest, position) and
+					// their visit history are read only through the detail view,
+					// which is its own grant — the roster above says who plays
+					// here, this says what they carry and when they were on.
+					r.With(playersInspect).Get("/players/sessions", playersH.Sessions)
 					r.With(playersRead).Post("/players/action", playersH.Action)
-					r.With(playersRead).Get("/players/{uuid}", playersH.Detail)
+					r.With(playersInspect).Get("/players/{uuid}", playersH.Detail)
 					r.With(playersDelete).Delete("/players/{uuid}", playersH.Delete)
 
 					// Files

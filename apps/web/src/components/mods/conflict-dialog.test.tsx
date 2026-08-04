@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { ModConflict } from "@/lib/types";
 import { ModConflictDialog } from "./conflict-dialog";
+import { ServerPermissionsProvider } from "@/lib/server-permissions";
 
 vi.mock("@/store/notifications", () => ({
   useNotifications: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -40,11 +41,17 @@ function renderDialog(conflict: ModConflict, onClose = vi.fn()) {
   });
   render(
     <QueryClientProvider client={qc}>
-      <ModConflictDialog
-        serverId="server-1"
-        conflict={conflict}
-        onClose={onClose}
-      />
+      {/* The dialog's actions are permission-gated, so it only works inside a
+          permissions provider — as an owner, who holds everything. */}
+      <ServerPermissionsProvider
+        permissions={{ owner: true, global_admin: false, permissions: [] }}
+      >
+        <ModConflictDialog
+          serverId="server-1"
+          conflict={conflict}
+          onClose={onClose}
+        />
+      </ServerPermissionsProvider>
     </QueryClientProvider>,
   );
   return onClose;

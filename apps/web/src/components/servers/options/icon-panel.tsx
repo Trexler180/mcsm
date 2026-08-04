@@ -6,7 +6,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { Server } from "@/lib/types";
@@ -174,7 +174,8 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
       description="The 64×64 icon shown next to your server in the multiplayer list. Use the world's own icon or upload a custom image."
       actions={
         hasIcon ? (
-          <Button
+          <PermissionButton
+            need="files.delete"
             variant="outline"
             size="sm"
             onClick={() => removeMutation.mutate()}
@@ -183,7 +184,7 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
           >
             {!removeMutation.isPending && <Trash2 className="h-3.5 w-3.5" />}
             Remove
-          </Button>
+          </PermissionButton>
         ) : undefined
       }
     >
@@ -234,7 +235,8 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
                 </p>
               </div>
             </div>
-            <Button
+            <PermissionButton
+              need="files.write"
               variant="outline"
               size="sm"
               className="w-full"
@@ -243,7 +245,7 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
               disabled={!hasWorldIcon || busy}
             >
               Use world icon
-            </Button>
+            </PermissionButton>
           </div>
 
           {/* Custom upload */}
@@ -259,7 +261,8 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
                 </p>
               </div>
             </div>
-            <Button
+            <PermissionButton
+              need="files.write"
               variant="outline"
               size="sm"
               className="w-full"
@@ -269,7 +272,7 @@ export function ServerIconOptionsPanel({ server }: { server: Server }) {
             >
               {!uploadMutation.isPending && <Upload className="h-3.5 w-3.5" />}
               {hasIcon ? "Upload new" : "Upload"}
-            </Button>
+            </PermissionButton>
           </div>
         </div>
       </div>

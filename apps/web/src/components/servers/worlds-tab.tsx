@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Globe2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -72,7 +72,8 @@ export function WorldsTab({
         title="Worlds"
         description="World folders in the server root, detected by their level.dat."
         actions={
-          <Button
+          <PermissionButton
+            need="files.write"
             size="sm"
             variant="outline"
             onClick={() => setUploading(true)}
@@ -80,7 +81,7 @@ export function WorldsTab({
           >
             <Upload className="h-3.5 w-3.5" />
             Upload world
-          </Button>
+          </PermissionButton>
         }
       >
         {isLoading ? (

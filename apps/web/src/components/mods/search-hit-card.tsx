@@ -6,6 +6,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -214,7 +215,8 @@ export function SearchHitCard({
                 >
                   {picking ? "Hide" : "Versions"}
                 </Button>
-                <Button
+                <PermissionButton
+                  need="mods.install"
                   size="sm"
                   variant="default"
                   onClick={handleQuickInstall}
@@ -222,7 +224,7 @@ export function SearchHitCard({
                 >
                   <Download className="h-3.5 w-3.5" />
                   Install
-                </Button>
+                </PermissionButton>
               </>
             )}
           </div>
@@ -246,7 +248,8 @@ export function SearchHitCard({
                   </option>
                 ))}
               </select>
-              <Button
+              <PermissionButton
+                need="mods.install"
                 size="sm"
                 onClick={() =>
                   installMutation.mutate(
@@ -256,7 +259,7 @@ export function SearchHitCard({
                 loading={installMutation.isPending}
               >
                 Install
-              </Button>
+              </PermissionButton>
             </>
           ) : (
             <p className="text-xs text-text-secondary">

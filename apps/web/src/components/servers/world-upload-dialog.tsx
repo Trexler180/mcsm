@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FileArchive, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -408,14 +409,15 @@ export function WorldUploadDialog({
         <Button variant="outline" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button
+        <PermissionButton
+          need="files.write"
           onClick={() => uploadMutation.mutate()}
           disabled={!canSubmit}
           loading={busy}
         >
           {!busy && <Upload className="h-3.5 w-3.5" />}
           {conflict ? "Replace world" : "Upload"}
-        </Button>
+        </PermissionButton>
       </div>
     </Dialog>
   );

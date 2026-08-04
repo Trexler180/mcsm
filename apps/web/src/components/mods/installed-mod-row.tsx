@@ -8,7 +8,7 @@ import {
   Unlink,
   ArrowRightLeft,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { PermissionButton, PermissionGate } from "@/components/ui/permission";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type {
@@ -223,7 +223,8 @@ export function InstalledModRow({
           They only rejoin the row once the 3-column grid engages at xl. */}
       <div className="flex items-center gap-1 flex-shrink-0 justify-end border-t border-border/40 pt-2 xl:border-t-0 xl:pt-0">
         {onSwitchVersion && (
-          <Button
+          <PermissionButton
+            need="mods.update"
             size="sm"
             variant="ghost"
             onClick={onSwitchVersion}
@@ -231,10 +232,11 @@ export function InstalledModRow({
             aria-label={`Switch version of ${mod.name}`}
           >
             <ArrowRightLeft className="h-3.5 w-3.5 text-text-secondary" />
-          </Button>
+          </PermissionButton>
         )}
         {update && (
-          <Button
+          <PermissionButton
+            need="mods.update"
             size="sm"
             variant="outline"
             onClick={() => updateMutation.mutate()}
@@ -243,32 +245,35 @@ export function InstalledModRow({
             aria-label={`Update ${mod.name} to ${update.latest_version}`}
           >
             <ArrowUpCircle className="h-3.5 w-3.5" />
-          </Button>
+          </PermissionButton>
         )}
-        <Switch
-          checked={mod.enabled}
-          // Turning off something other content requires is as breaking as
-          // deleting it, so it goes through the impact dialog instead of
-          // flipping straight away. Enabling never breaks anything.
-          onChange={() =>
-            mod.enabled && mod.required_by.length > 0
-              ? onDisableDependency()
-              : enabledMutation.mutate()
-          }
-          disabled={enabledMutation.isPending}
-          title={
-            mod.enabled
-              ? mod.required_by.length > 0
-                ? `Disable (required by ${mod.required_by.join(", ")})`
-                : "Disable (keep file)"
-              : "Enable"
-          }
-          aria-label={
-            mod.enabled ? `Disable ${mod.name}` : `Enable ${mod.name}`
-          }
-        />
+        <PermissionGate need="mods.update">
+          <Switch
+            checked={mod.enabled}
+            // Turning off something other content requires is as breaking as
+            // deleting it, so it goes through the impact dialog instead of
+            // flipping straight away. Enabling never breaks anything.
+            onChange={() =>
+              mod.enabled && mod.required_by.length > 0
+                ? onDisableDependency()
+                : enabledMutation.mutate()
+            }
+            disabled={enabledMutation.isPending}
+            title={
+              mod.enabled
+                ? mod.required_by.length > 0
+                  ? `Disable (required by ${mod.required_by.join(", ")})`
+                  : "Disable (keep file)"
+                : "Enable"
+            }
+            aria-label={
+              mod.enabled ? `Disable ${mod.name}` : `Enable ${mod.name}`
+            }
+          />
+        </PermissionGate>
         {mod.source_id && (
-          <Button
+          <PermissionButton
+            need="mods.update"
             size="sm"
             variant="ghost"
             onClick={() => pinMutation.mutate()}
@@ -285,9 +290,10 @@ export function InstalledModRow({
             ) : (
               <Pin className="h-3.5 w-3.5 text-text-secondary" />
             )}
-          </Button>
+          </PermissionButton>
         )}
-        <Button
+        <PermissionButton
+          need="mods.remove"
           size="sm"
           variant="ghost"
           onClick={onUninstall}
@@ -295,7 +301,7 @@ export function InstalledModRow({
           aria-label={`Uninstall ${mod.name}`}
         >
           <Trash2 className="h-3.5 w-3.5 text-red-400" />
-        </Button>
+        </PermissionButton>
       </div>
     </div>
   );

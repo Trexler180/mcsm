@@ -15,6 +15,7 @@ import {
   ChevronLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
@@ -524,9 +525,15 @@ function ConfigEditor({
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" onClick={save} loading={saving} disabled={!dirty}>
+          <PermissionButton
+            need="files.write"
+            size="sm"
+            onClick={save}
+            loading={saving}
+            disabled={!dirty}
+          >
             <Save className="h-3.5 w-3.5" /> {dirty ? "Save" : "Saved"}
-          </Button>
+          </PermissionButton>
         </div>
       </div>
 

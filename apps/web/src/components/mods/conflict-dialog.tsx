@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
@@ -204,21 +205,24 @@ export function ModConflictDialog({
         </Button>
         {!isJava && disables.length > 0 && (
           <>
-            <Button
+            <PermissionButton
+              need="mods.update"
               variant="outline"
               onClick={() => apply.mutate(false)}
               loading={apply.isPending}
               disabled={selected.size === 0}
             >
               Disable selected
-            </Button>
-            <Button
+            </PermissionButton>
+            <PermissionButton
+              need={["mods.update", "power.restart"]}
+              variant="default"
               onClick={() => apply.mutate(true)}
               loading={apply.isPending}
               disabled={selected.size === 0}
             >
               Disable &amp; restart
-            </Button>
+            </PermissionButton>
           </>
         )}
       </div>
@@ -351,19 +355,21 @@ function MissingDepsFix({
 
       {data && installable.length > 0 && (
         <div className="flex flex-wrap justify-end gap-3 pt-1">
-          <Button
+          <PermissionButton
+            need="mods.install"
             variant="outline"
             onClick={() => install.mutate(false)}
             loading={install.isPending}
           >
             Install only
-          </Button>
-          <Button
+          </PermissionButton>
+          <PermissionButton
+            need={["mods.install", "power.restart"]}
             onClick={() => install.mutate(true)}
             loading={install.isPending}
           >
             Install &amp; restart
-          </Button>
+          </PermissionButton>
         </div>
       )}
 
@@ -461,12 +467,13 @@ function JavaFix({
                     {j.path}
                   </p>
                 </div>
-                <Button
+                <PermissionButton
+                  need="settings"
                   onClick={() => switchJava.mutate(j.path)}
                   loading={switchJava.isPending}
                 >
                   Use &amp; restart
-                </Button>
+                </PermissionButton>
               </div>
             ))}
           </div>

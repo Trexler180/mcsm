@@ -14,6 +14,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
+	"github.com/mcsm/api/internal/api/handlers"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
@@ -384,5 +385,128 @@ func TestServerMemberSecurityEdges(t *testing.T) {
 		if entry.Action == "server.member.add" {
 			t.Fatalf("rejected member-add wrote an audit row: %+v", entry)
 		}
+	}
+}
+
+// The panel gates each row's actions off the permissions the list endpoint
+// reports, so a wrong or missing set there is the difference between a button
+// the user can press and one that 403s on click.
+func TestListServersReportsCallerPermissions(t *testing.T) {
+	s, serverID, ownerID, otherID, adminID := accessTestStore(t)
+	ctx := context.Background()
+	if err := s.SetServerPermissions(ctx, serverID, otherID, []string{"power.start", "players.whitelist"}); err != nil {
+		t.Fatal(err)
+	}
+
+	secret := "secret"
+	h := handlers.NewServerHandlers(s, t.TempDir())
+	r := chi.NewRouter()
+	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Get("/servers", h.List)
+
+	list := func(userID, role string) []struct {
+		ID          string   `json:"id"`
+		Permissions []string `json:"permissions"`
+	} {
+		t.Helper()
+		token, err := auth.IssueAccessToken(secret, userID, "user@example.com", role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/servers", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		var out []struct {
+			ID          string   `json:"id"`
+			Permissions []string `json:"permissions"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	collaborator := list(otherID, "user")
+	if len(collaborator) != 1 || collaborator[0].ID != serverID {
+		t.Fatalf("collaborator saw %d servers, want the one they were granted", len(collaborator))
+	}
+	if got := strings.Join(collaborator[0].Permissions, ","); got != "players.whitelist,power.start" {
+		t.Fatalf("collaborator permissions=%q want the two granted leaves", got)
+	}
+
+	all := len(store.AllServerPermissions())
+	for _, tc := range []struct {
+		name   string
+		userID string
+		role   string
+	}{
+		{"owner", ownerID, "user"},
+		{"admin", adminID, "admin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := list(tc.userID, tc.role)
+			if len(rows) != 1 {
+				t.Fatalf("saw %d servers, want 1", len(rows))
+			}
+			if len(rows[0].Permissions) != all {
+				t.Fatalf("permissions=%d want the full set (%d)", len(rows[0].Permissions), all)
+			}
+		})
+	}
+}
+
+// Reading a player's saved data is its own grant, so holding some other players
+// leaf (whitelist, ban…) must not open it. This tightened an earlier rule where
+// any players access reached the detail view.
+func TestPlayerInspectIsSeparateFromRosterAccess(t *testing.T) {
+	s, serverID, _, otherID, _ := accessTestStore(t)
+	secret := "secret"
+	r := chi.NewRouter()
+	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	ok := func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}
+	r.With(requireServerGroupAccess(s, store.ServerPermissionPlayers)).Get("/servers/{id}/players", ok)
+	r.With(requireServerPermission(s, store.ServerPermissionPlayersInspect)).Get("/servers/{id}/players/{uuid}", ok)
+
+	token, err := auth.IssueAccessToken(secret, otherID, "other@example.com", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(path string) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	roster := "/servers/" + serverID + "/players"
+	detail := roster + "/00000000-0000-0000-0000-000000000001"
+
+	for _, tc := range []struct {
+		name       string
+		perms      []string
+		wantRoster int
+		wantDetail int
+	}{
+		{"whitelist only reaches the roster", []string{"players.whitelist"}, http.StatusOK, http.StatusForbidden},
+		{"inspect reaches saved data", []string{"players.inspect"}, http.StatusOK, http.StatusOK},
+		{"the group implies both", []string{"players"}, http.StatusOK, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := s.SetServerPermissions(context.Background(), serverID, otherID, tc.perms); err != nil {
+				t.Fatal(err)
+			}
+			if got := do(roster); got != tc.wantRoster {
+				t.Fatalf("roster status=%d want=%d", got, tc.wantRoster)
+			}
+			if got := do(detail); got != tc.wantDetail {
+				t.Fatalf("detail status=%d want=%d", got, tc.wantDetail)
+			}
+		})
 	}
 }

@@ -22,6 +22,7 @@ import {
 import { Dialog } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { PermissionButton } from '@/components/ui/permission'
 import { api } from '@/lib/api'
 import { useNotifications } from '@/store/notifications'
 import type { ItemStack, PlayerDetail, PlayerSession, PlayerStats } from '@/lib/types'
@@ -385,7 +386,10 @@ function StalenessBanner({
         )}
       </div>
       {serverOnline && (
-        <Button
+        // Refreshing runs `save-all flush` through the console, so it needs
+        // console access rather than any players permission.
+        <PermissionButton
+          need="console"
           size="sm"
           variant="outline"
           onClick={onRefresh}
@@ -393,7 +397,7 @@ function StalenessBanner({
           title="Flush the world to disk and reload"
         >
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </Button>
+        </PermissionButton>
       )}
     </div>
   )

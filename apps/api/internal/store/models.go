@@ -48,6 +48,10 @@ const (
 	ServerPermissionPlayersBan       ServerPermission = "players.ban"
 	ServerPermissionPlayersOp        ServerPermission = "players.op"
 	ServerPermissionPlayersDelete    ServerPermission = "players.delete"
+	// Reading a player's saved data — inventory, ender chest, position, health.
+	// Separate from the roster: seeing who plays here is a much smaller
+	// disclosure than reading what they carry and where they are.
+	ServerPermissionPlayersInspect ServerPermission = "players.inspect"
 
 	ServerPermissionFilesRead   ServerPermission = "files.read"
 	ServerPermissionFilesWrite  ServerPermission = "files.write"
@@ -96,7 +100,7 @@ var serverPermissionLeaves = map[string][]string{
 	string(ServerPermissionPlayers): {
 		string(ServerPermissionPlayersWhitelist), string(ServerPermissionPlayersKick),
 		string(ServerPermissionPlayersBan), string(ServerPermissionPlayersOp),
-		string(ServerPermissionPlayersDelete),
+		string(ServerPermissionPlayersDelete), string(ServerPermissionPlayersInspect),
 	},
 	string(ServerPermissionFiles): {
 		string(ServerPermissionFilesRead), string(ServerPermissionFilesWrite),

@@ -23,6 +23,8 @@ import {
 import { SectionNav } from "@/components/servers/section-nav";
 import type { ServerPermission } from "@/lib/types";
 import { can as hasPermission } from "@/lib/permissions";
+import { ServerPermissionsProvider } from "@/lib/server-permissions";
+import { PermissionButton } from "@/components/ui/permission";
 
 const ServerTerminal = lazy(() =>
   import("@/components/console/terminal").then((m) => ({ default: m.ServerTerminal })),
@@ -274,223 +276,232 @@ export function ServerDetailPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-6 py-3 border-b border-border bg-surface/50 flex-shrink-0">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => navigate({ to: "/servers" })}
-          title="Back to servers"
-          aria-label="Back to servers"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-text-primary truncate">
-              {server.name}
-            </h1>
-            <StatusBadge status={server.status as ServerStatus} />
+    <ServerPermissionsProvider permissions={permissions}>
+      <div className="flex flex-col h-full">
+        {/* Header */}
+        <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-6 py-3 border-b border-border bg-surface/50 flex-shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate({ to: "/servers" })}
+            title="Back to servers"
+            aria-label="Back to servers"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3">
+              <h1 className="text-lg font-semibold text-text-primary truncate">
+                {server.name}
+              </h1>
+              <StatusBadge status={server.status as ServerStatus} />
+            </div>
+            <p className="truncate text-xs text-text-secondary">
+              {server.platform} {server.mc_version} · :{server.port} ·{" "}
+              {server.ram_mb_max} MB
+            </p>
           </div>
-          <p className="truncate text-xs text-text-secondary">
-            {server.platform} {server.mc_version} · :{server.port} ·{" "}
-            {server.ram_mb_max} MB
-          </p>
-        </div>
 
-        {/* Resource metrics */}
-        <div className="hidden lg:block w-64">
-          <ResourceChart
-            serverId={id}
-            ramMaxMb={server.ram_mb_max}
-            status={server.status}
-          />
-        </div>
-
-        {/* Controls */}
-        {can("power") && (
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {!isOnline ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => start.mutate()}
-                loading={busy}
-                title="Start"
-                aria-label="Start server"
-              >
-                <Play className="h-4 w-4 text-green-400" />
-              </Button>
-            ) : (
-              <>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => restart.mutate()}
-                  loading={busy}
-                  title="Restart"
-                  aria-label="Restart server"
-                >
-                  <RotateCcw className="h-4 w-4 text-yellow-400" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => stop.mutate()}
-                  loading={busy}
-                  title="Stop"
-                  aria-label="Stop server"
-                >
-                  <Square className="h-4 w-4 text-red-400" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => kill.mutate()}
-                  loading={busy}
-                  title="Kill"
-                  aria-label="Kill server"
-                >
-                  <Skull className="h-4 w-4 text-red-600" />
-                </Button>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-1 min-h-0 flex-col md:flex-row">
-        <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-48 md:border-b-0 md:border-r md:p-3 lg:w-56">
-          <SectionNav groups={sectionGroups} active={tab} onSelect={setTab} />
-        </aside>
-
-        <main className="flex-1 min-w-0 min-h-0 overflow-hidden">
-          <Suspense fallback={<SectionFallback />}>
-          {tab === "dashboard" && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <DashboardTab
-                server={server}
-                backups={backups}
-                can={can}
-                onSection={goSection}
-              />
-            </div>
-          )}
-          {tab === "console" && can("console") && (
-            <div className="h-full min-h-0 p-4 pb-6">
-              <ServerTerminal serverId={id} />
-            </div>
-          )}
-          {tab === "logs" && can("files") && <LogsTab serverId={id} />}
-          {tab === "stats" && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <StatsTab serverId={id} ramMaxMb={server.ram_mb_max} />
-            </div>
-          )}
-          {tab === "players" && can("players") && (
-            <PlayersPanel
+          {/* Resource metrics */}
+          <div className="hidden lg:block w-64">
+            <ResourceChart
               serverId={id}
-              status={server.status as ServerStatus}
+              ramMaxMb={server.ram_mb_max}
+              status={server.status}
             />
-          )}
-          {tab === "version" && can("settings") && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <VersionTab server={server} />
+          </div>
+
+          {/* Controls. Each lifecycle action is its own permission, so the four
+              buttons are gated one by one — holding power.start alone must not
+              light up Stop and Kill. The row itself appears for anyone with some
+              power access; without any, it stays out of the header entirely. */}
+          {can("power") && (
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {!isOnline ? (
+                <PermissionButton
+                  need="power.start"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => start.mutate()}
+                  loading={busy}
+                  title="Start"
+                  aria-label="Start server"
+                >
+                  <Play className="h-4 w-4 text-green-400" />
+                </PermissionButton>
+              ) : (
+                <>
+                  <PermissionButton
+                    need="power.restart"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => restart.mutate()}
+                    loading={busy}
+                    title="Restart"
+                    aria-label="Restart server"
+                  >
+                    <RotateCcw className="h-4 w-4 text-yellow-400" />
+                  </PermissionButton>
+                  <PermissionButton
+                    need="power.stop"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => stop.mutate()}
+                    loading={busy}
+                    title="Stop"
+                    aria-label="Stop server"
+                  >
+                    <Square className="h-4 w-4 text-red-400" />
+                  </PermissionButton>
+                  <PermissionButton
+                    need="power.kill"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => kill.mutate()}
+                    loading={busy}
+                    title="Kill"
+                    aria-label="Kill server"
+                  >
+                    <Skull className="h-4 w-4 text-red-600" />
+                  </PermissionButton>
+                </>
+              )}
             </div>
           )}
-          {tab === "options" && can("settings") && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <OptionsTab server={server} />
-            </div>
-          )}
-          {tab === "properties" && can("settings") && (
-            <div
-              className="h-full overflow-y-auto px-4 pb-4 pt-0 sm:px-6 sm:pb-6 sm:pt-0"
-              data-server-scroll
-            >
-              <PropertiesTab server={server} />
-            </div>
-          )}
-          {tab === "configs" && can("files") && <ConfigsTab serverId={id} />}
-          {tab === "files" && can("files") && (
-            <div className="flex h-full min-w-0">
-              {/* Show the browser OR the editor (not both) until there's room for
-                  a side-by-side split. The app + section sidebars already claim
-                  ~448px, so the 80-wide browser + editor only fit from xl; below
-                  that, one pane at a time with a back button. */}
-              <div
-                className={`${selectedFile ? "hidden xl:flex" : "flex"} w-full flex-shrink-0 flex-col overflow-hidden border-border xl:w-80 xl:border-r`}
-              >
-                <FileBrowser
-                  serverId={id}
-                  onFileSelect={(path) => setSelectedFile(path)}
+        </div>
+
+        <div className="flex flex-1 min-h-0 flex-col md:flex-row">
+          <aside className="flex-shrink-0 border-b border-border bg-surface/40 p-2 md:w-48 md:border-b-0 md:border-r md:p-3 lg:w-56">
+            <SectionNav groups={sectionGroups} active={tab} onSelect={setTab} />
+          </aside>
+
+          <main className="flex-1 min-w-0 min-h-0 overflow-hidden">
+            <Suspense fallback={<SectionFallback />}>
+            {tab === "dashboard" && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <DashboardTab
+                  server={server}
+                  backups={backups}
+                  can={can}
+                  onSection={goSection}
                 />
               </div>
-              <div
-                className={`${selectedFile ? "flex" : "hidden xl:flex"} min-w-0 flex-1 flex-col overflow-hidden`}
-              >
-                {selectedFile ? (
-                  <>
-                    <button
-                      onClick={() => setSelectedFile(null)}
-                      className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary xl:hidden"
-                    >
-                      <ArrowLeft className="h-4 w-4" /> Back to files
-                    </button>
-                    <div className="min-h-0 flex-1 overflow-hidden">
-                      {/\.(dat|dat_old|nbt)$/i.test(selectedFile) ? (
-                        <DatViewer serverId={id} path={selectedFile} />
-                      ) : (
-                        <FileEditor serverId={id} path={selectedFile} />
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-text-secondary">
-                    <p className="text-sm">Select a file to edit</p>
-                  </div>
-                )}
+            )}
+            {tab === "console" && can("console") && (
+              <div className="h-full min-h-0 p-4 pb-6">
+                <ServerTerminal serverId={id} />
               </div>
-            </div>
-          )}
-          {tab === "worlds" && can("files") && (
-            <WorldsTab serverId={id} status={server.status as ServerStatus} />
-          )}
-          {tab === "mods" && can("mods") && (
-            <ModSearch
-              serverId={id}
-              loader={server.platform}
-              mcVersion={server.mc_version}
-              platform={server.platform}
-            />
-          )}
-          {tab === "backups" && can("backups") && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <BackupsTab serverId={id} />
-            </div>
-          )}
-          {tab === "tasks" && can("tasks") && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <TasksTab serverId={id} />
-            </div>
-          )}
-          {tab === "access" && can("admin") && (
-            <div className="h-full overflow-y-auto p-4 sm:p-6">
-              <AccessTab serverId={id} />
-            </div>
-          )}
-          </Suspense>
-        </main>
-      </div>
+            )}
+            {tab === "logs" && can("files") && <LogsTab serverId={id} />}
+            {tab === "stats" && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <StatsTab serverId={id} ramMaxMb={server.ram_mb_max} />
+              </div>
+            )}
+            {tab === "players" && can("players") && (
+              <PlayersPanel
+                serverId={id}
+                status={server.status as ServerStatus}
+              />
+            )}
+            {tab === "version" && can("settings") && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <VersionTab server={server} />
+              </div>
+            )}
+            {tab === "options" && can("settings") && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <OptionsTab server={server} />
+              </div>
+            )}
+            {tab === "properties" && can("settings") && (
+              <div
+                className="h-full overflow-y-auto px-4 pb-4 pt-0 sm:px-6 sm:pb-6 sm:pt-0"
+                data-server-scroll
+              >
+                <PropertiesTab server={server} />
+              </div>
+            )}
+            {tab === "configs" && can("files") && <ConfigsTab serverId={id} />}
+            {tab === "files" && can("files") && (
+              <div className="flex h-full min-w-0">
+                {/* Show the browser OR the editor (not both) until there's room for
+                    a side-by-side split. The app + section sidebars already claim
+                    ~448px, so the 80-wide browser + editor only fit from xl; below
+                    that, one pane at a time with a back button. */}
+                <div
+                  className={`${selectedFile ? "hidden xl:flex" : "flex"} w-full flex-shrink-0 flex-col overflow-hidden border-border xl:w-80 xl:border-r`}
+                >
+                  <FileBrowser
+                    serverId={id}
+                    onFileSelect={(path) => setSelectedFile(path)}
+                  />
+                </div>
+                <div
+                  className={`${selectedFile ? "flex" : "hidden xl:flex"} min-w-0 flex-1 flex-col overflow-hidden`}
+                >
+                  {selectedFile ? (
+                    <>
+                      <button
+                        onClick={() => setSelectedFile(null)}
+                        className="flex flex-shrink-0 items-center gap-1.5 border-b border-border bg-surface px-4 py-2 text-sm text-text-secondary hover:text-text-primary xl:hidden"
+                      >
+                        <ArrowLeft className="h-4 w-4" /> Back to files
+                      </button>
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        {/\.(dat|dat_old|nbt)$/i.test(selectedFile) ? (
+                          <DatViewer serverId={id} path={selectedFile} />
+                        ) : (
+                          <FileEditor serverId={id} path={selectedFile} />
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-text-secondary">
+                      <p className="text-sm">Select a file to edit</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {tab === "worlds" && can("files") && (
+              <WorldsTab serverId={id} status={server.status as ServerStatus} />
+            )}
+            {tab === "mods" && can("mods") && (
+              <ModSearch
+                serverId={id}
+                loader={server.platform}
+                mcVersion={server.mc_version}
+                platform={server.platform}
+              />
+            )}
+            {tab === "backups" && can("backups") && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <BackupsTab serverId={id} />
+              </div>
+            )}
+            {tab === "tasks" && can("tasks") && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <TasksTab serverId={id} />
+              </div>
+            )}
+            {tab === "access" && can("admin") && (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <AccessTab serverId={id} />
+              </div>
+            )}
+            </Suspense>
+          </main>
+        </div>
 
-      {showConflict && conflict && (
-        <ModConflictDialog
-          serverId={id}
-          conflict={conflict}
-          onClose={() => setDismissedConflict(conflict.detected_at)}
-        />
-      )}
-    </div>
+        {showConflict && conflict && (
+          <ModConflictDialog
+            serverId={id}
+            conflict={conflict}
+            onClose={() => setDismissedConflict(conflict.detected_at)}
+          />
+        )}
+      </div>
+    </ServerPermissionsProvider>
   );
 }

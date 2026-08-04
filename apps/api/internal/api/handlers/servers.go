@@ -231,7 +231,39 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 	if servers == nil {
 		servers = []*store.Server{}
 	}
-	writeJSON(w, http.StatusOK, servers)
+
+	// Attach the caller's effective permissions on each server so the panel can
+	// gate per-server actions (power buttons, section links) without a
+	// members/me round trip per row. Admins and owners resolve to the full set,
+	// mirroring requireServerPermission's bypasses.
+	granted := map[string][]string{}
+	if claims.Role != "admin" {
+		granted, err = h.store.AllServerPermissionsForUser(r.Context(), claims.UserID)
+		if err != nil {
+			writeServerError(w, r, "list server permissions", err)
+			return
+		}
+	}
+	out := make([]serverListItem, 0, len(servers))
+	for _, srv := range servers {
+		perms := granted[srv.ID]
+		if claims.Role == "admin" || srv.OwnerID == claims.UserID {
+			perms = store.AllServerPermissions()
+		}
+		if perms == nil {
+			perms = []string{}
+		}
+		out = append(out, serverListItem{Server: srv, Permissions: perms})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// serverListItem is a server plus the requesting user's effective permissions on
+// it. The embedded pointer flattens into the same JSON shape the panel already
+// reads, so `permissions` is purely additive.
+type serverListItem struct {
+	*store.Server
+	Permissions []string `json:"permissions"`
 }
 
 func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {

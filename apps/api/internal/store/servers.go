@@ -312,6 +312,37 @@ func (s *Store) GetServerPermissions(ctx context.Context, serverID, userID strin
 	return normalized, true, nil
 }
 
+// AllServerPermissionsForUser returns every server the user has an explicit
+// grant on, keyed by server id. Listing servers needs the caller's permissions
+// on each one so the panel can gate per-server actions; doing that with one
+// query beats a GetServerPermissions call per row.
+//
+// Owned servers are not included — the caller resolves those to the full set,
+// since ownership outranks any stored grant.
+func (s *Store) AllServerPermissionsForUser(ctx context.Context, userID string) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT server_id, permissions FROM server_permissions WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string][]string{}
+	for rows.Next() {
+		var serverID string
+		var perms strArray
+		if err := rows.Scan(&serverID, &perms); err != nil {
+			return nil, err
+		}
+		normalized, err := NormalizeServerPermissions([]string(perms))
+		if err != nil {
+			return nil, err
+		}
+		out[serverID] = normalized
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateServer(ctx context.Context, id string, srv *Server) error {
 	if srv.Settings == nil {
 		srv.Settings = json.RawMessage("{}")

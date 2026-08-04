@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HardDrive, RotateCcw, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -70,13 +70,14 @@ export function BackupsTab({ serverId }: { serverId: string }) {
         <p className="text-sm text-text-secondary">
           {backups.length} backup{backups.length !== 1 ? "s" : ""}
         </p>
-        <Button
+        <PermissionButton
+          need="backups.create"
           size="sm"
           onClick={() => createMutation.mutate()}
           loading={createMutation.isPending}
         >
           <HardDrive className="h-3.5 w-3.5" /> Backup Now
-        </Button>
+        </PermissionButton>
       </div>
 
       {isLoading ? (
@@ -122,24 +123,26 @@ export function BackupsTab({ serverId }: { serverId: string }) {
                   )}
                 </div>
                 {b.status === "success" && (
-                  <Button
+                  <PermissionButton
+                    need="backups.restore"
                     size="sm"
                     variant="outline"
                     onClick={() => setRestoreTarget(b)}
                     title="Restore this backup"
                   >
                     <RotateCcw className="h-3.5 w-3.5" /> Restore
-                  </Button>
+                  </PermissionButton>
                 )}
                 {b.status !== "running" && (
-                  <Button
+                  <PermissionButton
+                    need="backups.delete"
                     size="sm"
                     variant="ghost"
                     onClick={() => setDeleteTarget(b)}
                     title="Delete this backup"
                   >
                     <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                  </Button>
+                  </PermissionButton>
                 )}
               </div>
             </div>

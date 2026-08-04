@@ -13,6 +13,8 @@ import {
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { SERVER_SECTIONS } from "@/components/servers/shared";
+import { can } from "@/lib/permissions";
+import { listPermissions } from "@/lib/server-permissions";
 
 type Command = {
   id: string;
@@ -104,10 +106,15 @@ export function CommandPalette() {
       });
     }
 
-    // Sections of the server you're currently inside.
+    // Sections of the server you're currently inside. Offering one the caller
+    // can't open would send them to a tab that bounces straight back to the
+    // dashboard, so the palette lists only what their grants reach.
     if (currentServerId) {
-      const name = servers.find((s) => s.id === currentServerId)?.name;
+      const current = servers.find((s) => s.id === currentServerId);
+      const name = current?.name;
+      const perms = listPermissions(current?.permissions);
       for (const sec of SERVER_SECTIONS) {
+        if (!can(perms, sec.permission)) continue;
         cmds.push({
           id: `section:${sec.value}`,
           label: `Go to ${sec.label}`,

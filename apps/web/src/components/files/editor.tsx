@@ -5,7 +5,7 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
 import { Save, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { PermissionButton } from '@/components/ui/permission'
 import { useNotifications } from '@/store/notifications'
 import { api } from '@/lib/api'
 
@@ -86,10 +86,10 @@ export function FileEditor({ serverId, path }: FileEditorProps) {
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-surface">
         <span className="min-w-0 truncate text-sm text-text-secondary font-mono">{path}</span>
-        <Button size="sm" onClick={save} loading={saving} className="flex-shrink-0">
+        <PermissionButton need="files.write" size="sm" onClick={save} loading={saving} className="flex-shrink-0">
           <Save className="h-3.5 w-3.5" />
           Save
-        </Button>
+        </PermissionButton>
       </div>
       <div className="flex-1 relative overflow-hidden">
         {loading && (

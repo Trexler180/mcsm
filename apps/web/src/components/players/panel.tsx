@@ -14,12 +14,21 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
+import { PermissionButton } from '@/components/ui/permission'
+import { useCan, usePermission } from '@/lib/server-permissions'
+import { deniedReason } from '@/lib/permissions'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, ConfirmDialog } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 import { useNotifications } from '@/store/notifications'
-import type { GeyserInfo, Player, PlayerActionKind, ServerStatus } from '@/lib/types'
+import type {
+  GeyserInfo,
+  Player,
+  PlayerActionKind,
+  ServerPermission,
+  ServerStatus,
+} from '@/lib/types'
 import { PlayerDetailDialog } from './detail'
 import { PlayerActionsMenu } from './actions-menu'
 import { BansView } from './bans'
@@ -205,32 +214,47 @@ function PlayerRow({
   onCopyUuid: (player: Player) => void
   onDelete: (player: Player) => void
 }) {
+  const inspect = usePermission('players.inspect')
+  const identity = (
+    <>
+      <div className="relative flex-shrink-0">
+        <PlayerAvatar player={player} className="h-9 w-9" />
+        <span
+          className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${
+            player.online ? 'bg-green-500' : 'bg-text-secondary/40'
+          }`}
+          title={player.online ? 'Online' : 'Offline'}
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-text-primary truncate">{player.name}</p>
+        <p className="text-xs text-text-secondary mt-0.5">
+          {player.online
+            ? `online ${player.joined_at ? formatDuration(player.joined_at) : ''}`
+            : `last seen ${player.last_seen ? formatLastSeen(player.last_seen) : 'unknown'}`}
+        </p>
+      </div>
+    </>
+  )
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2/30">
-      <button
-        type="button"
-        onClick={() => onOpen(player)}
-        className="flex items-center gap-3 flex-1 min-w-0 text-left rounded -mx-1 px-1 py-0.5"
-        title="View saved data"
-      >
-        <div className="relative flex-shrink-0">
-          <PlayerAvatar player={player} className="h-9 w-9" />
-          <span
-            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${
-              player.online ? 'bg-green-500' : 'bg-text-secondary/40'
-            }`}
-            title={player.online ? 'Online' : 'Offline'}
-          />
+      {/* The row doubles as the way into a player's saved data. Without that
+          grant it stays a plain label rather than a button that looks
+          pressable and does nothing — the roster itself is still readable. */}
+      {inspect.allowed ? (
+        <button
+          type="button"
+          onClick={() => onOpen(player)}
+          className="flex items-center gap-3 flex-1 min-w-0 text-left rounded -mx-1 px-1 py-0.5"
+          title="View saved data"
+        >
+          {identity}
+        </button>
+      ) : (
+        <div className="flex items-center gap-3 flex-1 min-w-0 -mx-1 px-1 py-0.5">
+          {identity}
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-text-primary truncate">{player.name}</p>
-          <p className="text-xs text-text-secondary mt-0.5">
-            {player.online
-              ? `online ${player.joined_at ? formatDuration(player.joined_at) : ''}`
-              : `last seen ${player.last_seen ? formatLastSeen(player.last_seen) : 'unknown'}`}
-          </p>
-        </div>
-      </button>
+      )}
       <StateBadges player={player} />
       <PlayerActionsMenu
         player={player}
@@ -275,10 +299,15 @@ function FilterChip({
 // The three intents the Add-player dialog supports, each a distinct tab.
 type AddTab = 'whitelist_add' | 'op' | 'ban'
 
-const ADD_TABS: { key: AddTab; label: string; icon: React.ReactNode }[] = [
-  { key: 'whitelist_add', label: 'Whitelist', icon: <Shield className="h-3.5 w-3.5" /> },
-  { key: 'op', label: 'Operator', icon: <Crown className="h-3.5 w-3.5" /> },
-  { key: 'ban', label: 'Ban', icon: <Ban className="h-3.5 w-3.5" /> },
+const ADD_TABS: {
+  key: AddTab
+  label: string
+  icon: React.ReactNode
+  need: ServerPermission
+}[] = [
+  { key: 'whitelist_add', label: 'Whitelist', icon: <Shield className="h-3.5 w-3.5" />, need: 'players.whitelist' },
+  { key: 'op', label: 'Operator', icon: <Crown className="h-3.5 w-3.5" />, need: 'players.op' },
+  { key: 'ban', label: 'Ban', icon: <Ban className="h-3.5 w-3.5" />, need: 'players.ban' },
 ]
 
 // Minecraft operator permission levels (server.properties op-permission-level),
@@ -325,7 +354,13 @@ function AddPlayerDialog({
   meta: GeyserInfo | undefined
   serverOnline: boolean
 }) {
-  const [tab, setTab] = useState<AddTab>('whitelist_add')
+  const can = useCan()
+  // Each intent is a separate permission. Opening on a tab the user can't
+  // submit would present a form that refuses on the last click, so the dialog
+  // starts on the first one they hold and leaves the rest visible but inert.
+  const allowedTabs = ADD_TABS.filter((t) => can(t.need))
+  const defaultTab = (allowedTabs[0] ?? ADD_TABS[0]).key
+  const [tab, setTab] = useState<AddTab>(defaultTab)
   const [name, setName] = useState('')
   const [reason, setReason] = useState('')
   const [level, setLevel] = useState(4)
@@ -338,7 +373,7 @@ function AddPlayerDialog({
 
   useEffect(() => {
     if (open) {
-      setTab('whitelist_add')
+      setTab(defaultTab)
       setName('')
       setReason('')
       setLevel(4)
@@ -376,23 +411,29 @@ function AddPlayerDialog({
     >
       {/* Intent tabs */}
       <div role="tablist" className="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1">
-        {ADD_TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            onClick={() => setTab(t.key)}
-            className={clsx(
-              'flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-              tab === t.key
-                ? 'bg-surface text-text-primary shadow-sm'
-                : 'text-text-secondary hover:text-text-primary',
-            )}
-          >
-            {t.icon} {t.label}
-          </button>
-        ))}
+        {ADD_TABS.map((t) => {
+          const denied = !can(t.need)
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              disabled={denied}
+              title={denied ? deniedReason(t.need) : undefined}
+              onClick={() => setTab(t.key)}
+              className={clsx(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                denied && 'cursor-not-allowed opacity-40',
+                tab === t.key
+                  ? 'bg-surface text-text-primary shadow-sm'
+                  : 'text-text-secondary hover:text-text-primary',
+              )}
+            >
+              {t.icon} {t.label}
+            </button>
+          )
+        })}
       </div>
 
       <div className="space-y-4">
@@ -482,7 +523,8 @@ function AddPlayerDialog({
         <Button variant="outline" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button
+        <PermissionButton
+          need={ADD_TABS.find((t) => t.key === tab)!.need}
           variant={tab === 'ban' ? 'destructive' : 'default'}
           disabled={!valid || busy}
           loading={busy}
@@ -490,7 +532,7 @@ function AddPlayerDialog({
         >
           {ADD_TABS.find((t) => t.key === tab)?.icon}
           {ADD_SUBMIT[tab].label}
-        </Button>
+        </PermissionButton>
       </div>
     </Dialog>
   )
@@ -743,14 +785,17 @@ export function PlayersPanel({ serverId, status }: PlayersPanelProps) {
               : `Server is ${status} · roster from world files`}
           </p>
         </div>
-        <Button
+        {/* The dialog behind this covers three separate grants; any one of them
+            makes it worth opening. */}
+        <PermissionButton
+          need={['players.whitelist', 'players.op', 'players.ban']}
           size="sm"
           variant="outline"
           className="flex-shrink-0"
           onClick={() => setAddOpen(true)}
         >
           <UserPlus className="h-3.5 w-3.5" /> Add player
-        </Button>
+        </PermissionButton>
       </div>
 
       {/* Toolbar */}

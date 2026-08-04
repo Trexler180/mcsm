@@ -5,7 +5,7 @@ import {
   Save,
 
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
@@ -211,7 +211,8 @@ export function ServerPropertiesPanel({ server }: { server: Server }) {
           <span className="truncate text-xs text-text-secondary">
             Unsaved changes save to /server.properties
           </span>
-          <Button
+          <PermissionButton
+            need="files.write"
             size="sm"
             className="flex-shrink-0"
             onClick={() => saveMutation.mutate()}
@@ -219,7 +220,7 @@ export function ServerPropertiesPanel({ server }: { server: Server }) {
             disabled={propsQuery.isLoading || propsQuery.isError}
           >
             <Save className="h-3.5 w-3.5" /> Save Properties
-          </Button>
+          </PermissionButton>
         </div>
       </div>
 
@@ -233,14 +234,15 @@ export function ServerPropertiesPanel({ server }: { server: Server }) {
             Edits /server.properties on the server.
           </p>
         </div>
-        <Button
+        <PermissionButton
+          need="files.write"
           size="sm"
           onClick={() => saveMutation.mutate()}
           loading={saveMutation.isPending}
           disabled={propsQuery.isLoading || propsQuery.isError}
         >
           <Save className="h-3.5 w-3.5" /> Save Properties
-        </Button>
+        </PermissionButton>
       </div>
 
       {/* Sentinel at the header's bottom edge: once it leaves the top of the
@@ -260,13 +262,14 @@ export function ServerPropertiesPanel({ server }: { server: Server }) {
               server.properties was not found yet. Start the server once, or
               create a default file.
             </span>
-            <Button
+            <PermissionButton
+              need="files.write"
               size="sm"
               onClick={() => createMutation.mutate()}
               loading={createMutation.isPending}
             >
               Create
-            </Button>
+            </PermissionButton>
           </div>
         </div>
       ) : (

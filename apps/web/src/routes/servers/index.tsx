@@ -18,6 +18,11 @@ import { Route as rootRoute } from "../__root";
 import { Header } from "@/components/layout/header";
 import { durationSince } from "@/lib/time";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
+import {
+  ServerPermissionsProvider,
+  listPermissions,
+} from "@/lib/server-permissions";
 import { StatusBadge } from "@/components/ui/badge";
 import {
   Table,
@@ -385,58 +390,72 @@ function ServerActions({ server }: { server: ServerType }) {
     });
   };
 
+  // The list endpoint resolves each row's permissions for the caller, so the
+  // row's actions can be gated without a request per server.
   return (
-    <div className="flex items-center gap-1.5">
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() =>
-          navigate({
-            to: "/servers/$id/$section",
-            params: { id: server.id, section: "console" },
-          })
-        }
-        title="Open console"
-        aria-label="Open console"
-      >
-        <Terminal className="h-3.5 w-3.5" />
-      </Button>
-      <Button size="sm" variant="ghost" onClick={openSettings} title="Settings">
-        <Settings className="h-3.5 w-3.5" />
-      </Button>
-      {!isOnline ? (
-        <Button
+    <ServerPermissionsProvider permissions={listPermissions(server.permissions)}>
+      <div className="flex items-center gap-1.5">
+        <PermissionButton
+          need="console"
           size="sm"
           variant="ghost"
-          onClick={() => start.mutate()}
-          loading={busy}
-          title="Start"
+          onClick={() =>
+            navigate({
+              to: "/servers/$id/$section",
+              params: { id: server.id, section: "console" },
+            })
+          }
+          title="Open console"
+          aria-label="Open console"
         >
-          <Play className="h-3.5 w-3.5 text-green-400" />
-        </Button>
-      ) : (
-        <>
-          <Button
+          <Terminal className="h-3.5 w-3.5" />
+        </PermissionButton>
+        <PermissionButton
+          need="settings"
+          size="sm"
+          variant="ghost"
+          onClick={openSettings}
+          title="Settings"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </PermissionButton>
+        {!isOnline ? (
+          <PermissionButton
+            need="power.start"
             size="sm"
             variant="ghost"
-            onClick={() => restart.mutate()}
+            onClick={() => start.mutate()}
             loading={busy}
-            title="Restart"
+            title="Start"
           >
-            <RotateCcw className="h-3.5 w-3.5 text-yellow-400" />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => stop.mutate()}
-            loading={busy}
-            title="Stop"
-          >
-            <Square className="h-3.5 w-3.5 text-red-400" />
-          </Button>
-        </>
-      )}
-    </div>
+            <Play className="h-3.5 w-3.5 text-green-400" />
+          </PermissionButton>
+        ) : (
+          <>
+            <PermissionButton
+              need="power.restart"
+              size="sm"
+              variant="ghost"
+              onClick={() => restart.mutate()}
+              loading={busy}
+              title="Restart"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-yellow-400" />
+            </PermissionButton>
+            <PermissionButton
+              need="power.stop"
+              size="sm"
+              variant="ghost"
+              onClick={() => stop.mutate()}
+              loading={busy}
+              title="Stop"
+            >
+              <Square className="h-3.5 w-3.5 text-red-400" />
+            </PermissionButton>
+          </>
+        )}
+      </div>
+    </ServerPermissionsProvider>
   );
 }
 

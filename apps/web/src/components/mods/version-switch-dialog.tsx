@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { Input } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
@@ -369,7 +370,8 @@ export function VersionSwitchDialog({
               <X className="h-4 w-4" />
               Cancel
             </Button>
-            <Button
+            <PermissionButton
+              need="mods.update"
               onClick={() => selected && switchMutation.mutate(selected.id)}
               loading={switchMutation.isPending}
               disabled={!selected || selectedIsCurrent}
@@ -381,7 +383,7 @@ export function VersionSwitchDialog({
             >
               {!switchMutation.isPending && <Download className="h-4 w-4" />}
               {switchMutation.isPending ? "Downloading…" : actionLabel}
-            </Button>
+            </PermissionButton>
           </div>
         </section>
       </div>

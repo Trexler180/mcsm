@@ -10,7 +10,7 @@ import {
   Type,
   Brackets,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { PermissionButton } from "@/components/ui/permission";
 import { useNotifications } from "@/store/notifications";
 import { api } from "@/lib/api";
 import {
@@ -315,10 +315,10 @@ export function DatViewer({ serverId, path }: DatViewerProps) {
             NBT
           </span>
         </div>
-        <Button size="sm" onClick={save} loading={saving} disabled={!root || !dirty} className="flex-shrink-0">
+        <PermissionButton need="files.write" size="sm" onClick={save} loading={saving} disabled={!root || !dirty} className="flex-shrink-0">
           <Save className="h-3.5 w-3.5" />
           Save
-        </Button>
+        </PermissionButton>
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto bg-[#0f0f0f] px-3 py-2">
