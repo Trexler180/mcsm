@@ -75,13 +75,20 @@ func ResolveForWrite(base, userPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	cleanBase, err := secureBase(base)
+	if err != nil {
+		return "", err
+	}
+	// The server root resolves to the base itself (a write "into /", e.g. an
+	// upload landing in the server root). Its parent is outside the sandbox by
+	// definition, so walking up to it would reject a perfectly legal target —
+	// the base is already symlink-resolved and trusted by secureBase.
+	if abs == cleanBase {
+		return abs, nil
+	}
 	parent := filepath.Dir(abs)
 	if _, err := os.Stat(parent); err == nil {
 		resolvedParent, err := filepath.EvalSymlinks(parent)
-		if err != nil {
-			return "", err
-		}
-		cleanBase, err := secureBase(base)
 		if err != nil {
 			return "", err
 		}

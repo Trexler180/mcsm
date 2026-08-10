@@ -116,6 +116,17 @@ func TestResolveForWrite(t *testing.T) {
 		mustBeInside(t, base, got)
 	}
 
+	// The server root itself is a legal write target — an upload with no
+	// subdirectory lands there. Its parent is outside the base, so resolving
+	// must not walk up to it.
+	for _, p := range []string{"/", "", ".", "//"} {
+		got, err := ResolveForWrite(base, p)
+		if err != nil {
+			t.Fatalf("ResolveForWrite(%q) rejected the server root: %v", p, err)
+		}
+		mustBeInside(t, base, got)
+	}
+
 	// Traversal attempts obey the same invariant as Resolve.
 	for _, p := range []string{"../evil.txt", "a/../../evil.txt"} {
 		got, err := ResolveForWrite(base, p)
@@ -123,6 +134,23 @@ func TestResolveForWrite(t *testing.T) {
 			continue
 		}
 		mustBeInside(t, base, got)
+	}
+}
+
+// TestWriteUploadIntoServerRoot covers the path the server-icon flows take:
+// upload into "/" with the file name carried by the multipart part.
+func TestWriteUploadIntoServerRoot(t *testing.T) {
+	base := t.TempDir()
+
+	if err := WriteUpload(base, "/", "server-icon.png", strings.NewReader("png")); err != nil {
+		t.Fatalf("WriteUpload into the server root failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(base, "server-icon.png"))
+	if err != nil {
+		t.Fatalf("uploaded file missing: %v", err)
+	}
+	if string(got) != "png" {
+		t.Fatalf("uploaded contents = %q, want %q", got, "png")
 	}
 }
 
