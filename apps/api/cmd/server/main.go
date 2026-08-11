@@ -25,6 +25,7 @@ import (
 	panelapi "github.com/mcsm/api/internal/api"
 	"github.com/mcsm/api/internal/api/handlers"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/autostart"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/poller"
@@ -282,6 +283,7 @@ func main() {
 	sched.Start(bgCtx)
 
 	go poller.Run(bgCtx, s, notifier.Engine)
+	go autostart.Run(bgCtx, s)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)

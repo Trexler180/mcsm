@@ -1,6 +1,9 @@
 package files
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,5 +175,67 @@ func TestResolveForWriteSymlinkParentEscape(t *testing.T) {
 
 	if _, err := ResolveForWrite(base, "link/evil.txt"); err == nil {
 		t.Fatal("ResolveForWrite allowed writing through a symlink out of the base")
+	}
+}
+
+func TestResolveForWriteSymlinkAncestorEscape(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base")
+	outside := filepath.Join(root, "outside")
+	for _, d := range []string{base, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "link")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+
+	if _, err := ResolveForWrite(base, "link/new/file.txt"); err == nil {
+		t.Fatal("ResolveForWrite allowed writing through a non-immediate symlink ancestor")
+	}
+	if err := WriteContent(base, "link/new/file.txt", []byte("escape")); err == nil {
+		t.Fatal("WriteContent wrote through a symlink outside the root")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new", "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside file exists after rejected write: %v", err)
+	}
+}
+
+func TestZipDirDoesNotFollowSymlinkFiles(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base")
+	outside := filepath.Join(root, "secret.txt")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "safe.txt"), []byte("safe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "leak.txt")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ZipDir(base, "/", &buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range zr.File {
+		if f.Name == "leak.txt" {
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(rc)
+			rc.Close()
+			t.Fatalf("archive followed symlink and included %q", body)
+		}
 	}
 }

@@ -33,6 +33,11 @@ func NewFileHandlers(s *store.Store) *FileHandlers {
 // together rather than one silently cutting the other short.
 const UploadBudget = 2 * time.Hour
 
+// Keep the general-purpose file manager bounded independently at both the API
+// and agent. The extra MiB accommodates multipart framing around up to 512 MiB
+// of uploaded file data.
+const fileUploadRequestLimit = (int64(512) << 20) + (1 << 20)
+
 func (h *FileHandlers) proxyToAgent(w http.ResponseWriter, r *http.Request, agentSuffix string) {
 	h.proxyToAgentWithin(w, r, agentSuffix, 60*time.Second)
 }
@@ -211,6 +216,11 @@ func (h *FileHandlers) Download(w http.ResponseWriter, r *http.Request) {
 // Upload takes the request body as its payload, so it runs on the upload budget
 // rather than the 60s the metadata routes share.
 func (h *FileHandlers) Upload(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > fileUploadRequestLimit {
+		writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds 512 MiB limit")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, fileUploadRequestLimit)
 	h.proxyToAgentWithin(w, r, "/files/upload", UploadBudget)
 }
 

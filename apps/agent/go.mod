@@ -1,10 +1,10 @@
 module github.com/mcsm/agent
 
-go 1.22
+go 1.25.12
 
 require (
 	github.com/coder/websocket v1.8.12
-	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/chi/v5 v5.3.0
 	github.com/shirou/gopsutil/v4 v4.24.11
 )
 

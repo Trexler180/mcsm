@@ -30,6 +30,7 @@ function getExtensions(filename: string) {
 export function FileEditor({ serverId, path }: FileEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const loadedFileRef = useRef<{ serverId: string; path: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const { success, error } = useNotifications()
@@ -37,10 +38,14 @@ export function FileEditor({ serverId, path }: FileEditorProps) {
   useEffect(() => {
     if (!editorRef.current || !path) return
 
+    let cancelled = false
+    let effectView: EditorView | null = null
+    loadedFileRef.current = null
     setLoading(true)
     api.files
       .readContent(serverId, path)
       .then((content) => {
+        if (cancelled) return
         const filename = path.split('/').pop() ?? ''
         const state = EditorState.create({
           doc: content,
@@ -55,25 +60,36 @@ export function FileEditor({ serverId, path }: FileEditorProps) {
           ],
         })
 
-        if (viewRef.current) viewRef.current.destroy()
         const view = new EditorView({ state, parent: editorRef.current! })
+        effectView = view
         viewRef.current = view
+        loadedFileRef.current = { serverId, path }
       })
-      .catch((e: Error) => error('Failed to load file', e.message))
-      .finally(() => setLoading(false))
+      .catch((e: Error) => {
+        if (!cancelled) error('Failed to load file', e.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
 
     return () => {
-      viewRef.current?.destroy()
-      viewRef.current = null
+      cancelled = true
+      if (viewRef.current === effectView) {
+        viewRef.current = null
+        loadedFileRef.current = null
+      }
+      effectView?.destroy()
     }
-  }, [serverId, path])
+  }, [serverId, path, error])
 
   const save = async () => {
-    if (!viewRef.current) return
-    const content = viewRef.current.state.doc.toString()
+    const view = viewRef.current
+    const loadedFile = loadedFileRef.current
+    if (!view || !loadedFile || loadedFile.serverId !== serverId || loadedFile.path !== path) return
+    const content = view.state.doc.toString()
     setSaving(true)
     try {
-      await api.files.writeContent(serverId, path, content)
+      await api.files.writeContent(loadedFile.serverId, loadedFile.path, content)
       success('Saved')
     } catch (e) {
       error('Save failed', e instanceof Error ? e.message : 'Unknown error')
@@ -86,7 +102,7 @@ export function FileEditor({ serverId, path }: FileEditorProps) {
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-surface">
         <span className="min-w-0 truncate text-sm text-text-secondary font-mono">{path}</span>
-        <PermissionButton need="files.write" size="sm" onClick={save} loading={saving} className="flex-shrink-0">
+        <PermissionButton need="files.write" size="sm" onClick={save} loading={saving} disabled={loading} className="flex-shrink-0">
           <Save className="h-3.5 w-3.5" />
           Save
         </PermissionButton>

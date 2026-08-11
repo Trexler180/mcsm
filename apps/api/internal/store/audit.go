@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 )
 
@@ -18,8 +19,12 @@ type AuditEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func (s *Store) LogAction(ctx context.Context, userID, serverID, action, ip string, detail any) {
-	d, _ := json.Marshal(detail)
+func (s *Store) LogAction(ctx context.Context, userID, serverID, action, ip string, detail any) error {
+	d, err := json.Marshal(detail)
+	if err != nil {
+		slog.Error("audit detail serialization failed", "action", action, "server_id", serverID, "user_id", userID, "error", err)
+		return err
+	}
 	var uid, sid *string
 	if userID != "" {
 		uid = &userID
@@ -27,10 +32,14 @@ func (s *Store) LogAction(ctx context.Context, userID, serverID, action, ip stri
 	if serverID != "" {
 		sid = &serverID
 	}
-	s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO audit_log (user_id, server_id, action, detail, ip_address) VALUES (?,?,?,?,?)`,
 		uid, sid, action, string(d), ip,
 	)
+	if err != nil {
+		slog.Error("audit log write failed", "action", action, "server_id", serverID, "user_id", userID, "error", err)
+	}
+	return err
 }
 
 // ListAudit returns the most recent audit entries, optionally scoped to one

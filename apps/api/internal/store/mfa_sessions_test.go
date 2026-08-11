@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -117,8 +118,11 @@ func TestRotateRefreshTokenKeepsIdentity(t *testing.T) {
 	uid := mfaTestUser(t, s)
 
 	id, _ := s.CreateRefreshToken(ctx, uid, "oldhash", "UA", "ip", time.Now().Add(time.Hour))
-	if err := s.RotateRefreshToken(ctx, id, "newhash", "ip2", "UA2", time.Now().Add(2*time.Hour)); err != nil {
+	if err := s.RotateRefreshToken(ctx, id, "oldhash", "newhash", "ip2", "UA2", time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.RotateRefreshToken(ctx, id, "oldhash", "racinghash", "ip3", "UA3", time.Now().Add(2*time.Hour)); !errors.Is(err, ErrRefreshTokenAlreadyRotated) {
+		t.Fatalf("stale concurrent rotation = %v, want ErrRefreshTokenAlreadyRotated", err)
 	}
 	if _, err := s.GetRefreshToken(ctx, "oldhash"); err == nil {
 		t.Fatal("old token hash should no longer resolve")

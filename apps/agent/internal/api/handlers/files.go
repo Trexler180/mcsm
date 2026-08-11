@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -15,6 +17,31 @@ import (
 
 type FileHandlers struct {
 	mgr *process.Manager
+}
+
+// fileUploadRequestLimit keeps the existing 512 MiB file allowance while
+// leaving room for multipart headers and boundaries. ParseMultipartForm's
+// argument only controls memory use; MaxBytesReader is what bounds the total
+// request (including temporary files on disk).
+const (
+	fileUploadDataLimit    = int64(512) << 20
+	fileUploadRequestLimit = fileUploadDataLimit + (1 << 20)
+)
+
+func parseMultipartUpload(w http.ResponseWriter, r *http.Request, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	return r.ParseMultipartForm(64 << 20)
+}
+
+func multipartFilesFit(files []*multipart.FileHeader, limit int64) bool {
+	var total int64
+	for _, file := range files {
+		if file.Size < 0 || file.Size > limit-total {
+			return false
+		}
+		total += file.Size
+	}
+	return true
 }
 
 func NewFileHandlers(mgr *process.Manager) *FileHandlers {
@@ -226,13 +253,14 @@ func (h *FileHandlers) Download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		abs, err := agentfiles.ResolveExisting(base, path)
+		f, info, err := agentfiles.OpenFile(base, path)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(abs)))
-		http.ServeFile(w, r, abs)
+		defer f.Close()
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(path)))
+		http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 	}
 }
 
@@ -247,12 +275,22 @@ func (h *FileHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 		dirPath = "/"
 	}
 
-	if err := r.ParseMultipartForm(512 << 20); err != nil {
+	if err := parseMultipartUpload(w, r, fileUploadRequestLimit); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds 512 MiB limit")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	files := r.MultipartForm.File["files"]
+	if !multipartFilesFit(files, fileUploadDataLimit) {
+		writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds 512 MiB limit")
+		return
+	}
 	for _, fh := range files {
 		f, err := fh.Open()
 		if err != nil {

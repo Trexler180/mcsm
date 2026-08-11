@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,17 +87,62 @@ func ResolveForWrite(base, userPath string) (string, error) {
 	if abs == cleanBase {
 		return abs, nil
 	}
-	parent := filepath.Dir(abs)
-	if _, err := os.Stat(parent); err == nil {
-		resolvedParent, err := filepath.EvalSymlinks(parent)
-		if err != nil {
+	// Resolve the nearest existing ancestor, including the target itself when it
+	// already exists. Checking only the immediate parent misses paths such as
+	// link/new/file when link is a symlink and new does not exist yet; checking
+	// only the parent also misses an existing final-component symlink.
+	ancestor := abs
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			resolved, err := filepath.EvalSymlinks(ancestor)
+			if err != nil {
+				return "", err
+			}
+			if !withinBase(cleanBase, resolved) {
+				return "", fmt.Errorf("path escapes server directory")
+			}
+			break
+		} else if !os.IsNotExist(err) {
 			return "", err
 		}
-		if !withinBase(cleanBase, resolvedParent) {
-			return "", fmt.Errorf("path escapes server directory")
+		next := filepath.Dir(ancestor)
+		if next == ancestor {
+			return "", fmt.Errorf("path has no existing ancestor")
 		}
+		ancestor = next
 	}
 	return abs, nil
+}
+
+// openRootPath returns an os.Root plus a root-relative name for userPath.
+// os.Root performs the actual filesystem operation beneath an anchored handle,
+// closing the symlink-swap race that a resolve-then-open sequence would leave.
+func openRootPath(base, userPath string) (*os.Root, string, error) {
+	cleanBase, rel, err := rootRelativePath(base, userPath)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(cleanBase)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, rel, nil
+}
+
+func rootRelativePath(base, userPath string) (string, string, error) {
+	cleanBase, err := secureBase(base)
+	if err != nil {
+		return "", "", err
+	}
+	abs, err := Resolve(cleanBase, userPath)
+	if err != nil {
+		return "", "", err
+	}
+	rel, err := filepath.Rel(cleanBase, abs)
+	if err != nil || !withinBase(cleanBase, abs) {
+		return "", "", fmt.Errorf("path escapes server directory")
+	}
+	return cleanBase, rel, nil
 }
 
 func secureBase(base string) (string, error) {
@@ -125,12 +171,18 @@ func withinBase(base, path string) bool {
 }
 
 func List(base, userPath string) (*Listing, error) {
-	abs, err := ResolveExisting(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return nil, err
 	}
+	defer root.Close()
 
-	entries, err := os.ReadDir(abs)
+	dir, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -162,13 +214,15 @@ func List(base, userPath string) (*Listing, error) {
 // descended (<=0 means unlimited); maxEntries caps the result (<=0 means
 // unlimited) and sets Truncated when hit.
 func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
-	abs, err := ResolveExisting(base, userPath)
+	root, start, err := openRootPath(base, userPath)
 	if err != nil {
 		return nil, err
 	}
+	defer root.Close()
+	start = filepath.ToSlash(start)
 
 	tree := &Tree{Path: userPath, Entries: make([]TreeEntry, 0, 256)}
-	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.FS(), start, func(name string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Skip unreadable subtrees rather than aborting the whole walk.
 			if d != nil && d.IsDir() {
@@ -176,15 +230,11 @@ func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
 			}
 			return nil
 		}
-		if p == abs {
+		if name == start {
 			return nil // don't emit the root itself
 		}
 
-		rel, err := filepath.Rel(abs, p)
-		if err != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
+		rel := rootWalkRelative(start, name)
 		depth := strings.Count(rel, "/") + 1
 
 		if d.IsDir() {
@@ -220,65 +270,95 @@ func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
 }
 
 func ReadContent(base, userPath string) ([]byte, error) {
-	abs, err := ResolveExisting(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(abs)
+	defer root.Close()
+	return root.ReadFile(name)
+}
+
+// OpenFile opens a regular file through an anchored server root. The returned
+// handle remains valid after the root handle is closed by this function.
+func OpenFile(base, userPath string) (*os.File, os.FileInfo, error) {
+	root, name, err := openRootPath(base, userPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := root.Open(name)
+	root.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, fmt.Errorf("path is not a regular file")
+	}
+	return f, info, nil
 }
 
 func WriteContent(base, userPath string, data []byte) error {
-	abs, err := ResolveForWrite(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+	defer root.Close()
+	if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(abs, data, 0644)
+	return root.WriteFile(name, data, 0644)
 }
 
 func Delete(base, userPath string) error {
-	abs, err := ResolveExisting(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(abs)
+	defer root.Close()
+	return root.RemoveAll(name)
 }
 
 func Rename(base, fromPath, toPath string) error {
-	src, err := ResolveExisting(base, fromPath)
+	root, src, err := openRootPath(base, fromPath)
 	if err != nil {
 		return err
 	}
-	dst, err := ResolveForWrite(base, toPath)
+	defer root.Close()
+	_, dst, err := rootRelativePath(base, toPath)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-	return os.Rename(src, dst)
+	return root.Rename(src, dst)
 }
 
 func Mkdir(base, userPath string) error {
-	abs, err := ResolveForWrite(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return err
 	}
-	return os.MkdirAll(abs, 0755)
+	defer root.Close()
+	return root.MkdirAll(name, 0755)
 }
 
 func WriteUpload(base, dirPath, filename string, src io.Reader) error {
-	dir, err := ResolveForWrite(base, dirPath)
+	root, dir, err := openRootPath(base, dirPath)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	defer root.Close()
+	if err := root.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 	dst := filepath.Join(dir, filepath.Base(filename))
-	f, err := os.Create(dst)
+	f, err := root.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -294,11 +374,12 @@ func WriteUpload(base, dirPath, filename string, src io.Reader) error {
 // fed to both; the murmur input must be buffered because MurmurHash2 needs the
 // stripped length up front.
 func FileFingerprints(base, userPath string) (sha512hex string, murmur2 uint32, err error) {
-	abs, err := ResolveExisting(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return "", 0, err
 	}
-	f, err := os.Open(abs)
+	defer root.Close()
+	f, err := root.Open(name)
 	if err != nil {
 		return "", 0, err
 	}
@@ -369,11 +450,12 @@ func murmurHash2(data []byte, seed uint32) uint32 {
 }
 
 func IsDir(base, userPath string) (bool, error) {
-	abs, err := ResolveExisting(base, userPath)
+	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return false, err
 	}
-	info, err := os.Stat(abs)
+	defer root.Close()
+	info, err := root.Stat(name)
 	if err != nil {
 		return false, err
 	}
@@ -381,36 +463,47 @@ func IsDir(base, userPath string) (bool, error) {
 }
 
 func ZipDir(base, userPath string, w io.Writer) error {
-	abs, err := ResolveExisting(base, userPath)
+	root, start, err := openRootPath(base, userPath)
 	if err != nil {
 		return err
 	}
+	defer root.Close()
+	start = filepath.ToSlash(start)
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
-	return filepath.Walk(abs, func(path string, info os.FileInfo, err error) error {
+	return fs.WalkDir(root.FS(), start, func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
-		rel, err := filepath.Rel(abs, path)
-		if err != nil {
-			return err
+		if d.IsDir() {
+			return nil
 		}
-		rel = filepath.ToSlash(rel)
+		rel := rootWalkRelative(start, name)
 
 		f, err := zw.Create(rel)
 		if err != nil {
 			return err
 		}
-		src, err := os.Open(path)
+		src, err := root.Open(name)
 		if err != nil {
 			return err
 		}
-		defer src.Close()
-		_, err = io.Copy(f, src)
-		return err
+		_, copyErr := io.Copy(f, src)
+		closeErr := src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
+}
+
+func rootWalkRelative(start, name string) string {
+	if start == "." {
+		return strings.TrimPrefix(name, "./")
+	}
+	return strings.TrimPrefix(name, strings.TrimSuffix(start, "/")+"/")
 }

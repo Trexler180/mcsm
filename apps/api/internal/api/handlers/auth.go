@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -199,7 +200,12 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	if err := h.store.RotateRefreshToken(r.Context(), rt.ID, newHash, clientIP(r), userAgent(r), expiresAt); err != nil {
+	if err := h.store.RotateRefreshToken(r.Context(), rt.ID, rt.TokenHash, newHash, clientIP(r), userAgent(r), expiresAt); err != nil {
+		if errors.Is(err, store.ErrRefreshTokenAlreadyRotated) {
+			clearRefreshCookie(w, r)
+			writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			return
+		}
 		writeServerError(w, r, "refresh: store", err)
 		return
 	}

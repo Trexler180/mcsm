@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -65,23 +67,36 @@ func lowSpaceWarning(free, total int64) string {
 // estimateBackupSize sums the sizes of the files the zip walk would include.
 // Best-effort: unreadable entries are skipped rather than failing the estimate.
 func estimateBackupSize(src string, skipRoots []string, skipExt map[string]bool) int64 {
+	root, err := os.OpenRoot(src)
+	if err != nil {
+		return 0
+	}
+	defer root.Close()
 	var total int64
-	_ = filepath.Walk(src, func(path string, info os.FileInfo, werr error) error {
+	_ = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, werr error) error {
 		if werr != nil {
-			if info != nil && info.IsDir() {
+			if entry != nil && entry.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		fullPath := filepath.Join(src, filepath.FromSlash(name))
 		for _, sr := range skipRoots {
-			if path == sr || strings.HasPrefix(path, sr+string(filepath.Separator)) {
-				if info.IsDir() {
+			if fullPath == sr || strings.HasPrefix(fullPath, sr+string(filepath.Separator)) {
+				if entry.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
 			}
 		}
-		if info.IsDir() || skipExt[strings.ToLower(filepath.Ext(path))] {
+		if entry.IsDir() || skipExt[strings.ToLower(filepath.Ext(name))] {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
 			return nil
 		}
 		total += info.Size()
@@ -264,43 +279,53 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 
 	zw := zip.NewWriter(zf)
 
-	walkErr := filepath.Walk(src, func(path string, info os.FileInfo, werr error) error {
+	root, err := os.OpenRoot(src)
+	if err != nil {
+		os.Remove(zipPath)
+		writeError(w, http.StatusInternalServerError, "open server root: "+err.Error())
+		return
+	}
+	defer root.Close()
+	walkErr := fs.WalkDir(root.FS(), ".", func(name string, dirEntry fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
 		}
+		if dirEntry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		fullPath := filepath.Join(src, filepath.FromSlash(name))
 		// Skip unwanted directories
 		for _, sr := range skipRoots {
-			if path == sr || strings.HasPrefix(path, sr+string(filepath.Separator)) {
-				if info.IsDir() {
+			if fullPath == sr || strings.HasPrefix(fullPath, sr+string(filepath.Separator)) {
+				if dirEntry.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
 			}
 		}
-		if info.IsDir() {
+		if dirEntry.IsDir() {
 			return nil
 		}
-		if skipExt[strings.ToLower(filepath.Ext(path))] {
+		if skipExt[strings.ToLower(filepath.Ext(name))] {
 			return nil
 		}
 
-		rel, err := filepath.Rel(src, path)
+		info, err := dirEntry.Info()
 		if err != nil {
 			return err
 		}
-		rel = filepath.ToSlash(rel)
 
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
 			return err
 		}
-		header.Name = rel
+		header.Name = name
 		header.Method = zip.Deflate
 		entry, err := zw.CreateHeader(header)
 		if err != nil {
 			return err
 		}
-		f, err := os.Open(path)
+		f, err := root.Open(name)
 		if err != nil {
 			return err
 		}
@@ -342,9 +367,125 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// Restore stops the server (if running), wipes the live server directory
-// (preserving the backups folder), and extracts the chosen backup zip back into
-// place. The caller is responsible for restarting afterwards.
+var errUnsafeBackup = errors.New("unsafe backup archive")
+
+// extractBackupToStage validates and fully extracts an archive beside the live
+// directory. The live tree is not touched unless this function succeeds.
+func extractBackupToStage(zipPath, parent, baseName string) (stage string, err error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer zr.Close()
+
+	stage, err = os.MkdirTemp(parent, "."+baseName+"-restore-*")
+	if err != nil {
+		return "", err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	root, err := os.OpenRoot(stage)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+
+	seen := make(map[string]struct{}, len(zr.File))
+	for _, f := range zr.File {
+		name := filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.Name)))
+		if name == "." || strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") || filepath.VolumeName(filepath.FromSlash(f.Name)) != "" {
+			return "", fmt.Errorf("%w: %s", errUnsafeBackup, f.Name)
+		}
+		if _, exists := seen[name]; exists {
+			return "", fmt.Errorf("%w: duplicate entry %s", errUnsafeBackup, f.Name)
+		}
+		seen[name] = struct{}{}
+		if f.Mode()&os.ModeSymlink != 0 || (!f.FileInfo().IsDir() && !f.Mode().IsRegular()) {
+			return "", fmt.Errorf("%w: special file %s", errUnsafeBackup, f.Name)
+		}
+
+		rootName := filepath.FromSlash(name)
+		if f.FileInfo().IsDir() {
+			if err := root.MkdirAll(rootName, 0755); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if err := root.MkdirAll(filepath.Dir(rootName), 0755); err != nil {
+			return "", err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		mode := f.Mode().Perm()
+		if mode == 0 {
+			mode = 0644
+		}
+		out, err := root.OpenFile(rootName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			rc.Close()
+			return "", err
+		}
+		_, copyErr := io.Copy(out, rc)
+		closeErr := out.Close()
+		rcErr := rc.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		if rcErr != nil {
+			return "", rcErr
+		}
+	}
+	keep = true
+	return stage, nil
+}
+
+// swapRestoredDirectory atomically replaces dst. If the new tree cannot be
+// installed, the old tree is renamed back before returning.
+func swapRestoredDirectory(dst, stage string) error {
+	parent := filepath.Dir(dst)
+	var parked string
+	if _, err := os.Lstat(dst); err == nil {
+		placeholder, err := os.MkdirTemp(parent, "."+filepath.Base(dst)+"-previous-*")
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(placeholder); err != nil {
+			return err
+		}
+		parked = placeholder
+		if err := os.Rename(dst, parked); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.Rename(stage, dst); err != nil {
+		if parked != "" {
+			if rollbackErr := os.Rename(parked, dst); rollbackErr != nil {
+				return fmt.Errorf("install restore: %v; rollback failed: %w", err, rollbackErr)
+			}
+		}
+		return err
+	}
+	if parked != "" {
+		_ = os.RemoveAll(parked)
+	}
+	return nil
+}
+
+// Restore validates and extracts the selected backup into a staging directory,
+// then stops the server and swaps the completed tree into place. The caller is
+// responsible for restarting afterwards.
 func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	backupID := chi.URLParam(r, "backupId")
@@ -364,69 +505,25 @@ func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 
 	parent := filepath.Dir(dst)
 	zipPath := filepath.Join(parent, "mcsm-backups", id, backupID+".zip")
-	zr, err := zip.OpenReader(zipPath)
+	stage, err := extractBackupToStage(zipPath, parent, filepath.Base(dst))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "backup not found")
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "backup not found")
+		} else if errors.Is(err, errUnsafeBackup) {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "validate backup: "+err.Error())
+		}
 		return
 	}
-	defer zr.Close()
+	defer os.RemoveAll(stage)
 
 	// Stop the instance first; ignore "not running" so restore works offline.
 	_ = h.mgr.Stop(id, true, 30*time.Second)
 
-	// Wipe live contents except the sibling backups folder (which lives outside
-	// dst) and anything under dst/mcsm-backups (defensive).
-	entries, err := os.ReadDir(dst)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "read dir: "+err.Error())
+	if err := swapRestoredDirectory(dst, stage); err != nil {
+		writeError(w, http.StatusInternalServerError, "install restore: "+err.Error())
 		return
-	}
-	for _, e := range entries {
-		if e.Name() == "mcsm-backups" {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
-			writeError(w, http.StatusInternalServerError, "wipe: "+err.Error())
-			return
-		}
-	}
-
-	// Extract, guarding against zip-slip (entries escaping dst).
-	for _, f := range zr.File {
-		target := filepath.Join(dst, f.Name)
-		if !strings.HasPrefix(target, filepath.Clean(dst)+string(os.PathSeparator)) {
-			writeError(w, http.StatusBadRequest, "unsafe path in archive: "+f.Name)
-			return
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0755); err != nil {
-				writeError(w, http.StatusInternalServerError, "mkdir: "+err.Error())
-				return
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			writeError(w, http.StatusInternalServerError, "mkdir: "+err.Error())
-			return
-		}
-		rc, err := f.Open()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "open entry: "+err.Error())
-			return
-		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
-		if err != nil {
-			rc.Close()
-			writeError(w, http.StatusInternalServerError, "create file: "+err.Error())
-			return
-		}
-		_, copyErr := io.Copy(out, rc)
-		out.Close()
-		rc.Close()
-		if copyErr != nil {
-			writeError(w, http.StatusInternalServerError, "extract: "+copyErr.Error())
-			return
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": backupID})

@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrRefreshTokenAlreadyRotated = errors.New("refresh token already rotated")
 
 // Session is one active refresh-token session, surfaced to the user so they can
 // review where they're logged in and revoke individual ones. The token itself is
@@ -50,13 +53,23 @@ func (s *Store) ListSessions(ctx context.Context, userID string) ([]*Session, er
 // RotateRefreshToken replaces a session's token hash (and refreshes its expiry
 // and device metadata) in place, preserving the session id and created_at so it
 // stays a single session across refreshes.
-func (s *Store) RotateRefreshToken(ctx context.Context, id, newHash, ip, userAgent string, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx,
+func (s *Store) RotateRefreshToken(ctx context.Context, id, currentHash, newHash, ip, userAgent string, expiresAt time.Time) error {
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE refresh_tokens
 		    SET token_hash = ?, ip = ?, user_agent = ?, last_used_at = CURRENT_TIMESTAMP, expires_at = ?
-		  WHERE id = ?`,
-		newHash, nullIfEmpty(ip), nullIfEmpty(userAgent), expiresAt, id)
-	return err
+		  WHERE id = ? AND token_hash = ?`,
+		newHash, nullIfEmpty(ip), nullIfEmpty(userAgent), expiresAt, id, currentHash)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrRefreshTokenAlreadyRotated
+	}
+	return nil
 }
 
 // TouchSession records that a session was just used (refresh), updating its IP
