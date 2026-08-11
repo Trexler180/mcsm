@@ -61,6 +61,74 @@ a,
   display: none;
 }
 
+/* Native range input, styled here so the RAM allocator keeps keyboard and
+   touch behavior without pulling a slider package into the app. */
+.memory-range {
+  height: 20px;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.memory-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.memory-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    #22c55e 0 var(--memory-progress, 0%),
+    #3a3a3a var(--memory-progress, 0%) 100%
+  );
+}
+
+.memory-range::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  appearance: none;
+  border: 3px solid #1a1a1a;
+  border-radius: 9999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 1px #22c55e;
+}
+
+.memory-range:focus-visible {
+  outline: none;
+}
+
+.memory-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px #22c55e, 0 0 0 4px rgb(34 197 94 / 25%);
+}
+
+.memory-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: #3a3a3a;
+}
+
+.memory-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: #22c55e;
+}
+
+.memory-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 3px solid #1a1a1a;
+  border-radius: 9999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 1px #22c55e;
+}
+
+.memory-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 1px #22c55e, 0 0 0 4px rgb(34 197 94 / 25%);
+}
+
 /* Docked Save toolbar. Parked one bar-height (plus a little) above the fold
    and clipped by the scroll container, so when pinned it slides straight DOWN
    out from behind the page banner. Its top edge is flush with the banner for

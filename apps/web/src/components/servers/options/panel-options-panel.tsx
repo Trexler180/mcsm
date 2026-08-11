@@ -1,13 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Copy,
   Folder,
   FolderTree,
-
-  MemoryStick,
   Network,
   Save,
   Server as ServerIcon,
@@ -24,6 +22,10 @@ import {
 } from "@/components/servers/folder-dialogs";
 import { useNotifications } from "@/store/notifications";
 import type { Server } from "@/lib/types";
+import {
+  isMemoryAllocationValid,
+  MemoryAllocation,
+} from "@/components/servers/memory-allocation";
 
 
 export function PanelOptionsPanel({ server }: { server: Server }) {
@@ -40,6 +42,14 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
   const [cloneMods, setCloneMods] = useState(true);
 
   const { data: folders = [] } = useServerFolders();
+  const { data: nodes = [] } = useQuery({
+    queryKey: ["nodes"],
+    queryFn: () => api.nodes.list(),
+    // The API refreshes host usage from each agent every 15 seconds. Poll at
+    // the same cadence so allocations react to memory used by other processes.
+    refetchInterval: 15_000,
+  });
+  const node = nodes.find((candidate) => candidate.id === server.node_id);
   const [folderId, setFolderId] = useState<string | null>(server.folder_id);
 
   const [form, setForm] = useState({
@@ -150,6 +160,11 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
     form.ram_mb_max !== String(server.ram_mb_max) ||
     form.ram_mb_min !== String(server.ram_mb_min) ||
     folderId !== server.folder_id;
+  const memoryValid = isMemoryAllocationValid(
+    form.ram_mb_max,
+    form.ram_mb_min,
+    node?.memory_mb,
+  );
 
   const inputLife = "hover:border-border-hover";
 
@@ -223,7 +238,7 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
 
           {/* Resources */}
           <div className="space-y-2.5">
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
               <div className="space-y-1">
                 <Label className="flex items-center gap-1.5">
                   <Network className="h-3.5 w-3.5 text-text-secondary" />
@@ -236,41 +251,18 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
                   className={inputLife}
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1.5">
-                  <MemoryStick className="h-3.5 w-3.5 text-text-secondary" />
-                  Max RAM
-                </Label>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    value={form.ram_mb_max}
-                    onChange={f("ram_mb_max")}
-                    className={`pr-10 ${inputLife}`}
-                  />
-                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-secondary">
-                    MB
-                  </span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1.5">
-                  <MemoryStick className="h-3.5 w-3.5 text-text-secondary" />
-                  Min RAM
-                </Label>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    value={form.ram_mb_min}
-                    onChange={f("ram_mb_min")}
-                    className={`pr-10 ${inputLife}`}
-                  />
-                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-secondary">
-                    MB
-                  </span>
-                </div>
-              </div>
             </div>
+            <MemoryAllocation
+              node={node}
+              value={form.ram_mb_max}
+              onChange={(ram_mb_max) =>
+                setForm((previous) => ({ ...previous, ram_mb_max }))
+              }
+              minimumValue={form.ram_mb_min}
+              onMinimumChange={(ram_mb_min) =>
+                setForm((previous) => ({ ...previous, ram_mb_min }))
+              }
+            />
           </div>
         </div>
 
@@ -283,7 +275,7 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
             size="sm"
             onClick={() => updateMutation.mutate()}
             loading={updateMutation.isPending}
-            disabled={!dirty}
+            disabled={!dirty || !memoryValid}
           >
             {!updateMutation.isPending && <Save className="h-3.5 w-3.5" />}
             {dirty ? "Save" : "Saved"}

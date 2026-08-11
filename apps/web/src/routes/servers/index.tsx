@@ -46,6 +46,10 @@ import {
 } from "@/components/servers/folder-dialogs";
 import { useAuthStore } from "@/store/auth";
 import { useNotifications } from "@/store/notifications";
+import {
+  isMemoryAllocationValid,
+  MemoryAllocation,
+} from "@/components/servers/memory-allocation";
 import type {
   Server as ServerType,
   ServerFolder,
@@ -82,6 +86,7 @@ function CreateServerDialog({
     queryKey: ["nodes"],
     queryFn: () => api.nodes.list(),
     enabled: open,
+    refetchInterval: open ? 15_000 : false,
   });
 
   // "new" provisions a fresh runtime; "import" adopts an existing directory and
@@ -105,6 +110,7 @@ function CreateServerDialog({
     enabled: open && mode === "import" && !!form.node_id,
   });
   const selected = candidates.find((c) => c.directory === selectedDir);
+  const selectedNode = nodes.find((node) => node.id === form.node_id);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -169,6 +175,11 @@ function CreateServerDialog({
   const canSubmit =
     !!form.name.trim() &&
     !!form.node_id &&
+    isMemoryAllocationValid(
+      form.ram_mb_max,
+      undefined,
+      selectedNode?.memory_mb,
+    ) &&
     (mode === "new" || !!selectedDir);
 
   const tabClass = (active: boolean) =>
@@ -321,16 +332,17 @@ function CreateServerDialog({
               onChange={f("mc_version")}
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 col-span-2 sm:col-span-1">
             <Label>Port</Label>
             <Input type="number" value={form.port} onChange={f("port")} />
           </div>
-          <div className="space-y-1.5">
-            <Label>Max RAM (MB)</Label>
-            <Input
-              type="number"
+          <div className="col-span-2">
+            <MemoryAllocation
+              node={selectedNode}
               value={form.ram_mb_max}
-              onChange={f("ram_mb_max")}
+              onChange={(ram_mb_max) =>
+                setForm((previous) => ({ ...previous, ram_mb_max }))
+              }
             />
           </div>
         </div>

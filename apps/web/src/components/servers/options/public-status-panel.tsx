@@ -24,9 +24,14 @@ function suggestSlug(name: string): string {
 export function PublicStatusPanel({ server }: { server: Server }) {
   const qc = useQueryClient();
   const { success, error } = useNotifications();
+  // Older development API binaries do not include these additive fields.
+  // Normalize at the boundary so the rest of the panel always works with the
+  // string/boolean values its controls expect.
+  const savedEnabled = server.public_status ?? false;
+  const savedSlug = server.public_slug ?? "";
 
-  const [enabled, setEnabled] = useState(server.public_status);
-  const [slug, setSlug] = useState(server.public_slug);
+  const [enabled, setEnabled] = useState(savedEnabled);
+  const [slug, setSlug] = useState(savedSlug);
   const [copied, setCopied] = useState(false);
 
   const updateMutation = useMutation({
@@ -47,16 +52,15 @@ export function PublicStatusPanel({ server }: { server: Server }) {
 
   const normalized = slug.trim().toLowerCase();
   const slugValid = normalized.length >= 3 && SLUG_RE.test(normalized);
-  const dirty =
-    enabled !== server.public_status || normalized !== server.public_slug;
+  const dirty = enabled !== savedEnabled || normalized !== savedSlug;
   const canSave = dirty && (!enabled || slugValid);
 
   // The API serves the page at the panel origin's /status/<slug>; when a
   // dedicated status domain is configured it is additionally reachable at
   // https://<slug>.<status domain>/.
   const pageURL = `${window.location.origin}/status/${normalized}`;
-  const liveURL = `${window.location.origin}/status/${server.public_slug}`;
-  const isLive = server.public_status && server.public_slug !== "";
+  const liveURL = `${window.location.origin}/status/${savedSlug}`;
+  const isLive = savedEnabled && savedSlug !== "";
 
   const copy = async () => {
     try {
