@@ -586,7 +586,11 @@ func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Serve
 	// the same bug in a different engine.
 	cfg := agent.StartConfigForServer(srv)
 	e.setStatus(srv.ID, "starting")
-	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
+	// "Already running" is the state we were asking for, not a failure: something
+	// else (an operator, an MCP client) won the race between our stop and this
+	// start. Fall through to the health poll below and judge the process that is
+	// actually up — erroring here would roll back a completed migration.
+	if err := c.StartServer(ctx, srv.ID, cfg); err != nil && !errors.Is(err, agent.ErrServerAlreadyRunning) {
 		e.setStatus(srv.ID, "offline")
 		return health{reason: "start failed: " + err.Error()}
 	}
