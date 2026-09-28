@@ -191,7 +191,15 @@ func (h *ServerHandlers) ImportCandidates(w http.ResponseWriter, r *http.Request
 // isAdmin reports whether the caller holds the global admin role, read fresh
 // from the DB so a demotion takes effect immediately rather than living on in a
 // still-valid access token.
+//
+// A machine principal is never an administrator, however privileged the human
+// who owns the key. The only field-level gate in this file — java_binary,
+// jvm_args, directory_path — stands between a `settings`-scoped key and code
+// execution on the agent host, so admin ownership must not satisfy it.
 func (h *ServerHandlers) isAdmin(r *http.Request) bool {
+	if auth.MachineFrom(r.Context()) != nil {
+		return false
+	}
 	claims := auth.ClaimsFrom(r.Context())
 	if claims == nil {
 		return false
@@ -244,11 +252,25 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// An agent access key sees the intersection of its allowlist with what its
+	// owner can currently reach — never the names or ids of the rest of the
+	// fleet, even when the owner is a global admin.
+	machine := auth.MachineFrom(r.Context())
+
 	out := make([]serverListItem, 0, len(servers))
 	for _, srv := range servers {
+		if machine != nil && !machine.AllowsServer(srv.ID) {
+			continue
+		}
 		perms := granted[srv.ID]
 		if claims.Role == "admin" || srv.OwnerID == claims.UserID {
 			perms = store.AllServerPermissions()
+		}
+		if machine != nil {
+			// Report what the key can actually do here, not what its owner
+			// could do by hand — the same intersection the access gate applies.
+			perms = intersectWithScopes(perms, machine.Scopes)
 		}
 		if perms == nil {
 			perms = []string{}
@@ -256,6 +278,57 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 		out = append(out, serverListItem{Server: srv, Permissions: perms})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// intersectWithScopes reports what a key can actually do: the greatest lower
+// bound of the key's scopes and its owner's live grants in the permission
+// lattice, expressed as the set of permissions the route gate would actually
+// allow. It walks the key's own scopes — the narrower side, and the side the
+// gate checks first — and narrows each one against the grants.
+//
+// Two cases per scope, and no third:
+//
+//   - The grants satisfy the scope outright (store.HasServerPermission: the
+//     leaf itself, its parent group, or admin). The scope survives as-is, so an
+//     owner's `power` group plus a key's `power.restart` leaf reports
+//     `power.restart` rather than the group the key does not have.
+//   - They do not, and the scope is a group. The overlap is then whatever leaves
+//     of that group the owner holds: a `power` scope against an owner holding
+//     only `power.restart` reports `power.restart`, which is exactly what the
+//     gate lets through — the scope side satisfies the leaf via its parent
+//     group, and the user side satisfies it directly.
+//
+// Anything else — a leaf scope the grants do not cover, or a group with no
+// overlapping leaf — contributes nothing. Narrowing never widens: every
+// permission emitted is one both sides already satisfy, so the report can only
+// name authority the gate would honor.
+func intersectWithScopes(perms, scopes []string) []string {
+	out := make([]string, 0, len(scopes))
+	seen := make(map[string]bool, len(scopes))
+	keep := func(perm string) {
+		if !seen[perm] {
+			seen[perm] = true
+			out = append(out, perm)
+		}
+	}
+	for _, scope := range scopes {
+		if store.HasServerPermission(perms, store.ServerPermission(scope)) {
+			keep(scope)
+			continue
+		}
+		if strings.Contains(scope, ".") {
+			continue // a leaf the owner does not hold: no narrower form exists
+		}
+		// A group scope the owner does not hold outright still overlaps with any
+		// leaf of that group they do hold.
+		prefix := scope + "."
+		for _, perm := range perms {
+			if strings.HasPrefix(perm, prefix) {
+				keep(perm)
+			}
+		}
+	}
+	return out
 }
 
 // serverListItem is a server plus the requesting user's effective permissions on

@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
+import { AccessKeysCard } from '@/components/settings/access-keys'
+import { RemoteAgentsCard } from '@/components/settings/remote-agents'
 import { useNotifications } from '@/store/notifications'
 import type { MfaSetup, Session } from '@/lib/types'
 
@@ -340,6 +342,8 @@ export function SecuritySection() {
     <div className="space-y-4">
       <MfaCard />
       <SessionsCard />
+      <AccessKeysCard />
+      <RemoteAgentsCard />
     </div>
   )
 }

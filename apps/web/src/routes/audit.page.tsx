@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ArrowRight, Bot, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -125,6 +125,20 @@ function KeyValues({ detail }: { detail: Record<string, unknown> }) {
   );
 }
 
+// Marks an entry an agent access key produced. The row still names the human
+// who owns the key — this says which of their credentials acted, not who.
+function AgentBadge() {
+  return (
+    <span
+      title="Performed by an agent access key"
+      className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent"
+    >
+      <Bot className="h-2.5 w-2.5" />
+      key
+    </span>
+  );
+}
+
 function AuditRow({
   entry,
   actorName,
@@ -154,6 +168,7 @@ function AuditRow({
               {actionLabel(entry.action)}
             </span>
             {categoryBadge(entry.action)}
+            {entry.api_key_id && <AgentBadge />}
             {changes && (
               <span className="text-[10px] text-text-secondary">
                 {Object.keys(changes).length} change

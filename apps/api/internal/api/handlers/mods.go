@@ -119,6 +119,51 @@ func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mods)
 }
 
+// modReadSummary is the model-facing projection of an installed mod. It omits
+// hashes and install paths, and ListReadOnly deliberately performs no disk
+// reconciliation or dependency-graph writes.
+type modReadSummary struct {
+	ID             string   `json:"id"`
+	Source         string   `json:"source"`
+	SourceID       *string  `json:"source_id,omitempty"`
+	VersionID      *string  `json:"version_id,omitempty"`
+	Name           string   `json:"name"`
+	Version        string   `json:"version"`
+	FileName       string   `json:"file_name"`
+	Pinned         bool     `json:"pinned"`
+	Enabled        bool     `json:"enabled"`
+	InstalledAsDep bool     `json:"installed_as_dep"`
+	RequiredBy     []string `json:"required_by"`
+	Orphaned       bool     `json:"orphaned"`
+}
+
+func (h *ModHandlers) ListReadOnly(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	mods, err := h.store.ListMods(r.Context(), id)
+	if err != nil {
+		writeServerError(w, r, "list mods", err)
+		return
+	}
+	if mods == nil {
+		mods = []*store.InstalledMod{}
+	}
+	if err := h.annotateDependencies(r.Context(), id, mods); err != nil {
+		writeServerError(w, r, "list mods: dependencies", err)
+		return
+	}
+	out := make([]modReadSummary, 0, len(mods))
+	for _, mod := range mods {
+		out = append(out, modReadSummary{
+			ID: mod.ID, Source: mod.Source, SourceID: mod.SourceID,
+			VersionID: mod.VersionID, Name: mod.Name, Version: mod.Version,
+			FileName: mod.FileName, Pinned: mod.Pinned, Enabled: mod.Enabled,
+			InstalledAsDep: mod.InstalledAsDep, RequiredBy: mod.RequiredBy,
+			Orphaned: mod.Orphaned,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // annotateDependencies fills RequiredBy/Orphaned on each mod from the reverse
 // dependency graph. A mod is orphaned when it was auto-installed as a dependency
 // but no currently-installed mod still requires it.

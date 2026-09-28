@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/store/auth'
+import { returnToHref, takeReturnTo } from '@/lib/return-to'
 
 function LoginPage() {
   const [email, setEmail] = useState('')
@@ -33,6 +34,15 @@ function LoginPage() {
         // Password accepted; prompt for the second factor.
         setMfaRequired(true)
         setLoading(false)
+        return
+      }
+      // A remembered destination (the OAuth consent screen, say) is a plain
+      // internal path rather than one of the router's literal routes, so it
+      // goes through the browser. The session is already in storage, so the
+      // reload comes back authenticated.
+      const back = takeReturnTo()
+      if (back) {
+        window.location.assign(returnToHref(back))
         return
       }
       navigate({ to: '/' })

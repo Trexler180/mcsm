@@ -113,6 +113,79 @@ describe("useNotifications", () => {
     expect(toasts()).toHaveLength(0);
   });
 
+  // An approval prompt has two real answers. Burying "deny" behind Dismiss
+  // would make refusing look like ignoring, so both get a button.
+  it("runs whichever of the two answers was pressed", async () => {
+    const approve = vi.fn();
+    const deny = vi.fn();
+    useNotifications.getState().add({
+      title: "Claude Code wants to restart survival",
+      variant: "warning",
+      sticky: true,
+      action: { label: "Approve", onClick: approve },
+      secondary: { label: "Deny", onClick: deny },
+    });
+    const id = toasts()[0].id;
+
+    await useNotifications.getState().runAction(id, "secondary");
+    expect(deny).toHaveBeenCalledOnce();
+    expect(approve).not.toHaveBeenCalled();
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("defaults to the primary answer when none is named", async () => {
+    const approve = vi.fn();
+    useNotifications.getState().add({
+      title: "Prompt",
+      variant: "warning",
+      action: { label: "Approve", onClick: approve },
+      secondary: { label: "Deny", onClick: vi.fn() },
+    });
+    await useNotifications.getState().runAction(toasts()[0].id);
+    expect(approve).toHaveBeenCalledOnce();
+  });
+
+  // One busy flag for the whole toast: while an answer is in flight the other
+  // answer must not also be pressable.
+  it("refuses a second answer while the first is running", async () => {
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deny = vi.fn();
+    useNotifications.getState().add({
+      title: "Prompt",
+      variant: "warning",
+      sticky: true,
+      action: { label: "Approve", onClick: () => pending },
+      secondary: { label: "Deny", onClick: deny },
+    });
+    const id = toasts()[0].id;
+
+    const run = useNotifications.getState().runAction(id, "action");
+    await useNotifications.getState().runAction(id, "secondary");
+    expect(deny).not.toHaveBeenCalled();
+
+    release();
+    await run;
+  });
+
+  // A request answered on another device, or one that lapsed, must not leave a
+  // live-looking button behind.
+  it("removes a keyed toast and ignores an unknown key", () => {
+    useNotifications.getState().add({
+      title: "Prompt",
+      variant: "warning",
+      sticky: true,
+      key: "mcp-action:req-1",
+      action: { label: "Approve", onClick: () => {} },
+    });
+    useNotifications.getState().removeByKey("mcp-action:other");
+    expect(toasts()).toHaveLength(1);
+    useNotifications.getState().removeByKey("mcp-action:req-1");
+    expect(toasts()).toHaveLength(0);
+  });
+
   it("dismisses the toast even when its action fails", async () => {
     useNotifications.getState().add({
       title: "Steve tried to join",

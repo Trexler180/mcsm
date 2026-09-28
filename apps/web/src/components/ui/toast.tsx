@@ -48,14 +48,27 @@ function ToastItem({ toast }: { toast: Toast }) {
           <p className="text-xs text-text-secondary mt-0.5">{toast.description}</p>
         )}
         {toast.action && (
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              onClick={() => void runAction(toast.id)}
+              onClick={() => void runAction(toast.id, 'action')}
               loading={toast.busy}
             >
               {toast.action.label}
             </Button>
+            {toast.secondary && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void runAction(toast.id, 'secondary')}
+                disabled={toast.busy}
+              >
+                {toast.secondary.label}
+              </Button>
+            )}
+            {/* Dismiss stays even when there is a real "no" button, because
+                putting the prompt aside without answering it is a third,
+                legitimate choice: the request stands until it is decided. */}
             <Button size="sm" variant="ghost" onClick={() => remove(toast.id)}>
               Dismiss
             </Button>

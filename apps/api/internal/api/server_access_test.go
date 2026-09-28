@@ -81,7 +81,7 @@ func TestRequireServerAccessAllowsAdminAndOwnerOnly(t *testing.T) {
 	s, serverID, ownerID, otherID, adminID := accessTestStore(t)
 	secret := "secret"
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore(), nil))
 	r.With(requireServerAccess(s)).Get("/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
@@ -117,7 +117,7 @@ func TestRequireServerPermissionIsGranular(t *testing.T) {
 	s, serverID, _, otherID, _ := accessTestStore(t)
 	secret := "secret"
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore(), nil))
 	r.With(requireServerPermission(s, store.ServerPermissionView)).Get("/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
@@ -167,7 +167,7 @@ func TestRequireServerPermissionLeafGranularity(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore(), nil))
 	r.With(requireServerPermission(s, store.ServerPermissionPowerStart)).Post("/servers/{id}/start", ok)
 	r.With(requireServerPermission(s, store.ServerPermissionPowerStop)).Post("/servers/{id}/stop", ok)
 	r.With(requireServerGroupAccess(s, store.ServerPermissionFiles)).Get("/servers/{id}/files", ok)
@@ -401,7 +401,7 @@ func TestListServersReportsCallerPermissions(t *testing.T) {
 	secret := "secret"
 	h := handlers.NewServerHandlers(s, t.TempDir())
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore(), nil))
 	r.Get("/servers", h.List)
 
 	list := func(userID, role string) []struct {
@@ -466,7 +466,7 @@ func TestPlayerInspectIsSeparateFromRosterAccess(t *testing.T) {
 	s, serverID, _, otherID, _ := accessTestStore(t)
 	secret := "secret"
 	r := chi.NewRouter()
-	r.Use(auth.Middleware(secret, auth.NewTicketStore()))
+	r.Use(auth.Middleware(secret, auth.NewTicketStore(), nil))
 	ok := func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	}

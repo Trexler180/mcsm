@@ -43,6 +43,72 @@ func (e *Engine) Emit(evt Event) {
 	}()
 }
 
+// EmitToUser delivers an event to exactly one person, bypassing subscription
+// matching.
+//
+// The normal Emit fan-out is wrong for anything only one person can act on. An
+// MCP approval prompt is the case in point: only the grant owner can approve
+// their own request — the API 404s anyone else — so broadcasting it to every
+// user with view permission on the server would show a button to people it
+// would refuse. And a prompt an agent is actively blocked on must not depend on
+// the recipient having opted in to a notification type they have never heard
+// of, so this path does not consult MatchingSubscriptions at all.
+//
+// External channels still honor the user's own choices: those are delivery
+// preferences about their phone and their webhooks, not about whether they get
+// to see a decision that is theirs to make.
+func (e *Engine) EmitToUser(userID string, evt Event) {
+	if e == nil || userID == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := e.processForUser(ctx, userID, evt); err != nil {
+			log.Printf("notify: emit %s to %s: %v", evt.Type, userID, err)
+		}
+	}()
+}
+
+func (e *Engine) processForUser(ctx context.Context, userID string, evt Event) error {
+	def, ok := defByType(evt.Type)
+	if !ok {
+		return nil
+	}
+	if evt.Severity == "" {
+		evt.Severity = def.DefaultSeverity
+	}
+	if evt.DedupeKey == "" {
+		evt.DedupeKey = defaultDedupeKey(evt)
+	}
+
+	// In-app is unconditional here; the external selectors come from whatever
+	// subscriptions the user does have for this type.
+	channels := map[string]struct{}{"inapp": {}}
+	subs, err := e.store.MatchingSubscriptions(ctx, evt.Type, evt.ServerID)
+	if err != nil {
+		log.Printf("notify: subscription lookup for %s: %v", evt.Type, err)
+	}
+	for _, sub := range subs {
+		if sub.UserID != userID || severityRank(evt.Severity) < severityRank(sub.MinSeverity) {
+			continue
+		}
+		for _, c := range sub.Channels {
+			if c != "inapp" {
+				channels[c] = struct{}{}
+			}
+		}
+	}
+
+	// No dedupe-window check: each of these is keyed to a distinct request, and
+	// suppressing one would strand an agent waiting on a decision that was
+	// never shown.
+	if e.deliverToUser(ctx, userID, evt, channels) && e.dispatcher != nil {
+		e.dispatcher.Signal()
+	}
+	return nil
+}
+
 func (e *Engine) process(ctx context.Context, evt Event) error {
 	def, ok := defByType(evt.Type)
 	if !ok {

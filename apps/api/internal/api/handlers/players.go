@@ -166,12 +166,63 @@ func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
 	h.proxy(w, r, "/players/action")
 }
 
+// ActionDelegated performs a player action for a caller whose authority was
+// already established outside the HTTP layer — today, the MCP facade, which
+// intersects grant scope, server allowlist, and the owner's live per-server RBAC
+// before it ever reaches here.
+//
+// It exists because Action authorizes from request context (JWT claims / access
+// key bounds) and a delegated invocation has no claims to read: routing MCP
+// through Action would fail closed on every call. Skipping that check is safe
+// only because the caller already made the equivalent one against the *same*
+// leaf permission; it is not an unauthenticated path, and it is deliberately not
+// reachable from the router. Every mutation still lands in the audit trail with
+// the delegated actor attached.
+//
+// The permission map stays the single source of truth for what an action needs,
+// so an action outside it is rejected here exactly as it is on the HTTP route.
+func (h *PlayersHandlers) ActionDelegated(w http.ResponseWriter, r *http.Request) {
+	if auth.DelegatedActorFrom(r.Context()) == nil {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var parsed struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, ok := playerActionPermission[parsed.Action]; !ok {
+		writeError(w, http.StatusBadRequest, "unknown player action")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	h.proxy(w, r, "/players/action")
+}
+
 // canPerform reports whether the caller may perform a player action: global
 // admins always may; otherwise the owner/collaborator permission check applies.
+//
+// On an access key the key's own bounds are evaluated first and have no bypass.
+// The route gate could only check group-level players access — the specific
+// action arrives in the body — so this is where a `players.whitelist` key is
+// stopped from opping or banning, whoever owns it.
 func (h *PlayersHandlers) canPerform(r *http.Request, serverID string, needed store.ServerPermission) (bool, error) {
 	claims := auth.ClaimsFrom(r.Context())
 	if claims == nil {
 		return false, nil
+	}
+	if machine := auth.MachineFrom(r.Context()); machine != nil {
+		if !machine.AllowsServer(serverID) || !store.HasServerPermission(machine.Scopes, needed) {
+			return false, nil
+		}
 	}
 	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
 	if err != nil {

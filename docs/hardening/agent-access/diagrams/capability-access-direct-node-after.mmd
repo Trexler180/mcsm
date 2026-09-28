@@ -1,0 +1,6 @@
+flowchart LR
+    Human[Human operator] -->|manually distributes node token| External[External automation / AI agent]
+    External -->|shared bearer token| Worker[Host worker agent]
+    Worker --> Capabilities[Filesystem + process + backup capabilities]
+    API[Control-plane API] -. bypassed RBAC and audit .-> Worker
+

@@ -53,7 +53,7 @@ func TestRefreshRotatesRefreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthHandlers(s, "secret", auth.NewTicketStore())
+	h := NewAuthHandlers(s, "secret", auth.NewTicketStore(), nil)
 	body, _ := json.Marshal(map[string]string{"refresh_token": oldToken})
 	rr := httptest.NewRecorder()
 	h.Refresh(rr, httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", bytes.NewReader(body)))
@@ -105,7 +105,7 @@ func TestRefreshAcceptsCookieToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewAuthHandlers(s, "secret", auth.NewTicketStore())
+	h := NewAuthHandlers(s, "secret", auth.NewTicketStore(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: oldToken})
 	rr := httptest.NewRecorder()

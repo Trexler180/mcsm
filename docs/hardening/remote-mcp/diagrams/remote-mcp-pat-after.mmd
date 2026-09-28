@@ -1,0 +1,11 @@
+flowchart LR
+    Human[Human operator] -->|re-auth; one-time display| KeyUI[Agent access-key management]
+    KeyUI -->|90-day mcsm_pat_ secret| Clipboard[/Copied by hand/]
+    Clipboard -. still pasted into client config .-> Agent[Claude Code / Codex]
+    Agent -->|Streamable HTTP + Bearer mcsm_pat_| MCP[Embedded MCP tool facade]
+    MCP --> Intersection[Server allowlist AND key scope AND live user RBAC]
+    Intersection --> Tools[Bounded diagnostic tools]
+    Tools --> Operations[Audited server operations]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Operations --> Audit[(User + key attribution)]
+    Agent -. no consent record; revocation is per key, not per client .-> MCP

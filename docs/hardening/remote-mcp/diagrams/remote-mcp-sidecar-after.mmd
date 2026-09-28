@@ -1,0 +1,11 @@
+flowchart LR
+    Human[Human operator] -->|one-time pairing code| Pair[Device pairing screen]
+    Pair -->|device-bound key, never leaves the machine| Sidecar[Installed local MCP sidecar]
+    Agent[Claude Code / Codex] -->|stdio| Sidecar
+    Sidecar -->|signed request over TLS| API[Control-plane API]
+    API --> Intersection[Device grant AND server allowlist AND scope AND live RBAC]
+    Intersection --> Operations[Audited server operations]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Operations --> Audit[(Owner + device attribution)]
+    Sidecar -. requires install, update, and support on every operator machine .-> Human
+    Sidecar -. second holder of delegated authority on an unattested endpoint .-> API

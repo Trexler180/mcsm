@@ -29,6 +29,11 @@ func TrustedProxy(trusted []*net.IPNet) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// True-Client-IP is not part of our supported proxy contract and chi's
+			// RealIP middleware gives it precedence over X-Real-IP. Always remove
+			// it, including for trusted peers, so a proxy that forwards this
+			// client-supplied header cannot override the address it authenticated.
+			r.Header.Del("True-Client-IP")
 			if !peerTrusted(r.RemoteAddr, trusted) {
 				for _, h := range forwardedHeaders {
 					r.Header.Del(h)

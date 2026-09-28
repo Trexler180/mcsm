@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/backups"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
@@ -35,21 +34,46 @@ func (h *BackupHandlers) ListBackups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, backups)
 }
 
+// backupStatus is the safe polling projection used by delegated operator tools.
+// Raw metadata can contain backend error strings, paths, or infrastructure
+// details and is intentionally excluded.
+type backupStatus struct {
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	SizeBytes   *int64     `json:"size_bytes,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+func (h *BackupHandlers) ListBackupsSafe(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	records, err := h.store.ListBackups(r.Context(), id)
+	if err != nil {
+		writeServerError(w, r, "list backups", err)
+		return
+	}
+	out := make([]backupStatus, 0, len(records))
+	for _, record := range records {
+		out = append(out, backupStatus{
+			ID: record.ID, Status: record.Status, SizeBytes: record.SizeBytes,
+			StartedAt: record.StartedAt, CompletedAt: record.CompletedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // CreateBackup synchronously asks the agent to zip the server directory and
 // records the result. Manual + scheduled backups share this entry point.
 func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
-	claims := auth.ClaimsFrom(r.Context())
 
 	srv, c, ok := serverAgent(w, r, h.store, serverID)
 	if !ok {
 		return
 	}
 
-	uid := ""
-	if claims != nil {
-		uid = claims.UserID
-	}
+	uid := currentUserID(r)
+
 	var triggeredBy *string
 	if uid != "" {
 		triggeredBy = &uid
@@ -101,6 +125,7 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}(created, srv.DirectoryPath)
 
+	audit(h.store, r, serverID, "backup.create", map[string]any{"backup_id": created.ID})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -232,5 +257,6 @@ func (h *BackupHandlers) CreateTarget(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "create backup target", err)
 		return
 	}
+
 	writeJSON(w, http.StatusCreated, created)
 }

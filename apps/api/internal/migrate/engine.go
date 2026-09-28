@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -413,7 +414,9 @@ func (e *Engine) buildPlan(ctx context.Context, srv *store.Server, target string
 // ── Apply / disable / rollback ───────────────────────────────────────
 
 func (e *Engine) applyUpdate(ctx context.Context, c agentAPI, serverID string, p *plan) error {
-	if err := e.swapFile(ctx, c, serverID, p.mod.InstallPath, p.file, p.mod.FileName); err != nil {
+	targetFile := *p.file
+	targetFile.Filename = migrationModFilename(targetFile.Filename, p.mod.Enabled)
+	if err := e.swapFile(ctx, c, serverID, p.mod.InstallPath, &targetFile, p.mod.FileName); err != nil {
 		return err
 	}
 	sha := p.file.Hashes.SHA256
@@ -422,12 +425,19 @@ func (e *Engine) applyUpdate(ctx context.Context, c agentAPI, serverID string, p
 	row.VersionID = &vid
 	row.Name = p.target.Name
 	row.Version = p.target.VersionNumber
-	row.FileName = p.file.Filename
+	row.FileName = targetFile.Filename
 	row.SHA256 = &sha
 	if _, err := e.store.UpdateMod(ctx, &row); err != nil {
 		return fmt.Errorf("record update: %w", err)
 	}
 	return nil
+}
+
+func migrationModFilename(filename string, enabled bool) string {
+	if !enabled && !strings.HasSuffix(filename, disabledSuffix) {
+		return filename + disabledSuffix
+	}
+	return filename
 }
 
 // disableMod renames the jar to "<name>.disabled" on the agent and records the
@@ -586,7 +596,11 @@ func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Serve
 	// the same bug in a different engine.
 	cfg := agent.StartConfigForServer(srv)
 	e.setStatus(srv.ID, "starting")
-	if err := c.StartServer(ctx, srv.ID, cfg); err != nil {
+	// "Already running" is the state we were asking for, not a failure: something
+	// else (an operator, an MCP client) won the race between our stop and this
+	// start. Fall through to the health poll below and judge the process that is
+	// actually up — erroring here would roll back a completed migration.
+	if err := c.StartServer(ctx, srv.ID, cfg); err != nil && !errors.Is(err, agent.ErrServerAlreadyRunning) {
 		e.setStatus(srv.ID, "offline")
 		return health{reason: "start failed: " + err.Error()}
 	}

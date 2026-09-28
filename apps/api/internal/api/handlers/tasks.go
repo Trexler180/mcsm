@@ -32,6 +32,16 @@ func (h *TaskHandlers) authorizeAction(r *http.Request, serverID, action string)
 	if claims == nil {
 		return http.StatusUnauthorized, "unauthorized"
 	}
+	// A key reaches this route on its `tasks` scope alone; the action it wants to
+	// schedule arrives in the body. Its scopes must satisfy that action before any
+	// user-side check, or a tasks-only key would schedule a `command` task and
+	// borrow its owner's console — the same escalation this function exists to
+	// prevent for collaborators, one level out.
+	if machine := auth.MachineFrom(r.Context()); machine != nil {
+		if !machine.AllowsServer(serverID) || !store.HasServerPermission(machine.Scopes, needed) {
+			return http.StatusForbidden, "you don't have permission to schedule this action"
+		}
+	}
 	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
 	if err != nil {
 		return http.StatusInternalServerError, "authorization check failed"

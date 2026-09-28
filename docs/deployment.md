@@ -154,6 +154,90 @@ map $http_upgrade $connection_upgrade {
 }
 ```
 
+### Remote agent (MCP) endpoint
+
+Remote agent connections stay **off** until the API can state its own public
+address, because an OAuth token is bound to the exact resource URL it was issued
+for and a guessed origin would mint tokens bound to the wrong audience. Set one
+of these on the API service:
+
+```ini
+# The origin clients reach, no path, https unless it is loopback.
+Environment=MCP_PUBLIC_ORIGIN=https://mc.example.com
+# APP_ORIGIN is used when MCP_PUBLIC_ORIGIN is unset — production usually
+# already sets it.
+Environment=APP_ORIGIN=https://mc.example.com
+# The path the SPA is served under, so the consent screen URL is right.
+# Defaults to /; set it when hosting under a subpath.
+Environment=APP_BASE_PATH=/dashboard/
+# Optional. Self-registered clients may only call back to loopback, because
+# registration is open to the internet and a remote callback is how a crafted
+# authorize link turns an operator's approval into someone else's access. Set
+# this only if you deliberately run a hosted MCP client that cannot use a
+# loopback redirect.
+# Environment=MCP_ALLOW_REMOTE_REDIRECTS=true
+# Optional diagnostic. An agent access key is never accepted at the MCP
+# endpoint; this only makes the 401 say so instead of failing anonymously,
+# which is worth turning on while someone is debugging a client that keeps
+# presenting the wrong credential.
+# Environment=MCP_EXPLAIN_ACCESS_KEY_REJECTION=true
+# (The pre-release alias MCP_ALLOW_ACCESS_KEYS is no longer read.)
+```
+
+`MCP_PUBLIC_ORIGIN` or `APP_ORIGIN` is required for any deployment that is not
+purely local. The fallback that lets local development work unconfigured needs
+the request to have both arrived from a loopback address and named a loopback
+host, and it refuses any request carrying a forwarding header. A proxied
+request therefore never satisfies it — the API answers `503` on the OAuth
+endpoints and logs the variable to set.
+
+The agent's `GET /files/content` gained an optional `tail_bytes` query parameter
+so the panel can read the end of a large log without transferring the whole
+file. It is additive: an agent that predates it ignores the parameter and
+returns the file entire, which the panel then refuses for exceeding its response
+ceiling — so a stale agent degrades to the previous behaviour (raw log reads
+fail on big files) rather than returning something wrong. Upgrade agents with
+the API to get log and crash-report reads on busy servers.
+
+With neither set, the surface is unmounted and 404s — except for requests
+arriving from loopback, which is what keeps `make dev-mcp` working with no
+configuration.
+
+OAuth discovery is **origin-rooted by specification**, so the proxy must forward
+the `.well-known` documents in addition to `/api/`. Without this a client can
+reach the MCP endpoint but never discover where to authorize, and connecting
+fails with an unhelpful 401.
+
+```nginx
+    # OAuth discovery for the MCP endpoint. Origin-rooted, so it cannot live
+    # under /api/ — without this block the SPA's index.html answers instead.
+    location ~ ^/\.well-known/(oauth-protected-resource|oauth-authorization-server|openid-configuration) {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+TLS is not optional here. The client sends a bearer token on every call, and the
+origin resolver refuses a non-loopback `http` origin outright.
+
+Verify after deploying:
+
+```bash
+# Must return JSON naming your origin, not the SPA shell.
+curl -s https://mc.example.com/.well-known/oauth-protected-resource/api/v1/mcp
+curl -s https://mc.example.com/.well-known/oauth-authorization-server
+
+# Must be 401 with a WWW-Authenticate naming the metadata document.
+curl -s -i -X POST https://mc.example.com/api/v1/mcp | head -n 20
+```
+
+Operator guidance for connecting and revoking is in
+[operations.md](operations.md#remote-agent-connections-mcp); the security model
+is in [security.md](security.md#remote-agent-connections-mcp-over-oauth).
+
 ### Public status pages (optional)
 
 Servers can opt into a public, unauthenticated status page (Options → Public

@@ -545,6 +545,9 @@ export interface GameVersion {
 export interface AuditEntry {
   id: number;
   user_id: string | null;
+  /** The agent access key that acted, when one did. Null for interactive and
+   *  background actions. */
+  api_key_id: string | null;
   server_id: string | null;
   action: string;
   detail: string | null;
@@ -941,6 +944,239 @@ export interface MfaEnableResponse {
   recovery_codes: string[];
 }
 
+/** An agent access key's metadata. The raw secret is never part of this shape —
+ *  it exists only in the create/rotate response (see AccessKeyCreated). */
+export interface AccessKey {
+  id: string;
+  user_id: string;
+  name: string;
+  /** Non-secret leading fragment, e.g. "mcsm_pat_AbCdEf12". */
+  token_prefix: string;
+  scopes: ServerPermission[];
+  server_ids: string[];
+  expires_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  revoked_at: string | null;
+}
+
+/** The one response that carries a raw token. Shown once, then dropped. */
+export interface AccessKeyCreated {
+  key: AccessKey;
+  token: string;
+}
+
+export interface AccessKeyRequest {
+  name: string;
+  server_ids: string[];
+  scopes: ServerPermission[];
+  /** RFC 3339. Mandatory, and no more than 90 days out. */
+  expires_at: string;
+  password: string;
+  totp_code?: string;
+}
+
+// ── Remote agent connections (MCP over OAuth) ────────────────────
+//
+// A grant is delegated authority, not a credential: nothing in any shape below
+// carries a token, a code, or a verifier, because the browser never handles
+// one. The client gets its token from the token endpoint directly.
+
+/** The OAuth scope vocabulary the panel's authorization server issues.
+ *
+ *  Kept in the same three groups the consent screen presents, because the
+ *  distinction is the security model rather than a layout choice: diagnostics
+ *  only read, `mcp:actions.request` files something a human still has to
+ *  approve, and the operator scopes execute on the tool call itself. Mirrors
+ *  `AllMCPScopes()` in apps/api/internal/store/mcp.go. */
+export type MCPDiagnosticScope =
+  | "mcp:servers.read"
+  | "mcp:diagnostics.read"
+  | "mcp:logs.read"
+  | "mcp:metrics.read"
+  | "mcp:audit.read";
+
+/** Reads that go past ServerManager's own summaries to what the server itself
+ *  wrote, or to who plays on it. They are their own group because they are the
+ *  ones a human should think about twice: `mcp:logs.raw` returns raw console
+ *  and crash text rather than the indexed extract, `mcp:config.read` returns
+ *  one configuration file, and `mcp:players.read` returns people's names. Each
+ *  is bounded to a closed set on the API side and none of them writes. */
+export type MCPSensitiveReadScope =
+  | "mcp:logs.raw"
+  | "mcp:config.read"
+  | "mcp:players.read";
+
+/** Files a start/stop/restart request for a human to approve. Never granted by
+ *  a preset — it is a different model from the operator scopes, not a weaker
+ *  version of them. */
+export type MCPActionRequestScope = "mcp:actions.request";
+
+/** The Server operator group. Every mutation here executes on the tool call —
+ *  there is no second approval step. `mcp:mods.read` is the one read-only
+ *  member: it belongs to this group because it is gated on mod access rather
+ *  than plain view, and an operator needs it to know what it is changing.
+ *
+ *  `mcp:console.run` is bounded to a fixed verb allowlist on the API side, not
+ *  arbitrary console access — the agent picks a verb, never a command string. */
+export type MCPOperatorScope =
+  | "mcp:power.start"
+  | "mcp:power.stop"
+  | "mcp:power.restart"
+  | "mcp:mods.read"
+  | "mcp:mods.install"
+  | "mcp:mods.update"
+  | "mcp:mods.remove"
+  | "mcp:backups.create"
+  | "mcp:players.whitelist"
+  | "mcp:console.run";
+
+export type MCPScope =
+  | MCPDiagnosticScope
+  | MCPActionRequestScope
+  | MCPOperatorScope;
+
+/** One requested capability, described the way a human should read it. */
+export interface MCPConsentScope {
+  scope: MCPScope;
+  title: string;
+  description: string;
+  /** Set on capabilities that can change a running server. */
+  sensitive: boolean;
+}
+
+/** A server the caller may delegate, with the requested scopes they actually
+ *  hold on it. The screen offers exactly this and no more. */
+export interface MCPConsentServer {
+  id: string;
+  name: string;
+  scopes: MCPScope[];
+}
+
+export interface MCPConsentView {
+  request_id: string;
+  client_name: string;
+  /** "dynamic" when the client registered itself, "preregistered" otherwise. */
+  client_origin: string;
+  redirect_host: string;
+  resource: string;
+  scopes: MCPConsentScope[];
+  servers: MCPConsentServer[];
+  expires_at: string;
+  default_days: number;
+  max_days: number;
+  already_decided: boolean;
+}
+
+export interface MCPConsentDecision {
+  request_id: string;
+  approve: boolean;
+  scopes: MCPScope[];
+  server_ids: string[];
+  days: number;
+}
+
+/** Where to send the browser once the human has decided. Always built by the
+ *  API from the stored redirect URI, never from anything the page holds. */
+export interface MCPConsentResult {
+  redirect_to: string;
+}
+
+export interface MCPGrantServer {
+  id: string;
+  name: string;
+}
+
+/** How much ceremony an agent's request has to go through before it runs.
+ *
+ *  Every field defaults to the safe value, and an account that has never
+ *  touched the setting reads as `{require_password: true}` with both
+ *  auto-approves off — the behavior before any of this was configurable. */
+export interface MCPApprovalPolicy {
+  /** Approving in the dashboard demands a password (and TOTP when enrolled). */
+  require_password: boolean;
+  /** start / stop / restart run on arrival with no human asked. */
+  auto_approve_lifecycle: boolean;
+  /** Version upgrades do. Separate from the lifecycle flag on purpose: this one
+   *  reinstalls the runtime, rewrites every managed mod, and can roll the world
+   *  back to a restore point. */
+  auto_approve_upgrades: boolean;
+}
+
+/** One connection's overrides. `null` means "inherit the account default" and
+ *  is a real third state — not a value that quietly pins today's default. */
+export interface MCPGrantPolicyOverrides {
+  require_password: boolean | null;
+  auto_approve_lifecycle: boolean | null;
+  auto_approve_upgrades: boolean | null;
+}
+
+export interface MCPGrant {
+  id: string;
+  client_name: string;
+  scopes: MCPScope[];
+  servers: MCPGrantServer[];
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  active: boolean;
+  /** What this connection has set for itself (null = inherit). */
+  overrides: MCPGrantPolicyOverrides;
+  /** What those overrides actually resolve to once the account defaults apply.
+   *  Sent alongside `overrides` so the UI never has to reimplement precedence. */
+  policy: MCPApprovalPolicy;
+}
+
+/** Lifecycle actions an agent may ask for. It can never perform one. */
+export type MCPActionKind = "start" | "stop" | "restart" | `upgrade:${string}`;
+
+export type MCPActionStatus =
+  | "pending"
+  | "denied"
+  | "expired"
+  | "executing"
+  | "executed"
+  | "failed";
+
+export interface MCPActionRequest {
+  id: string;
+  grant_id: string;
+  client_name: string;
+  server_id: string;
+  server_name: string;
+  action: MCPActionKind;
+  /** Model-authored justification. Always rendered as untrusted text and never
+   *  interpreted — see `untrusted`, which the API sets unconditionally. */
+  reason: string;
+  untrusted: boolean;
+  status: MCPActionStatus;
+  created_at: string;
+  expires_at: string;
+  decided_at: string | null;
+  executed_at: string | null;
+  failure_reason: string | null;
+  /** Whether approving this needs a step-up, resolved server-side from the
+   *  policy on the grant that filed it. It decides which form to draw; the API
+   *  re-checks regardless, so a client that ignored it would simply get a 401. */
+  requires_password: boolean;
+}
+
+/** Connect instructions. There is deliberately no token field: connecting is a
+ *  browser click, so a snippet carrying a secret would defeat the feature. */
+export interface MCPConnectionInfo {
+  configured: boolean;
+  url: string;
+  claude_code: string;
+  codex_config: string;
+  hermes_config: string;
+  scopes: MCPScope[];
+  max_days: number;
+  default_days: number;
+}
+
 export interface Session {
   id: string;
   ip: string;
@@ -1044,6 +1280,35 @@ export interface JoinDeniedData {
    *  (the UUID rather than a console command). */
   bedrock: boolean;
   attempts: number;
+}
+
+/** An AI agent filed an action request and is waiting on a decision. Rendered
+ *  with approve and deny, so it reaches the owner from any screen rather than
+ *  only from the settings card that lists pending requests. */
+export const EVENT_MCP_ACTION_REQUESTED = "mcp.action_requested";
+
+/** That request was settled — by a human, or automatically under the owner's
+ *  approval policy. Takes down the prompt, and is how an operator finds out an
+ *  auto-approved action ran without them. */
+export const EVENT_MCP_ACTION_RESOLVED = "mcp.action_resolved";
+
+/** The `data` payload of both MCP action alerts. Everything the prompt needs to
+ *  answer the request without first going to find it. */
+export interface MCPActionAlertData {
+  request_id: string;
+  action: MCPActionKind;
+  client_name: string;
+  server_name: string;
+  /** Model-authored justification, carried as untrusted evidence for a human to
+   *  weigh — never interpreted. */
+  reason: string;
+  expires_at: string;
+  /** Only on `mcp.action_requested`: whether approving needs a step-up. */
+  requires_password: boolean;
+  /** Only on `mcp.action_resolved`. */
+  status: MCPActionStatus;
+  /** Only on `mcp.action_resolved`: true when policy ran it with nobody asked. */
+  automatic: boolean;
 }
 
 // Live telemetry pushed by the helper mod. The snapshot fields are only present

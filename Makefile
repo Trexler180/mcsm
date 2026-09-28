@@ -1,4 +1,4 @@
-.PHONY: all build clean test dev-api dev-agent dev-web
+.PHONY: all build clean test dev-api dev-agent dev-web dev-mcp
 
 all: build
 
@@ -11,6 +11,28 @@ dev-api:
 	MCSM_DEV_MODE="1" \
 	DATABASE_PATH="./mcsm.db" \
 	JWT_SECRET="dev-secret" \
+	go run ./cmd/server
+
+# The API with remote-agent (MCP over OAuth) access enabled. Needs dev-web
+# running too: the consent screen is a dashboard route, and Vite is the single
+# origin the browser, the SPA and the MCP endpoint share locally. Prints no
+# credential and writes to no agent config — connecting is a browser click.
+# Windows equivalent: scripts/Start-McpDemo.ps1
+#
+# APP_BASE_PATH is deliberately left unset rather than set to "/". MSYS2 shells
+# (Git Bash) rewrite a lone "/" in an environment variable into the MSYS install
+# root before a native binary sees it, which turned the consent link into
+# http://localhost:3000/C:/Program%20Files/Git/mcp-consent. Unset already means
+# "/", so the explicit value only ever added a way to get it wrong.
+dev-mcp:
+	@echo "Connect a client with:"
+	@echo "    claude mcp add --transport http servermanager http://localhost:3000/api/v1/mcp"
+	@echo "Then approve in the browser. Run 'make dev-web' in another terminal."
+	cd apps/api && \
+	MCSM_DEV_MODE="1" \
+	DATABASE_PATH="./mcsm.db" \
+	JWT_SECRET="dev-secret" \
+	MCP_PUBLIC_ORIGIN="http://localhost:3000" \
 	go run ./cmd/server
 
 dev-agent:

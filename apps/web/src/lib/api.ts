@@ -1,4 +1,7 @@
 import type {
+  AccessKey,
+  AccessKeyCreated,
+  AccessKeyRequest,
   AuditEntry,
   Backup,
   BackupTarget,
@@ -16,6 +19,14 @@ import type {
   MfaStatus,
   MfaSetup,
   MfaEnableResponse,
+  MCPActionRequest,
+  MCPApprovalPolicy,
+  MCPConnectionInfo,
+  MCPGrantPolicyOverrides,
+  MCPConsentDecision,
+  MCPConsentResult,
+  MCPConsentView,
+  MCPGrant,
   Session,
   LogEvent,
   MetricsHistory,
@@ -306,6 +317,8 @@ const get = <T>(path: string, signal?: AbortSignal) =>
 const post = <T>(path: string, body?: unknown) =>
   request<T>("POST", path, body);
 const put = <T>(path: string, body?: unknown) => request<T>("PUT", path, body);
+const patch = <T>(path: string, body?: unknown) =>
+  request<T>("PATCH", path, body);
 const del = <T>(path: string) => request<T>("DELETE", path);
 
 export const api = {
@@ -351,6 +364,18 @@ export const api = {
       revoke: (id: string) => del(`/auth/sessions/${id}`),
       revokeOthers: () => post("/auth/sessions/revoke-others"),
     },
+    // Agent access keys. Create and rotate return the raw token exactly once;
+    // nothing else ever does, so the caller must hand it straight to the user
+    // and then drop it. They also require the current password (and a TOTP code
+    // when the account has MFA on) in the request body.
+    apiKeys: {
+      list: () => get<AccessKey[]>("/auth/api-keys"),
+      create: (body: AccessKeyRequest) =>
+        post<AccessKeyCreated>("/auth/api-keys", body),
+      rotate: (id: string, auth: { password: string; totp_code?: string }) =>
+        post<AccessKeyCreated>(`/auth/api-keys/${id}/rotate`, auth),
+      revoke: (id: string) => del(`/auth/api-keys/${id}`),
+    },
     refresh: async () => {
       const accessToken = await refreshAccessToken();
       if (!accessToken) throw new Error("Unauthorized");
@@ -363,6 +388,66 @@ export const api = {
     // query string.
     ticket: () => post<{ ticket: string; expires_in: number }>("/auth/ticket"),
     me: () => get<User>("/auth/me"),
+  },
+
+  // Remote agent connections — the owner's side of MCP over OAuth.
+  //
+  // Every route here is human-only: the API refuses a machine credential on all
+  // of them, so a delegated agent can neither inspect these grants nor approve
+  // the actions it asked for. Nothing here ever carries token material.
+  mcp: {
+    // The consent screen. `get` reads a parked authorization request; `decide`
+    // records the human's answer and returns where to send the browser. The
+    // redirect target is built by the API from the *stored* redirect URI, so a
+    // tampered page cannot steer it.
+    consent: {
+      get: (requestID: string, signal?: AbortSignal) =>
+        get<MCPConsentView>(
+          `/oauth/consent?request=${encodeURIComponent(requestID)}`,
+          signal,
+        ),
+      decide: (body: MCPConsentDecision) =>
+        post<MCPConsentResult>("/oauth/consent", body),
+    },
+    grants: {
+      list: () => get<MCPGrant[]>("/mcp/grants"),
+      // No step-up: revocation only ever removes authority, and a password
+      // prompt between a worried operator and the stop button makes an
+      // incident worse. Idempotent.
+      revoke: (id: string) => del(`/mcp/grants/${id}`),
+      // Per-connection policy overrides. Credentials are only consulted when
+      // the change relaxes something; tightening goes through unchallenged.
+      setApproval: (
+        id: string,
+        body: Partial<MCPGrantPolicyOverrides> & {
+          password?: string;
+          totp_code?: string;
+        },
+      ) =>
+        patch<MCPApprovalPolicy>(`/mcp/grants/${id}/approval-settings`, body),
+    },
+    // Account-level defaults behind every connection that has no override of
+    // its own. Per-user rather than global, matching approval itself: only the
+    // grant owner can approve their own requests.
+    approvalSettings: {
+      get: () => get<MCPApprovalPolicy>("/mcp/approval-settings"),
+      set: (
+        body: MCPApprovalPolicy & { password?: string; totp_code?: string },
+      ) => put<MCPApprovalPolicy>("/mcp/approval-settings", body),
+    },
+    actionRequests: {
+      list: () => get<MCPActionRequest[]>("/mcp/action-requests"),
+      // Approving is the only path from an agent's request to a running
+      // server. Whether it carries a password step-up is the owner's policy
+      // decision, reported per request as `requires_password` — the API
+      // enforces it either way. Denying never asks: friction on "no" points
+      // the wrong way.
+      approve: (id: string, auth?: { password?: string; totp_code?: string }) =>
+        post<MCPActionRequest>(`/mcp/action-requests/${id}/approve`, auth ?? {}),
+      deny: (id: string) =>
+        post<MCPActionRequest>(`/mcp/action-requests/${id}/deny`),
+    },
+    connection: () => get<MCPConnectionInfo>("/mcp/connection"),
   },
 
   // Server folders — flat grouping over the fleet. Everyone can list the

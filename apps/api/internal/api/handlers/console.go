@@ -38,8 +38,16 @@ func (h *ConsoleHandlers) Metrics(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConsoleHandlers) permissionCheck(r *http.Request, serverID string, permission store.ServerPermission) ws.PermissionCheck {
 	claims := auth.ClaimsFrom(r.Context())
+	// The route gate already checked an access key's allowlist and scopes, which
+	// never change for a key. What can change while the socket is open is
+	// whether the key still authenticates at all — revoked, rotated, expired, or
+	// its owner gone — so that is re-checked alongside the owner's permission.
+	machine := auth.MachineFrom(r.Context())
 	return func(ctx context.Context) bool {
 		if claims == nil {
+			return false
+		}
+		if machine != nil && !h.store.AccessKeyStillValid(ctx, machine.KeyID, machine.TokenHash) {
 			return false
 		}
 		user, err := h.store.GetUserByID(ctx, claims.UserID)

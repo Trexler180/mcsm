@@ -12,6 +12,7 @@ import { Route as auditRoute } from './routes/audit'
 import { Route as settingsRoute } from './routes/settings'
 import { Route as accountRoute } from './routes/account'
 import { Route as notificationsRoute } from './routes/notifications'
+import { Route as mcpConsentRoute } from './routes/mcp-consent'
 
 export const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -25,4 +26,5 @@ export const routeTree = rootRoute.addChildren([
   settingsRoute,
   accountRoute,
   notificationsRoute,
+  mcpConsentRoute,
 ])

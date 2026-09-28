@@ -27,6 +27,7 @@ import (
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autostart"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/mcpjanitor"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/poller"
 	"github.com/mcsm/api/internal/scheduler"
@@ -284,6 +285,10 @@ func main() {
 
 	go poller.Run(bgCtx, s, notifier.Engine)
 	go autostart.Run(bgCtx, s)
+	// Retention for the MCP tables. The OAuth registration and authorization
+	// endpoints are unauthenticated by necessity, so the rows they write need
+	// something that eventually removes them; nothing else does.
+	go mcpjanitor.Run(bgCtx, s)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)

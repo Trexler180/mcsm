@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -12,10 +14,42 @@ import (
 	"github.com/mcsm/api/internal/api/ws"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/mcpserver"
 	"github.com/mcsm/api/internal/migrate"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/publicurl"
 	"github.com/mcsm/api/internal/store"
 )
+
+// machineKeyLookup adapts the store's access-key authentication to the auth
+// package's callback shape. The indirection is deliberate: store already
+// imports auth (for password hashing), so auth cannot import store, and this is
+// the one place that knows about both.
+//
+// Usage metadata is recorded here rather than in a later middleware because the
+// row we just read carries the previous timestamp, which is what makes the
+// staleness check free. A failed usage write is logged and ignored — it must
+// never turn a valid credential into a 401.
+func machineKeyLookup(s *store.Store) auth.KeyLookup {
+	return func(ctx context.Context, presented, ip string) (*auth.MachineIdentity, error) {
+		res, err := s.AuthenticateAccessKey(ctx, presented)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.TouchAccessKey(ctx, res.Key, ip); err != nil {
+			slog.Warn("access key usage update failed", "key_id", res.Key.ID, "error", err)
+		}
+		return &auth.MachineIdentity{
+			KeyID:     res.Key.ID,
+			UserID:    res.User.ID,
+			Email:     res.User.Email,
+			Role:      res.User.Role,
+			Scopes:    res.Key.Scopes,
+			ServerIDs: res.Key.ServerIDs,
+			TokenHash: store.HashAccessKey(presented),
+		}, nil
+	}
+}
 
 func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine, notifier *notify.Service) http.Handler {
 	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
@@ -54,7 +88,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	r.Use(apimw.Logger)
 
 	tickets := auth.NewTicketStore()
-	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets)
+	// One password-guess budget for login and every step-up, so an attacker
+	// holding a session cannot multiply their guesses across endpoints.
+	passwordThrottles := handlers.NewPasswordThrottles()
+	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets, passwordThrottles)
+	apiKeyH := handlers.NewAPIKeyHandlers(s, passwordThrottles)
 	nodeH := handlers.NewNodeHandlers(s)
 	serverH := handlers.NewServerHandlers(s, serverRoot)
 	folderH := handlers.NewFolderHandlers(s)
@@ -62,7 +100,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine)
-	migrateH := handlers.NewMigrationHandlers(s, migrate.New(s))
+	migrationEngine := migrate.New(s)
+	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
 	backupH := handlers.NewBackupHandlers(s, notifier.Engine)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
@@ -76,9 +115,60 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	sessionH := handlers.NewSessionHandlers(s)
 	notifyH := handlers.NewNotificationHandlers(s, notifier)
 
+	// Remote agent access (MCP). The canonical public origin is resolved once
+	// here and shared, so discovery documents, the consent redirect, and the
+	// audience a token is bound to are all built from the same value.
+	mcpURLs := publicurl.FromEnv()
+	mcpOAuthH := handlers.NewMCPOAuthHandlers(s, mcpURLs)
+	// The approval prompt is delivered on the same live stream as every other
+	// alert, so a pending request is visible from any screen rather than only on
+	// the settings card that lists them.
+	mcpOpts := []mcpserver.Option{mcpserver.WithMigrationStarter(migrationEngine)}
+	if notifier != nil {
+		mcpOpts = append(mcpOpts, mcpserver.WithNotifier(notifier.Engine))
+	}
+	mcpGrantH := handlers.NewMCPGrantHandlers(s, mcpURLs, passwordThrottles, mcpOpts...)
+
 	// Per-caller rate limit on authenticated traffic (generous for interactive
 	// and polling use; trips only on pathological hammering).
 	rateLimiter := apimw.NewRateLimiter(1200, 200)
+	// The OAuth endpoints sit outside the authenticated group, so they get their
+	// own budget keyed by source address. Tighter than the authenticated one:
+	// registration and token exchange happen a handful of times per client, and
+	// anything hammering them is not a legitimate flow.
+	oauthLimiter := apimw.NewRateLimiter(60, 20)
+	// Registration is the most exposed endpoint here (it must work before anyone
+	// has authenticated), so it gets a budget of its own rather than sharing.
+	registerLimiter := apimw.NewRateLimiter(10, 5)
+
+	// OAuth discovery is origin-rooted by specification, so these live at the
+	// root rather than under /api/v1. A reverse-proxied deployment must forward
+	// them to the API — see docs/deployment.md.
+	r.Group(func(r chi.Router) {
+		r.Use(oauthLimiter.KeyedMiddleware(apimw.ClientIPKey))
+		for _, path := range []string{
+			"/.well-known/oauth-protected-resource",
+			"/.well-known/oauth-protected-resource" + publicurl.MCPResourcePath,
+		} {
+			r.Get(path, mcpOAuthH.ProtectedResourceMetadata)
+			r.Options(path, mcpOAuthH.MetadataPreflight)
+		}
+		// The bare path plus the path-inserted and OIDC aliases, because clients
+		// disagree about which one to probe and a missed alias reads to the user
+		// as "this server does not support OAuth".
+		for _, path := range []string{
+			"/.well-known/oauth-authorization-server",
+			"/.well-known/oauth-authorization-server/api/v1/oauth",
+			"/.well-known/openid-configuration",
+			"/.well-known/openid-configuration/api/v1/oauth",
+		} {
+			r.Get(path, mcpOAuthH.AuthorizationServerMetadata)
+			r.Options(path, mcpOAuthH.MetadataPreflight)
+		}
+	})
+
+	// The MCP resource itself: bearer-authenticated by grant, never by session.
+	mountMCP(r, s, mcpURLs, newMCPOperatorBackend(modH, backupH, playersH, serverH, fileH, taskH, mcH), migrationEngine, mcpOpts...)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
@@ -86,14 +176,31 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 		// Public auth routes
 		r.Post("/auth/login", authH.Login)
 		r.Post("/auth/refresh", authH.Refresh)
+
+		// OAuth authorization server for remote agent connections. Public by
+		// necessity — a client must reach these before it holds anything — so
+		// each carries its own rate-limit budget and generic errors.
+		r.Group(func(r chi.Router) {
+			r.Use(oauthLimiter.KeyedMiddleware(apimw.ClientIPKey))
+			r.Get("/oauth/authorize", mcpOAuthH.Authorize)
+			r.Post("/oauth/token", mcpOAuthH.Token)
+			r.Post("/oauth/revoke", mcpOAuthH.Revoke)
+			r.With(registerLimiter.KeyedMiddleware(apimw.ClientIPKey)).
+				Post("/oauth/register", mcpOAuthH.Register)
+		})
 		r.Get("/public/servers/{id}/resource-pack/{publicID}", resourcePackH.Download)
 		// Machine-readable public status (page HTML lives at /status/{slug}).
 		r.Get("/public/status/{slug}", statusH.JSON)
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(jwtSecret, tickets))
+			r.Use(auth.Middleware(jwtSecret, tickets, machineKeyLookup(s)))
 			r.Use(rateLimiter.Middleware)
+			// Confine machine principals to the server API family before any
+			// route runs, so anything mounted elsewhere is closed to access
+			// keys by default. Ordered after the rate limiter so a key probing
+			// routes it may not use still spends its own budget.
+			r.Use(machineBoundary)
 
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/auth/me", authH.Me)
@@ -110,6 +217,51 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.Get("/auth/sessions", sessionH.List)
 			r.Post("/auth/sessions/revoke-others", sessionH.RevokeOthers)
 			r.Delete("/auth/sessions/{id}", sessionH.Revoke)
+
+			// Agent access keys — scoped, expiring machine credentials.
+			// Interactive sign-in only: an access key must never be able to
+			// inspect, rotate, or mint another one. Creating and rotating
+			// additionally require the current password and, when the account
+			// has MFA on, a current TOTP code.
+			r.Route("/auth/api-keys", func(r chi.Router) {
+				r.Use(requireHuman)
+				r.Get("/", apiKeyH.List)
+				r.Post("/", apiKeyH.Create)
+				r.Post("/{id}/rotate", apiKeyH.Rotate)
+				r.Delete("/{id}", apiKeyH.Revoke)
+			})
+
+			// Remote agent connections (MCP over OAuth). Every route here is
+			// human-only: a delegation is a decision a person makes, and no
+			// machine credential may approve one, inspect one, or approve the
+			// actions one requests. Consent additionally decides what a *new*
+			// credential may do, which is precisely what an existing credential
+			// must never be able to widen.
+			r.Route("/oauth/consent", func(r chi.Router) {
+				r.Use(requireHuman)
+				r.Get("/", mcpOAuthH.Consent)
+				r.Post("/", mcpOAuthH.Decide)
+			})
+			r.Route("/mcp/grants", func(r chi.Router) {
+				r.Use(requireHuman)
+				r.Get("/", mcpGrantH.ListGrants)
+				r.Delete("/{id}", mcpGrantH.RevokeGrant)
+				r.Patch("/{id}/approval-settings", mcpGrantH.UpdateGrantApprovalSettings)
+			})
+			r.Route("/mcp/action-requests", func(r chi.Router) {
+				r.Use(requireHuman)
+				r.Get("/", mcpGrantH.ListActionRequests)
+				r.Post("/{id}/approve", mcpGrantH.ApproveAction)
+				r.Post("/{id}/deny", mcpGrantH.DenyAction)
+			})
+			// Approval policy is per-user, not admin-scoped, because approval
+			// already is: only the grant owner can approve their own requests.
+			r.Route("/mcp/approval-settings", func(r chi.Router) {
+				r.Use(requireHuman)
+				r.Get("/", mcpGrantH.GetApprovalSettings)
+				r.Put("/", mcpGrantH.UpdateApprovalSettings)
+			})
+			r.With(requireHuman).Get("/mcp/connection", mcpGrantH.ConnectionInfo)
 
 			// Panel wall-clock + timezone (scheduled tasks fire on this clock).
 			r.Get("/time", handlers.Time)
@@ -304,12 +456,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(backupsRestore).Post("/backups/{backupId}/restore", backupH.RestoreBackup)
 					r.With(backupsDelete).Delete("/backups/{backupId}", backupH.DeleteBackup)
 					r.With(backupsRead).Get("/backup-targets", backupH.ListTargets)
-					r.With(backupsCreate).Post("/backup-targets", backupH.CreateTarget)
+					r.With(backupsCreate, backupsDelete).Post("/backup-targets", backupH.CreateTarget)
 
 					// Scheduled tasks
 					r.With(taskAccess).Get("/tasks", taskH.List)
-					r.With(taskAccess).Post("/tasks", taskH.Create)
-					r.With(taskAccess).Put("/tasks/{taskId}", taskH.Update)
+					r.With(taskAccess, requireHuman).Post("/tasks", taskH.Create)
+					r.With(taskAccess, requireHuman).Put("/tasks/{taskId}", taskH.Update)
 					r.With(taskAccess).Delete("/tasks/{taskId}", taskH.Delete)
 
 					// Per-server audit trail + indexed log warnings

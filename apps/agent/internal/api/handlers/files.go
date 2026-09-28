@@ -113,7 +113,9 @@ func (h *FileHandlers) GetContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
-	data, err := agentfiles.ReadContent(base, path)
+	// tail_bytes is optional and additive: absent means the whole file, which is
+	// what every caller written before this parameter existed asks for.
+	data, err := agentfiles.ReadContentTail(base, path, int64(atoiDefault(r.URL.Query().Get("tail_bytes"), 0)))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

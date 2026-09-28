@@ -39,17 +39,41 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 }
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(rateKey(r)) {
-			h := w.Header()
-			h.Set("Retry-After", "1")
-			h.Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return rl.KeyedMiddleware(rateKey)(next)
+}
+
+// KeyedMiddleware is Middleware with a caller-supplied bucket key.
+//
+// It exists because the OAuth and MCP surfaces are mounted *outside* the
+// authenticated group, where rateKey's notion of a caller does not apply: an
+// unauthenticated token endpoint has only an IP, and the MCP resource is best
+// bucketed per delegation, so one noisy agent cannot spend another's budget or
+// its owner's. Passing the key function in keeps one limiter implementation
+// rather than a second one that drifts.
+func (rl *RateLimiter) KeyedMiddleware(key func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !rl.allow(key(r)) {
+				h := w.Header()
+				h.Set("Retry-After", "1")
+				h.Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// ClientIPKey buckets by source address alone. It is the right key for public
+// endpoints, where there is no authenticated identity to bucket by yet.
+func ClientIPKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return "ip:" + host
 }
 
 func (rl *RateLimiter) allow(key string) bool {
@@ -92,6 +116,12 @@ func (rl *RateLimiter) gcLocked(now time.Time) {
 }
 
 func rateKey(r *http.Request) string {
+	// A machine key gets its own bucket rather than sharing its owner's, so one
+	// noisy agent can't spend the budget of the human who created it — or of a
+	// second, unrelated key issued by the same person.
+	if m := auth.MachineFrom(r.Context()); m != nil && m.KeyID != "" {
+		return "k:" + m.KeyID
+	}
 	if c := auth.ClaimsFrom(r.Context()); c != nil && c.UserID != "" {
 		return "u:" + c.UserID
 	}

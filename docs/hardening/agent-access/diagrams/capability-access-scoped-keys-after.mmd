@@ -1,0 +1,10 @@
+flowchart LR
+    Human[Human operator] -->|password + MFA re-auth| KeyUI[Agent access-key management]
+    KeyUI -->|one-time secret; hashed at rest| KeyStore[(API keys)]
+    External[External automation / AI agent] -->|Bearer mcsm_pat_* over TLS| API[Control-plane API]
+    API --> KeyPolicy[Expiry + revocation + route boundary]
+    KeyPolicy --> Intersection[Server allowlist AND key scope AND live user RBAC]
+    Intersection --> Operations[Existing audited server operations]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Operations --> Audit[(User + key audit attribution)]
+

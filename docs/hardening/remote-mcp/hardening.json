@@ -1,0 +1,146 @@
+{
+  "documentType": "codex-security.hardening-analysis",
+  "schemaVersion": "1.0",
+  "analysisId": "hardening_20260813_remote_mcp",
+  "sourceEvidence": {
+    "kind": "source_collection",
+    "label": "ServerManager credential boundary, scoped access keys, machine authorization, audit, rate identity, and diagnostic data sources",
+    "collectionSha256": "8a71009c033820b467ae6aaa14f9c92bd065b30192a807d04b8f63c059271a70",
+    "artifactCount": 12,
+    "targetRevision": "f27626beb3e383f22e4f7b75137701097a916615",
+    "sourceDrift": "dirty: the uncommitted scoped access-key foundation on feature/secure-remote-mcp is part of the analysis target; the untracked deploy/ directory is user-owned and out of scope"
+  },
+  "assessment": {
+    "outcome": "opportunities_identified",
+    "summary": "An embedded remote MCP server with OAuth browser consent lets an already-installed agent act with delegated, revocable, human-approved authority without a local connector or a pasted long-lived key."
+  },
+  "constraints": {
+    "profile": "balanced",
+    "changeHorizons": ["incremental", "medium_term"],
+    "nonNegotiables": [
+      "No software may be installed on the operator's machine and no global agent configuration may be modified.",
+      "No reusable long-lived credential may pass through a chat window or a client configuration file.",
+      "Node bearer tokens, integration secrets, and raw agent URLs never reach a model-facing surface.",
+      "Grant revocation, owner demotion or deletion, membership change, and server-allowlist change take effect on the next tool call.",
+      "A machine principal never holds global administrative authority, whoever owns it.",
+      "Mutating actions require a live human approval on a ServerManager surface, not the MCP host's own prompt."
+    ],
+    "assumptions": [
+      "Claude Code and Codex act as public OAuth clients on loopback redirects and cannot keep a client secret.",
+      "The MCP client may negotiate an older protocol version than the server's latest.",
+      "All Minecraft-authored text (log lines, mod names, MOTD, player names) is potentially adversarial.",
+      "No measured latency, session-count, or tool-call throughput target was supplied.",
+      "The deployment terminates TLS at a trusted reverse proxy which is already reflected in TRUSTED_PROXIES."
+    ]
+  },
+  "opportunities": [
+    {
+      "opportunityId": "remote-mcp-control-plane",
+      "title": "Let an existing agent reach ServerManager with delegated, revocable, human-approved authority",
+      "summary": "Embed an OAuth 2.1-protected Streamable HTTP MCP endpoint in the existing API, exposing a narrow diagnostic tool facade plus a server-side action approval queue.",
+      "diagnosis": "The panel now has a machine principal but no interactive delegation flow, so the only way to point an agent at it is to paste a 90-day server-mutating bearer secret into agent configuration or a chat.",
+      "evidence": [
+        {"claimType": "observed", "sourceKind": "document", "evidenceId": "E01", "path": "docs/security.md", "claim": "Supported credentials are browser JWTs, single-use tickets, and scoped access keys; there is no interactive delegation flow."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E02", "path": "apps/api/internal/store/apikeys.go", "claim": "Hash-only storage, mandatory bounded expiry, soft revocation, uniform invalid-credential errors, and throttled usage metadata are established patterns."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E03", "path": "apps/api/internal/auth/middleware.go", "claim": "A reserved bearer prefix separates machine credentials from JWTs and machine credentials are header-only."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E04", "path": "apps/api/internal/api/server_access.go", "claim": "Machine bounds are evaluated before the global-admin bypass and machine principals are confined to the server route family."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E05", "path": "apps/api/internal/api/router.go", "claim": "Dangerous server operations already map to granular permissions usable as MCP scopes."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E06", "path": "apps/api/internal/api/handlers/apikeys.go", "claim": "Password plus enabled-TOTP step-up with per-IP and per-account throttling and generic failures already exists."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E07", "path": "apps/api/internal/store/models.go", "claim": "The permission lattice defines group/leaf subsumption suitable for a scope vocabulary."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E08", "path": "apps/api/internal/store/audit.go", "claim": "Audit rows can already name a human owner plus a machine credential."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E09", "path": "apps/api/internal/api/middleware/ratelimit.go", "claim": "The per-caller limiter is mounted inside the authenticated group, so unauthenticated OAuth endpoints would inherit no budget."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E10", "path": "apps/api/internal/store/ops.go", "claim": "Indexed log events carry raw server-authored text, which is the primary prompt-injection carrier for any diagnosis tool."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E11", "path": "apps/api/internal/api/handlers/servers.go", "claim": "Start/stop/restart persist intent, audit, and tolerate long agent calls; an approval queue must reuse those semantics."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E12", "path": "apps/api/internal/agent/client.go", "claim": "Status, stats, and vitals are read with the decrypted node token, which must never reach a model-facing surface."},
+        {"claimType": "inferred", "sourceKind": "source", "evidenceId": "E01-E12", "path": "apps/api/internal/api/router.go", "claim": "The control plane already owns identity, live RBAC, audit, and an authenticated browser session, making it the least-drifting host for both the authorization server and the tool facade."}
+      ],
+      "desiredInvariants": [
+        "effective authority = active OAuth grant ∩ unexpired/audience-bound token ∩ approved server allowlist ∩ approved MCP scopes ∩ the owner's live ServerManager RBAC",
+        "Consent requires a live human dashboard session and fails closed; machine credentials can never authorize other credentials.",
+        "Access and refresh tokens are high-entropy, stored only as hashes, never appear in URLs or logs, and are bound to the exact MCP resource.",
+        "An authorization code is single-use, short-lived, PKCE-bound, redirect-bound, and resource-bound.",
+        "Refresh rotation is replay-safe: reusing a rotated refresh token after a 30-second reuse grace revokes the grant; inside the grace it is a retry and gets a sibling pair.",
+        "The MCP endpoint exposes only named tools; no arbitrary URL, API path, shell, SQL, filesystem path, environment, node token, or console command is reachable.",
+        "No mutating action executes without a fresh human approval, a re-check of live authority, and an at-most-once atomic state transition.",
+        "MCP server instructions are static versioned application text; all returned server content is labelled untrusted evidence and is size-bounded and secret-redacted."
+      ],
+      "proposalPath": "proposals/remote-mcp-control-plane.md",
+      "options": [
+        {
+          "optionId": "pat-authenticated-remote-mcp",
+          "title": "Remote MCP authenticated by a copied access key",
+          "kind": "baseline",
+          "summary": "Serve the same MCP endpoint but authenticate it with the existing mcsm_pat_ bearer, configured by hand in the client.",
+          "diagramPaths": {"before": "diagrams/remote-mcp-before.mmd", "after": "diagrams/remote-mcp-pat-after.mmd"},
+          "evidenceCoverage": [
+            {"evidenceId": "E02-E04", "effect": "addresses", "tacticalFixRequired": false, "rationale": "Reuses the scoped-key authentication and intersection unchanged."},
+            {"evidenceId": "E01", "effect": "unaffected", "tacticalFixRequired": true, "rationale": "The interactive delegation gap remains; the human still handles a long-lived secret."},
+            {"evidenceId": "E10-E12", "effect": "unaffected", "tacticalFixRequired": true, "rationale": "Tool-output bounding, redaction, and untrusted-evidence framing are still required."}
+          ],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "Authority is already bounded, but a reusable 90-day secret must be transported by hand and typically lands in a config file or a chat transcript.", "validationPlan": "Walk the real setup path for Claude Code and Codex and record every place the raw token comes to rest."},
+            {"dimension": "performance", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "One indexed hash lookup per call, identical to the existing key path.", "validationPlan": "Compare tool-call latency against a JWT-authenticated equivalent request."},
+            {"dimension": "memory", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "Stateless request handling adds no retained per-client state.", "validationPlan": "Confirm no session map grows under repeated stateless calls."},
+            {"dimension": "reliability", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "No new failure domain; revocation is the existing soft-revoke.", "validationPlan": "Revoke mid-session and confirm the next tool call fails."},
+            {"dimension": "operability", "direction": "regresses", "confidence": "medium", "basis": "source-derived", "assessment": "Per-client identity is only a key name, and rotation means editing client configuration by hand on every machine.", "validationPlan": "Rehearse rotating a key used by two clients and count the manual steps."},
+            {"dimension": "migration", "direction": "improves", "confidence": "high", "basis": "source-derived", "assessment": "Nothing new to store; ships as soon as the tool facade exists.", "validationPlan": "Run the existing access-key test suite unchanged."}
+          ],
+          "residualRisks": ["A long-lived bearer secret is handled by a human and stored in client configuration.", "No consent record identifying which client was authorized, when, or for how long.", "Revocation granularity is per key, not per client session."],
+          "implementationReadiness": {"affectedComponents": ["apps/api/internal/api", "docs"], "workPackages": ["Tool facade only; reuse existing bearer authentication."], "acceptanceCriteria": ["MCP calls succeed with a scoped key and are bounded by the same intersection."], "migrationNotes": ["Keep disabled by default so it cannot silently become the supported path."], "rollback": "Disable the MCP endpoint; keys keep working on the REST API."}
+        },
+        {
+          "optionId": "embedded-oauth-mcp",
+          "title": "Embedded remote Streamable HTTP MCP with OAuth browser consent",
+          "kind": "structural",
+          "summary": "Add an OAuth 2.1 authorization server and a protected Streamable HTTP MCP resource to the existing API, with browser consent, durable grants, short-lived audience-bound tokens, and a server-side action approval queue.",
+          "diagramPaths": {"before": "diagrams/remote-mcp-before.mmd", "after": "diagrams/remote-mcp-oauth-after.mmd"},
+          "evidenceCoverage": [
+            {"evidenceId": "E01", "effect": "addresses", "tacticalFixRequired": false, "rationale": "Adds the missing interactive delegation flow so no reusable secret is handled by a human."},
+            {"evidenceId": "E02-E08", "effect": "addresses", "tacticalFixRequired": true, "rationale": "Reuses hashing, expiry, revocation, intersection, step-up, and audit patterns for a second, separately stored credential family."},
+            {"evidenceId": "E09", "effect": "addresses", "tacticalFixRequired": true, "rationale": "Requires new dedicated limits because OAuth endpoints sit outside the authenticated rate-limit group."},
+            {"evidenceId": "E10-E12", "effect": "mitigates", "tacticalFixRequired": true, "rationale": "Bounded, redacted, explicitly-untrusted tool output reduces but cannot eliminate prompt-injection influence on the model."}
+          ],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "improves", "confidence": "medium", "basis": "source-derived", "assessment": "Delegation becomes an auditable, expiring, revocable grant made against a live MFA-capable session, and mutations require separate human approval; the cost is security-critical OAuth code inside the API process.", "validationPlan": "Run the protocol/authorization test matrix (PKCE, redirect, resource, code reuse, refresh replay, revocation, consent CSRF, intersection) and a real client smoke test."},
+            {"dimension": "performance", "direction": "regresses", "confidence": "medium", "basis": "source-derived", "assessment": "Each tool call adds a token-hash lookup, a grant reload, and a live RBAC check; diagnostics additionally fan out to the node worker.", "validationPlan": "Measure a diagnostics call end to end and confirm bounded fan-out and timeouts."},
+            {"dimension": "memory", "direction": "neutral", "confidence": "medium", "basis": "source-derived", "assessment": "Stateless Streamable HTTP keeps no per-client session; per-call allocations are bounded by explicit output caps.", "validationPlan": "Confirm no session growth under repeated calls and that output caps hold with adversarial log content."},
+            {"dimension": "reliability", "direction": "improves", "confidence": "medium", "basis": "source-derived", "assessment": "Grants expire and revoke independently and an interrupted action cannot double-execute; the API becomes responsible for one more protocol surface.", "validationPlan": "Race concurrent approvals and concurrent refreshes; assert exactly-once execution and family revocation."},
+            {"dimension": "operability", "direction": "improves", "confidence": "high", "basis": "source-derived", "assessment": "Owners see which client is connected, what it may reach, when it last acted, and can revoke in one click; every action carries owner plus client attribution.", "validationPlan": "Run a full connect → diagnose → request → approve → execute → revoke drill and read the audit trail."},
+            {"dimension": "migration", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "Additive schema and additive routes; JWT, ticket, access-key, and worker protocols are untouched.", "validationPlan": "Run fresh and upgrade migration tests plus the full existing API suite."}
+          ],
+          "residualRisks": ["An OAuth authorization server is security-critical code in the API's trust boundary.", "A hostile log line can still influence the model's narration even when it cannot widen authority.", "An approved start/stop/restart is a real action on a real server; approval fatigue is a human risk the design can only bound, not remove.", "Client-side token storage is outside ServerManager's control."],
+          "implementationReadiness": {"affectedComponents": ["apps/api/migrations", "apps/api/internal/store", "apps/api/internal/mcpserver", "apps/api/internal/api", "apps/api/internal/api/handlers", "apps/web/src/components/settings", "docs", "scripts"], "workPackages": ["Schema and grant model", "OAuth authorization server", "Consent surface", "Protected MCP resource", "Tool facade", "Action approval queue", "UI and docs", "Local demo and smoke test"], "acceptanceCriteria": ["No token appears in a URL, a log, or a documented snippet.", "Every tool call re-evaluates the full intersection.", "An action executes at most once and only after human approval and a live re-check.", "Tool output is bounded, redacted, and labelled untrusted."], "migrationNotes": ["OAuth grants and tokens are stored separately from api_keys.", "PAT authentication for MCP stays disabled by default."], "rollback": "Set the MCP feature flag off and revoke all grants; the additive tables stay until a maintenance window."}
+        },
+        {
+          "optionId": "local-sidecar-pairing",
+          "title": "Local sidecar or device pairing",
+          "kind": "isolation",
+          "summary": "Ship a small local MCP process that holds a device-bound key established through a one-time pairing code.",
+          "diagramPaths": {"before": "diagrams/remote-mcp-before.mmd", "after": "diagrams/remote-mcp-sidecar-after.mmd"},
+          "evidenceCoverage": [
+            {"evidenceId": "E01", "effect": "addresses", "tacticalFixRequired": true, "rationale": "Removes the pasted secret, but only by installing software the request forbids."},
+            {"evidenceId": "E02-E08", "effect": "mitigates", "tacticalFixRequired": true, "rationale": "Still needs a delegated control-plane credential and the same intersection and audit work."}
+          ],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "improves", "confidence": "medium", "basis": "hypothetical", "assessment": "A device-bound key never traverses a browser redirect and can be hardware-protected, but the sidecar becomes a second place holding delegated authority.", "validationPlan": "Threat-model pairing-code interception, sidecar process isolation, and key storage on each supported OS."},
+            {"dimension": "performance", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "Adds a local process hop for every tool call.", "validationPlan": "Benchmark stdio round trips against direct HTTP."},
+            {"dimension": "memory", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "A resident process per operator machine.", "validationPlan": "Measure idle RSS of the sidecar."},
+            {"dimension": "reliability", "direction": "regresses", "confidence": "medium", "basis": "hypothetical", "assessment": "Version skew between panel and sidecar becomes a supported failure mode.", "validationPlan": "Define and test a compatibility window across sidecar versions."},
+            {"dimension": "operability", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "Install, update, and support burden on every operator machine, across three operating systems.", "validationPlan": "Prototype packaging and auto-update for Windows, macOS, and Linux."},
+            {"dimension": "migration", "direction": "regresses", "confidence": "high", "basis": "source-derived", "assessment": "Introduces a new distributable artifact and release channel alongside the panel.", "validationPlan": "Define signing, distribution, and rollback for the new artifact."}
+          ],
+          "residualRisks": ["Violates the explicit no-local-install constraint.", "A second delegated-authority holder on an endpoint the panel cannot attest.", "New release and support surface."],
+          "implementationReadiness": {"affectedComponents": ["new sidecar artifact", "pairing protocol", "release tooling"], "workPackages": ["Defer unless remote OAuth proves uninteroperable with a required client."], "acceptanceCriteria": ["A future phase records a verified client that cannot complete a remote authorization-code flow."], "migrationNotes": ["The embedded OAuth resource remains the bootstrap and fallback path."], "rollback": "Stop distributing the sidecar; grants continue to work over remote OAuth."}
+        }
+      ],
+      "recommendedOptionId": "embedded-oauth-mcp",
+      "recommendation": "Implement the embedded OAuth-protected MCP resource now; keep PAT authentication as a disabled-by-default fallback and revisit device pairing only if a required client cannot complete a remote authorization-code flow."
+    }
+  ],
+  "openQuestions": [
+    "Whether the default MCP grant lifetime should be shorter than 30 days in production.",
+    "Whether dynamic client registration should be disabled once Claude Code and Codex both support client-id metadata documents.",
+    "Whether a future phase should let an owner pre-approve a narrow action (for example restart) within a short window instead of approving each request.",
+    "Whether action requests should be able to carry an agent-supplied diagnosis summary without that text becoming a phishing surface on the approval screen."
+  ]
+}

@@ -1,0 +1,9 @@
+flowchart LR
+    Human[Human operator] -->|password + MFA| Web[Web app]
+    Web -->|15 minute JWT| API[Control-plane API]
+    API -->|live user RBAC| Policy[Server permission checks]
+    Policy --> Operations[Server operations]
+    Operations -->|shared node bearer token| Worker[Host worker agent]
+    External[External automation / AI agent] -. no supported credential .-> API
+    External -. tempting but overprivileged shortcut .->|shared node token| Worker
+

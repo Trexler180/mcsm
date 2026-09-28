@@ -68,15 +68,28 @@ func currentUserID(r *http.Request) string {
 	if c := auth.ClaimsFrom(r.Context()); c != nil {
 		return c.UserID
 	}
+	if d := auth.DelegatedActorFrom(r.Context()); d != nil {
+		return d.UserID
+	}
 	return ""
 }
 
-// audit records an action attributed to the current user (from JWT claims) and
-// the caller IP. Fire-and-forget; never blocks the response on logging.
+// audit records an action attributed to the current user and, when the request
+// arrived on an agent access key, to that key as well — so a machine action
+// names both the human who owns the credential and which credential it was.
+// Fire-and-forget; never blocks the response on logging.
 func audit(s *store.Store, r *http.Request, serverID, action string, detail any) {
-	userID := ""
-	if c := auth.ClaimsFrom(r.Context()); c != nil {
-		userID = c.UserID
+	if d := auth.DelegatedActorFrom(r.Context()); d != nil {
+		_ = s.LogActionWithActor(r.Context(), d.UserID, "", d.GrantID, serverID, action, d.IP, map[string]any{
+			"client_name": d.ClientName,
+			"operation":   detail,
+		})
+		return
 	}
-	s.LogAction(r.Context(), userID, serverID, action, clientIP(r), detail)
+	userID := currentUserID(r)
+	keyID := ""
+	if m := auth.MachineFrom(r.Context()); m != nil {
+		keyID = m.KeyID
+	}
+	_ = s.LogActionWithKey(r.Context(), userID, keyID, serverID, action, clientIP(r), detail)
 }

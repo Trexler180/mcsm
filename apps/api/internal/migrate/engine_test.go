@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"sync"
@@ -32,6 +33,10 @@ type fakeAgent struct {
 	status      string
 	startCalls  int
 	backupErr   error
+	// startErr, when set, is returned by StartServer *after* the process has
+	// been brought up, simulating a start that races another client and is
+	// refused with "already running".
+	startErr error
 }
 
 func newFakeAgent(files ...string) *fakeAgent {
@@ -55,7 +60,7 @@ func (a *fakeAgent) StartServer(ctx context.Context, serverID string, cfg map[st
 			break
 		}
 	}
-	return nil
+	return a.startErr
 }
 
 func (a *fakeAgent) StopServer(ctx context.Context, serverID string, graceful bool, timeoutSec int) error {
@@ -314,6 +319,29 @@ func TestMigrateHealthy(t *testing.T) {
 	}
 	if !fa.hasFile("b-1.0.jar.disabled") || fa.hasFile("b-1.0.jar") {
 		t.Fatalf("jar B not disabled: %v", fa.files)
+	}
+}
+
+// A start refused with "already running" is the state the migration wanted, not
+// a failed boot. Something else (an operator, an MCP client) can win the race
+// between the migration's stop and its verification start; treating the 409 as
+// a boot failure used to roll back an otherwise completed migration.
+func TestMigrateSurvivesAlreadyRunningStart(t *testing.T) {
+	fa := newFakeAgent("a-1.0.jar")
+	fa.startErr = fmt.Errorf("agent: %w", agent.ErrServerAlreadyRunning)
+	source := &fakeSource{byTarget: map[string]map[string][]modrinth.Version{
+		"projA": {"1.21.5": {mkVersion("vA2", "projA", "2.0", "a-2.0.jar")}},
+	}}
+	f := newFixture(t, fa, source)
+	f.addMod(t, "projA", "vA1", "1.0", "a-1.0.jar")
+
+	run := f.migrateAndWait(t, "1.21.5")
+	if run.Status != "success" {
+		t.Fatalf("status = %q (%s), want success — an already-running start must not roll back", run.Status, run.Detail)
+	}
+	srv, _ := f.store.GetServer(context.Background(), f.server.ID)
+	if srv.MCVersion != "1.21.5" {
+		t.Fatalf("server version = %q, want 1.21.5", srv.MCVersion)
 	}
 }
 

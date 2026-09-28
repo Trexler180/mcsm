@@ -17,10 +17,19 @@ export interface Toast {
   variant: ToastVariant
   count: number
   action?: ToastAction
+  /** The opposite answer, for prompts that have one. A whitelist prompt only
+   *  ever offers "let them in" — dismissing is a decision in itself — but an
+   *  approval prompt has two real answers, and burying "deny" behind Dismiss
+   *  would make refusing look like ignoring. */
+  secondary?: ToastAction
   /** Suppresses the auto-dismiss timer. A toast that asks something of the user
    *  must not disappear four seconds later — they may be mid-sentence, or not
    *  at the keyboard at all. */
   sticky?: boolean
+  /** Caller-supplied identity, so something that happens elsewhere can take a
+   *  prompt down: a request approved on another device, or one that lapsed,
+   *  should not leave a live-looking button behind. */
+  key?: string
   /** Set while the action is running, so the button can show progress and not
    *  be pressed twice. */
   busy?: boolean
@@ -30,7 +39,8 @@ interface NotificationState {
   toasts: Toast[]
   add: (t: Omit<Toast, 'id' | 'count'>) => void
   remove: (id: string) => void
-  runAction: (id: string) => Promise<void>
+  removeByKey: (key: string) => void
+  runAction: (id: string, which?: 'action' | 'secondary') => Promise<void>
   success: (title: string, description?: string) => void
   error: (title: string, description?: string) => void
   warning: (title: string, description?: string) => void
@@ -89,18 +99,29 @@ export const useNotifications = create<NotificationState>()((set, get) => ({
     timers.delete(id)
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
   },
+  // Takes down a prompt that has been answered somewhere else. A no-op when
+  // nothing matches, so a resolution arriving for a prompt this tab never
+  // showed is harmless.
+  removeByKey: (key) => {
+    for (const t of get().toasts) {
+      if (t.key === key) get().remove(t.id)
+    }
+  },
   // Runs a toast's action, marking it busy for the duration and dismissing it
   // afterwards. The handler reports its own outcome (typically by raising a
   // success or error toast), so a failure leaves the user informed rather than
   // staring at a prompt that did nothing.
-  runAction: async (id) => {
+  runAction: async (id, which = 'action') => {
     const toast = get().toasts.find((t) => t.id === id)
-    if (!toast?.action || toast.busy) return
+    const chosen = which === 'secondary' ? toast?.secondary : toast?.action
+    // One busy flag for the whole toast, not per button: while an answer is in
+    // flight the other answer must not also be pressable.
+    if (!toast || !chosen || toast.busy) return
     set((s) => ({
       toasts: s.toasts.map((t) => (t.id === id ? { ...t, busy: true } : t)),
     }))
     try {
-      await toast.action.onClick()
+      await chosen.onClick()
     } finally {
       get().remove(id)
     }

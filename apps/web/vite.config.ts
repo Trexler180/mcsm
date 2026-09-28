@@ -132,12 +132,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // changeOrigin stays off on every entry below. The API derives its own public
+  // origin from the Host header when nothing is configured (see
+  // apps/api/internal/publicurl), and that origin is what the remote-agent
+  // panel shows, what OAuth discovery advertises, and what MCP tokens are bound
+  // to. Rewriting Host to the proxy target would make all of those name the API
+  // port while the browser and any MCP client are talking to this one.
   server: {
     port: webPort,
     proxy: {
       '/api': {
         target: `http://${apiHost}:${apiPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
         configure: (proxy) => {
           proxy.on('error', (_err, _req, res) => {
@@ -149,7 +155,25 @@ export default defineConfig({
       // "open page" link from the options panel works in local dev too.
       '/status': {
         target: `http://${apiHost}:${apiPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
+      },
+      // OAuth discovery is origin-rooted by specification: a client that finds
+      // the MCP endpoint here will look for these documents at the root of
+      // *this* origin, not under /api. Without this entry Vite would answer
+      // them with index.html and an agent could never discover where to
+      // authorize. A reverse-proxied deployment needs the same forwarding —
+      // see docs/deployment.md.
+      '/.well-known/oauth-protected-resource': {
+        target: `http://${apiHost}:${apiPort}`,
+        changeOrigin: false,
+      },
+      '/.well-known/oauth-authorization-server': {
+        target: `http://${apiHost}:${apiPort}`,
+        changeOrigin: false,
+      },
+      '/.well-known/openid-configuration': {
+        target: `http://${apiHost}:${apiPort}`,
+        changeOrigin: false,
       },
     },
   },

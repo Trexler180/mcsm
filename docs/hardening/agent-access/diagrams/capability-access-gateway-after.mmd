@@ -1,0 +1,9 @@
+flowchart LR
+    External[External automation / AI agent] -->|mTLS or OAuth| Gateway[Dedicated automation / MCP gateway]
+    Gateway --> GatewayPolicy[Independent tool policy + approvals]
+    GatewayPolicy -->|short-lived delegated capability| API[Control-plane API]
+    API --> LiveRBAC[Live user RBAC]
+    LiveRBAC --> Operations[Audited server operations]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Gateway --> GatewayAudit[(Tool-call audit)]
+

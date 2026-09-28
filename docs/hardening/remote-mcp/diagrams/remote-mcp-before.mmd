@@ -1,0 +1,12 @@
+flowchart LR
+    Human[Human operator] -->|password + MFA| Web[Web app]
+    Web -->|15 minute JWT| API[Control-plane API]
+    Human -->|re-auth; one-time display| KeyUI[Agent access-key management]
+    KeyUI -->|90-day mcsm_pat_ secret| Clipboard[/Copied by hand/]
+    Clipboard -. pasted into config, shell history, or chat .-> Agent[Claude Code / Codex]
+    Agent -->|Bearer mcsm_pat_ over TLS| API
+    API --> Intersection[Server allowlist AND key scope AND live user RBAC]
+    Intersection --> Operations[Audited server operations]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Agent -. no consent record, no per-client identity .-> API
+    Agent -. host-side tool prompt is the only check before a mutation .-> Operations

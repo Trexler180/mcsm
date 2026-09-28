@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,13 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrServerAlreadyRunning reports that a start was refused because the process is
+// already up (the agent answers 409 for that case alone). It is not a failure
+// for callers that only need the server running — notably the migration
+// engine's boot verification, which would otherwise roll back a completed
+// migration over a benign conflict.
+var ErrServerAlreadyRunning = errors.New("server already running")
 
 type Client struct {
 	BaseURL string
@@ -138,6 +146,9 @@ func (c *Client) StartServer(ctx context.Context, serverID string, cfg map[strin
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("agent: %w", ErrServerAlreadyRunning)
+	}
 	return checkError(resp)
 }
 

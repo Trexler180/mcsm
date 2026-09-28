@@ -90,6 +90,18 @@ func (s *Store) GetUserByEmailInsensitive(ctx context.Context, email string) (*U
 	}
 }
 
+// GetUserPasswordHash reads a user's password hash by id, for step-up
+// reauthentication on an already-authenticated session (issuing or rotating an
+// access key). The hash never leaves the auth layer.
+func (s *Store) GetUserPasswordHash(ctx context.Context, id string) (string, error) {
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, id).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("user not found")
+	}
+	return hash, err
+}
+
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, email, display_name, role, created_at, last_login FROM users ORDER BY created_at DESC`)

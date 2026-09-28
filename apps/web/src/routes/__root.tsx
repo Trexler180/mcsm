@@ -2,9 +2,11 @@ import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { Sidebar } from '@/components/layout/sidebar'
 import { CommandPalette } from '@/components/layout/command-palette'
+import { McpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
 import { Toaster } from '@/components/ui/toast'
 import { useAuthStore } from '@/store/auth'
 import { notificationStream } from '@/lib/notify-stream'
+import { rememberReturnTo } from '@/lib/return-to'
 
 function RootLayout() {
   const { isAuthenticated, isLoading, init } = useAuthStore()
@@ -29,6 +31,10 @@ function RootLayout() {
     // base-prefixed login path so it matches under a subpath deployment.
     const loginPath = import.meta.env.BASE_URL + 'login'
     if (!isLoading && !isAuthenticated && window.location.pathname !== loginPath) {
+      // Keep the destination so login can return there. The OAuth consent
+      // screen depends on it: its request id lives in the query string and the
+      // request is single-use, so dropping it strands the connection attempt.
+      rememberReturnTo(window.location.pathname, window.location.search)
       navigate({ to: '/login' })
     }
   }, [isAuthenticated, isLoading])
@@ -63,6 +69,10 @@ function RootLayout() {
         <Outlet />
       </main>
       <CommandPalette />
+      {/* Alongside the Toaster for the same reason: an agent's request has to be
+          answerable from whatever screen the operator is on, and the step-up
+          half of that answer needs somewhere to put a password field. */}
+      <McpApprovalDialog />
       <Toaster />
     </div>
   )

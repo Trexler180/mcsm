@@ -35,13 +35,16 @@ var refreshTokenTTL = 7 * 24 * time.Hour
 // request, so a few seconds is plenty.
 const downloadTicketTTL = 30 * time.Second
 
-func NewAuthHandlers(s *store.Store, jwtSecret string, tickets *auth.TicketStore) *AuthHandlers {
+// NewAuthHandlers builds the login handlers. pw is the password-guess budget
+// shared with every step-up; nil gives this handler a private one.
+func NewAuthHandlers(s *store.Store, jwtSecret string, tickets *auth.TicketStore, pw *PasswordThrottles) *AuthHandlers {
+	pw = pw.orNew()
 	return &AuthHandlers{
 		store:        s,
 		jwtSecret:    jwtSecret,
 		tickets:      tickets,
-		ipThrottle:   auth.NewLoginThrottle(),
-		acctThrottle: auth.NewAccountThrottle(),
+		ipThrottle:   pw.IP,
+		acctThrottle: pw.Account,
 	}
 }
 
@@ -60,7 +63,7 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	// Brute-force defense: an aggressive per-IP lockout stops a single attacker,
 	// and a lenient short-window per-account lockout slows a distributed guess
 	// without letting anyone deny a real user access to their account for long.
-	ipKey := "ip:" + clientIP(r)
+	ipKey := passwordIPKey(r)
 	acctKey := "acct:" + strings.ToLower(strings.TrimSpace(body.Email))
 	if ok, retry := h.ipThrottle.Allowed(ipKey); !ok {
 		tooManyRequests(w, retry)
@@ -247,6 +250,13 @@ func (h *AuthHandlers) Ticket(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFrom(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	// A machine access key is never converted into a query-string credential.
+	// The route boundary already keeps keys off /auth/*; stating it here as well
+	// means a future re-mount of this handler can't silently open that path.
+	if auth.MachineFrom(r.Context()) != nil {
+		writeError(w, http.StatusForbidden, "access keys cannot mint tickets; send the key in the Authorization header")
 		return
 	}
 	ticket, err := h.tickets.Issue(claims, downloadTicketTTL)

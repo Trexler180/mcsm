@@ -113,30 +113,47 @@ func (h *ServerMemberHandlers) Me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if user.Role == "admin" {
-		writeJSON(w, http.StatusOK, myServerPermissionsResponse{
-			GlobalAdmin: true,
-			Permissions: store.AllServerPermissions(),
-		})
-		return
+	// What the human behind this request can do here, before the credential's own
+	// bounds are applied.
+	response := myServerPermissionsResponse{}
+	switch {
+	case user.Role == "admin":
+		response.GlobalAdmin = true
+		response.Permissions = store.AllServerPermissions()
+	case srv.OwnerID == claims.UserID:
+		response.Owner = true
+		response.Permissions = store.AllServerPermissions()
+	default:
+		perms, ok, err := h.store.GetServerPermissions(r.Context(), srv.ID, claims.UserID)
+		if err != nil {
+			writeServerError(w, r, "member self permissions", err)
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		response.Permissions = perms
 	}
-	if srv.OwnerID == claims.UserID {
-		writeJSON(w, http.StatusOK, myServerPermissionsResponse{
-			Owner:       true,
-			Permissions: store.AllServerPermissions(),
-		})
-		return
+
+	// On an access key this endpoint describes the key, not its owner: the
+	// intersection of the key's scopes with the owner's current grants, and never
+	// the owner or global-admin flags. The panel and any agent reading this must
+	// see the authority the access gate will actually honor, or automation would
+	// plan work every route then refuses.
+	if machine := auth.MachineFrom(r.Context()); machine != nil {
+		if !machine.AllowsServer(srv.ID) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		response.Owner = false
+		response.GlobalAdmin = false
+		response.Permissions = intersectWithScopes(response.Permissions, machine.Scopes)
 	}
-	perms, ok, err := h.store.GetServerPermissions(r.Context(), srv.ID, claims.UserID)
-	if err != nil {
-		writeServerError(w, r, "member self permissions", err)
-		return
+	if response.Permissions == nil {
+		response.Permissions = []string{}
 	}
-	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
-	writeJSON(w, http.StatusOK, myServerPermissionsResponse{Permissions: perms})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {

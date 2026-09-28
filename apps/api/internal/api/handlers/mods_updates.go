@@ -426,13 +426,14 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := uploadFileToAgent(ctx, c, serverID, mod.InstallPath, file.Filename, tmpPath); err != nil {
+	targetFilename := updatedModFilename(file.Filename, mod.Enabled)
+	if err := uploadFileToAgent(ctx, c, serverID, mod.InstallPath, targetFilename, tmpPath); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	// Remove old jar if the filename changed (otherwise we just overwrote it).
-	if file.Filename != mod.FileName {
+	if targetFilename != mod.FileName {
 		_ = deleteAgentFile(ctx, c, serverID, mod.InstallPath+"/"+mod.FileName)
 	}
 
@@ -441,7 +442,7 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	mod.VersionID = &vid
 	mod.Name = ver.Name
 	mod.Version = ver.VersionNumber
-	mod.FileName = file.Filename
+	mod.FileName = targetFilename
 	mod.SHA256 = &sha
 	updated, err := h.store.UpdateMod(r.Context(), mod)
 	if err != nil {
@@ -450,6 +451,13 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	audit(h.store, r, serverID, "mod.update", map[string]any{"mod_id": modID, "version": ver.VersionNumber})
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func updatedModFilename(filename string, enabled bool) string {
+	if !enabled && !strings.HasSuffix(filename, disabledSuffix) {
+		return filename + disabledSuffix
+	}
+	return filename
 }
 
 // Pin toggles whether a mod is excluded from update checks/bulk updates.

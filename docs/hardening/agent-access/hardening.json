@@ -1,0 +1,124 @@
+{
+  "documentType": "codex-security.hardening-analysis",
+  "schemaVersion": "1.0",
+  "analysisId": "hardening_20260813_agent_access",
+  "sourceEvidence": {
+    "kind": "source_collection",
+    "label": "ServerManager authentication, authorization, audit, and node-token source",
+    "collectionSha256": "5cb823c5a8c8c02790b4e4801ab18120fe62202d4e6ec9b1ada801b449faa0a1",
+    "artifactCount": 8,
+    "targetRevision": "f27626beb3e383f22e4f7b75137701097a916615",
+    "sourceDrift": "none"
+  },
+  "assessment": {
+    "outcome": "opportunities_identified",
+    "summary": "A capability-scoped control-plane credential can support automation without distributing the node-wide worker token."
+  },
+  "constraints": {
+    "profile": "balanced",
+    "changeHorizons": ["incremental", "medium_term"],
+    "nonNegotiables": [
+      "Keep node bearer tokens internal to the control plane.",
+      "Preserve existing API-to-worker protocol compatibility.",
+      "Apply user permission and key capability changes on the next request."
+    ],
+    "assumptions": [
+      "External agents are operator controlled and can protect an Authorization bearer secret.",
+      "No measured latency, memory, or concurrent key-volume target was supplied.",
+      "The native single-control-plane deployment remains the target."
+    ]
+  },
+  "opportunities": [
+    {
+      "opportunityId": "capability-agent-access",
+      "title": "Make external automation a bounded, attributable principal",
+      "summary": "Authenticate automation at the control plane with server-bound, scope-bound, expiring keys whose authority is intersected with live user RBAC.",
+      "diagnosis": "Without a machine principal, automation must reuse a browser credential or bypass the control plane with the node-wide worker token.",
+      "evidence": [
+        {"claimType": "observed", "sourceKind": "document", "evidenceId": "E01", "path": "docs/security.md", "claim": "Automation API keys are deferred and node tokens are the current API-to-worker credential."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E02", "path": "apps/api/migrations/001_initial.sql", "claim": "The reserved api_keys table lacks server scopes, action scopes, revocation, and usage metadata."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E03", "path": "apps/api/internal/auth/middleware.go", "claim": "Authenticated API traffic accepts JWT bearer tokens and narrow single-use query tickets."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E04", "path": "apps/api/internal/api/server_access.go", "claim": "Server authorization is live but global administrators bypass server permission checks."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E05", "path": "apps/api/internal/api/router.go", "claim": "Server routes already map dangerous actions to granular permissions."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E06", "path": "apps/api/internal/store/audit.go", "claim": "Audit rows attribute actions to users but not machine credentials."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E07", "path": "apps/api/internal/store/nodes.go", "claim": "The API decrypts the full-authority node token for worker calls."},
+        {"claimType": "observed", "sourceKind": "source", "evidenceId": "E08", "path": "apps/agent/internal/api/middleware/auth.go", "claim": "The worker authorizes one shared bearer token without per-user, per-server, or per-action restrictions."},
+        {"claimType": "inferred", "sourceKind": "source", "evidenceId": "E01-E08", "path": "apps/api/internal/api/router.go", "claim": "The control plane is the least-drifting owner for a first machine-authorization capability because it already owns resource identity, permissions, and audit."}
+      ],
+      "desiredInvariants": [
+        "Node tokens never leave the control plane.",
+        "Every machine request satisfies key validity, route boundary, server allowlist, key scope, and current user RBAC.",
+        "Global-admin ownership never bypasses key restrictions.",
+        "Raw key material is shown once, stored only as a hash, and never accepted in a query string.",
+        "Every machine mutation is attributable to both the user and key."
+      ],
+      "proposalPath": "proposals/capability-agent-access.md",
+      "options": [
+        {
+          "optionId": "direct-node-token",
+          "title": "Distribute the shared node token",
+          "kind": "baseline",
+          "summary": "Let automation call the worker directly with its existing full-authority secret.",
+          "diagramPaths": {"before": "diagrams/capability-access-before.mmd", "after": "diagrams/capability-access-direct-node-after.mmd"},
+          "evidenceCoverage": [{"evidenceId": "E08", "effect": "unaffected", "tacticalFixRequired": true, "rationale": "The shared token remains overprivileged and bypasses control-plane policy."}],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "regresses", "confidence": "high", "basis": "source-derived", "assessment": "Possession grants the worker's node-wide surface without user RBAC or per-key attribution.", "validationPlan": "Enumerate worker routes reachable with the node token."},
+            {"dimension": "performance", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "No new hop or lookup is introduced.", "validationPlan": "No benchmark needed unless a client proxy is added."},
+            {"dimension": "memory", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "No new retained state is required.", "validationPlan": "Confirm no client-side proxy is introduced."},
+            {"dimension": "reliability", "direction": "regresses", "confidence": "high", "basis": "source-derived", "assessment": "Compromise recovery rotates the same credential used by the API and worker.", "validationPlan": "Exercise node-token rotation and record control-plane interruption."},
+            {"dimension": "operability", "direction": "regresses", "confidence": "high", "basis": "source-derived", "assessment": "Callers are indistinguishable and revocation is coarse.", "validationPlan": "Review audit/log actor data from direct worker calls."},
+            {"dimension": "migration", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "It can be used immediately but creates future secret-rotation debt.", "validationPlan": "Document every place the token must be installed and rotated."}
+          ],
+          "residualRisks": ["Full node compromise from one leaked automation credential.", "No per-agent revocation or attribution."],
+          "implementationReadiness": {"affectedComponents": ["deployment secret handling"], "workPackages": ["None; explicitly prohibit this path."], "acceptanceCriteria": ["Node tokens are not distributed."], "migrationNotes": ["Rotate any node token already shared."], "rollback": "Stop distribution and rotate the node token."}
+        },
+        {
+          "optionId": "scoped-control-plane-keys",
+          "title": "Add scoped control-plane access keys",
+          "kind": "structural",
+          "summary": "Use expiring, revocable server capabilities intersected with the owner's live authorization.",
+          "diagramPaths": {"before": "diagrams/capability-access-before.mmd", "after": "diagrams/capability-access-scoped-keys-after.mmd"},
+          "evidenceCoverage": [
+            {"evidenceId": "E01-E06", "effect": "addresses", "tacticalFixRequired": true, "rationale": "Adds the missing machine principal, capability bounds, lifecycle, and audit attribution."},
+            {"evidenceId": "E07-E08", "effect": "mitigates", "tacticalFixRequired": true, "rationale": "Keeps the shared worker token internal; worker TLS and exposure controls still apply."}
+          ],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "improves", "confidence": "high", "basis": "source-derived", "assessment": "Machine authority is server-bound, scope-bound, expiring, revocable, and dynamically intersected with user RBAC.", "validationPlan": "Run the authorization matrix including an admin-owned narrow key."},
+            {"dimension": "performance", "direction": "regresses", "confidence": "medium", "basis": "source-derived", "assessment": "Each request adds one indexed key lookup and capability checks but no network hop.", "validationPlan": "Benchmark JWT and key-authenticated status polling."},
+            {"dimension": "memory", "direction": "neutral", "confidence": "medium", "basis": "source-derived", "assessment": "Per-request data is bounded by one key's scope and server arrays.", "validationPlan": "Measure allocations with representative maximum key metadata."},
+            {"dimension": "reliability", "direction": "improves", "confidence": "medium", "basis": "source-derived", "assessment": "A compromised key can be revoked independently; authentication still depends on the existing SQLite control plane.", "validationPlan": "Race requests with rotation and revocation and verify immediate failure."},
+            {"dimension": "operability", "direction": "improves", "confidence": "high", "basis": "source-derived", "assessment": "Named keys, last use, rotation, and audit attribution support incident response.", "validationPlan": "Perform a create-use-rotate-revoke drill through the public TLS endpoint."},
+            {"dimension": "migration", "direction": "neutral", "confidence": "high", "basis": "source-derived", "assessment": "The schema and auth path are additive and existing JWT/worker protocols stay compatible.", "validationPlan": "Run fresh and upgrade migration tests plus all existing API tests."}
+          ],
+          "residualRisks": ["A legitimately broad console or file-write scope remains dangerous inside its allowlist.", "Client-side secret theft is not prevented.", "The API remains the authorization trusted computing base."],
+          "implementationReadiness": {"affectedComponents": ["apps/api/migrations", "apps/api/internal/store", "apps/api/internal/auth", "apps/api/internal/api", "apps/web/src/components/settings", "docs"], "workPackages": ["Schema/model", "Secret lifecycle", "Authentication boundary", "Authorization intersection", "Lifecycle API", "Audit attribution", "UI/docs"], "acceptanceCriteria": ["Raw keys are one-time and hashed at rest.", "Key and live user restrictions both apply.", "Revocation and rotation are immediate.", "Machine actions identify user and key."], "migrationNotes": ["Legacy reserved rows are inert.", "Roll out first with a read-only short-lived key."], "rollback": "Revoke all keys and disable machine authentication; retain additive columns until maintenance."}
+        },
+        {
+          "optionId": "isolated-automation-gateway",
+          "title": "Introduce an automation or MCP gateway",
+          "kind": "isolation",
+          "summary": "Put model-facing tools, approvals, and short-lived delegation in a separate service.",
+          "diagramPaths": {"before": "diagrams/capability-access-before.mmd", "after": "diagrams/capability-access-gateway-after.mmd"},
+          "evidenceCoverage": [{"evidenceId": "E01-E08", "effect": "mitigates", "tacticalFixRequired": true, "rationale": "Adds isolation but still needs a safe delegated API credential and synchronized policy."}],
+          "tradeoffs": [
+            {"dimension": "security", "direction": "improves", "confidence": "medium", "basis": "hypothetical", "assessment": "A separate trust domain can mediate tools and approvals, but becomes a new security-critical component.", "validationPlan": "Threat-model the concrete gateway transport, credential issuer, and approval flow."},
+            {"dimension": "performance", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "Every action adds a network hop, serialization, and a second policy evaluation.", "validationPlan": "Benchmark end-to-end tool calls against explicit latency SLOs."},
+            {"dimension": "memory", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "A new process retains connections, policy, and request state.", "validationPlan": "Measure gateway RSS and per-session growth under expected concurrency."},
+            {"dimension": "reliability", "direction": "regresses", "confidence": "medium", "basis": "hypothetical", "assessment": "The gateway adds a failure domain, retries, and backpressure requirements despite better compromise containment.", "validationPlan": "Run dependency-failure and retry/idempotency tests."},
+            {"dimension": "operability", "direction": "regresses", "confidence": "high", "basis": "hypothetical", "assessment": "Deployment, monitoring, secret rotation, and cross-service audit correlation all expand.", "validationPlan": "Prototype the on-call runbook and correlation flow."},
+            {"dimension": "migration", "direction": "regresses", "confidence": "high", "basis": "source-derived", "assessment": "A new protocol and policy layer must be introduced while the current API remains available.", "validationPlan": "Define compatibility and staged cutover tests for a concrete client."}
+          ],
+          "residualRisks": ["Policy drift between gateway tools and API routes.", "Gateway compromise or confused-deputy behavior.", "Additional availability dependency."],
+          "implementationReadiness": {"affectedComponents": ["new gateway service", "delegation protocol", "deployment", "audit correlation"], "workPackages": ["Defer until untrusted tenants, approval workflows, or MCP transport are concrete requirements."], "acceptanceCriteria": ["A future design has explicit tenant, approval, and delegation requirements."], "migrationNotes": ["Use scoped API keys as the rollback and bootstrap path."], "rollback": "Disable the gateway and use scoped control-plane keys."}
+        }
+      ],
+      "recommendedOptionId": "scoped-control-plane-keys",
+      "recommendation": "Use scoped control-plane access keys now; choose an isolated gateway when untrusted tenants, approvals, or a standardized tool transport justify its additional boundary."
+    }
+  ],
+  "openQuestions": [
+    "Whether production should cap key lifetime below 90 days.",
+    "Whether files.read belongs in the default diagnosis preset.",
+    "Whether a future MCP transport should be client-side or an isolated gateway."
+  ]
+}

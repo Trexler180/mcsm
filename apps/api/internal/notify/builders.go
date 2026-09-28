@@ -151,6 +151,68 @@ func PlayerJoinDenied(serverID, serverName, player, uuid string, bedrock bool, a
 	}
 }
 
+// MCPActionRequested is the prompt an agent is blocked on. Like the join-denied
+// alert, the Data payload is what makes it actionable rather than merely
+// informative: the panel renders approve and deny straight from these fields,
+// so the operator never has to go find the request on a settings page they were
+// not looking at.
+//
+// reason is model-authored. It travels as untrusted evidence for a human to
+// weigh, exactly as it does on the approval card, and is never interpreted.
+func MCPActionRequested(requestID, serverID, serverName, action, clientName, reason, expiresAt string, requiresPassword bool) Event {
+	return Event{
+		Type: EventMCPActionRequested, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s wants to %s %s", clientName, actionPhrase(action), display(serverName, serverID)),
+		Body:  "Approve or deny this before it expires. Nothing happens until you decide.",
+		Data: map[string]any{
+			"request_id":        requestID,
+			"action":            action,
+			"client_name":       clientName,
+			"server_name":       serverName,
+			"reason":            reason,
+			"expires_at":        expiresAt,
+			"requires_password": requiresPassword,
+		},
+		// Keyed on the request, not the server: two requests are two separate
+		// decisions, and collapsing them would silently lose one.
+		DedupeKey: EventMCPActionRequested + ":" + requestID,
+	}
+}
+
+// MCPActionResolved reports the end state of a request. It does double duty: it
+// tells the panel to take down a prompt that has been answered elsewhere, and it
+// is how an operator finds out that an auto-approved action ran without them.
+func MCPActionResolved(requestID, serverID, serverName, action, clientName, status string, automatic bool) Event {
+	body := fmt.Sprintf("The request to %s was %s.", actionPhrase(action), status)
+	if automatic {
+		body = fmt.Sprintf("%s ran automatically under your approval policy: the request to %s %s. Nobody was asked.",
+			clientName, actionPhrase(action), status)
+	}
+	return Event{
+		Type: EventMCPActionResolved, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s on %s: %s", actionPhrase(action), display(serverName, serverID), status),
+		Body:  body,
+		Data: map[string]any{
+			"request_id":  requestID,
+			"action":      action,
+			"client_name": clientName,
+			"server_name": serverName,
+			"status":      status,
+			"automatic":   automatic,
+		},
+		DedupeKey: EventMCPActionResolved + ":" + requestID,
+	}
+}
+
+// actionPhrase renders an action id as something that reads in a sentence.
+// "upgrade:26.1.2" is the one that needs help; the lifecycle verbs already do.
+func actionPhrase(action string) string {
+	if target, ok := strings.CutPrefix(action, "upgrade:"); ok {
+		return "upgrade to " + target
+	}
+	return action
+}
+
 func display(name, id string) string {
 	if name != "" {
 		return name

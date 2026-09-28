@@ -507,3 +507,50 @@ func rootWalkRelative(start, name string) string {
 	}
 	return strings.TrimPrefix(name, strings.TrimSuffix(start, "/")+"/")
 }
+
+// ReadContentTail reads at most tailBytes from the end of a file.
+//
+// It exists so a caller that only wants recent output does not have to pull a
+// whole file across the wire. A Minecraft server's latest.log runs to hundreds
+// of megabytes on a long-lived world, and the panel's own response ceiling is
+// far below that — so "read the log" without a bound is a request that fails on
+// exactly the busy servers where reading it matters most.
+//
+// The returned slice always starts at a line boundary: when the cut lands
+// mid-line, the partial first line is dropped rather than handed back as a
+// fragment that reads like a truncated timestamp. tailBytes <= 0 reads the
+// whole file, which is what an older caller that never learned about this
+// parameter gets.
+func ReadContentTail(base, userPath string, tailBytes int64) ([]byte, error) {
+	f, info, err := OpenFile(base, userPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	if tailBytes <= 0 || info.Size() <= tailBytes {
+		return io.ReadAll(f)
+	}
+	if _, err := f.Seek(info.Size()-tailBytes, io.SeekStart); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	if i := indexNewline(data); i >= 0 {
+		data = data[i+1:]
+	}
+	return data, nil
+}
+
+// indexNewline reports the first newline in b, or -1. Kept separate so the
+// line-alignment rule above is one obvious step rather than an inline slice.
+func indexNewline(b []byte) int {
+	for i, c := range b {
+		if c == '\n' {
+			return i
+		}
+	}
+	return -1
+}

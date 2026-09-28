@@ -1,0 +1,21 @@
+flowchart LR
+    Agent[Claude Code / Codex] -->|discovery: protected-resource + AS metadata| Meta[OAuth metadata endpoints]
+    Agent -->|authorize + PKCE S256 + resource| Authorize[/authorize/]
+    Authorize -->|requires live dashboard session| Consent[Browser consent screen]
+    Human[Human operator] -->|password + MFA session| Consent
+    Consent -->|client, capabilities, servers, duration, approval mode| Grant[(MCP grant: owner, client, servers, scopes, expiry)]
+    Consent -->|single-use, short-lived code| Agent
+    Agent -->|code + verifier + exact redirect + resource| Token[/token/]
+    Token -->|short-lived audience-bound access token| Agent
+    Token -->|rotating refresh token, hash-only| Family[(Refresh family)]
+    Agent -->|Streamable HTTP + Bearer access token| MCP[Embedded MCP tool facade]
+    MCP --> Intersection[Grant AND token audience AND server allowlist AND MCP scope AND live RBAC]
+    Intersection --> Diagnostics[Bounded, redacted, untrusted-labelled reads]
+    Intersection --> Requests[request_server_action -> pending request]
+    Requests --> Queue[(Action approval queue)]
+    Queue --> Approval[Dashboard approval: password + TOTP step-up]
+    Approval -->|re-check live RBAC and grant; atomic at-most-once| Operations[Audited start / stop / restart]
+    Operations -->|internal node bearer token| Worker[Host worker agent]
+    Operations --> Audit[(Owner + client + grant attribution)]
+    Human -->|revoke| Grant
+    Grant -. revocation kills token, refresh family, and next tool call .-> MCP

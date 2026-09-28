@@ -53,6 +53,8 @@ const (
 	EventNodeDiskLow        = "node.disk_low"
 	EventServerPerformance  = "server.performance"
 	EventPlayerJoinDenied   = "player.join_denied"
+	EventMCPActionRequested = "mcp.action_requested"
+	EventMCPActionResolved  = "mcp.action_resolved"
 )
 
 // EventDef is the static description of an event type, surfaced to the frontend
@@ -77,6 +79,8 @@ var Catalog = []EventDef{
 	{EventServerOffline, "Server stopped", "A server transitioned to offline.", SeverityWarning, ScopeServer, false},
 	{EventServerOnline, "Server online", "A server came online.", SeverityInfo, ScopeServer, false},
 	{EventPlayerJoinDenied, "Player turned away by the whitelist", "Someone who is not on the whitelist tried to join. The alert offers to let them in.", SeverityWarning, ScopeServer, true},
+	{EventMCPActionRequested, "AI agent asked to act on a server", "A connected agent filed a start, stop, restart, or version-upgrade request. The alert offers to approve or deny it.", SeverityWarning, ScopeServer, true},
+	{EventMCPActionResolved, "Agent action request settled", "An agent's request was approved, denied, or ran automatically under your approval policy.", SeverityInfo, ScopeServer, true},
 	{EventModConflict, "Mod conflict detected", "A mod incompatibility or crash-on-load was detected.", SeverityWarning, ScopeServer, false},
 	{EventModUpdateApplied, "Mod update applied", "An auto-update run installed new mod versions.", SeverityInfo, ScopeServer, false},
 	{EventModUpdateFailed, "Mod update failed", "An auto-update run failed.", SeverityWarning, ScopeServer, false},
