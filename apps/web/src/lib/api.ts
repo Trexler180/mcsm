@@ -977,6 +977,11 @@ export const api = {
     update: (id: string, data: Partial<Node>) =>
       put<Node>(`/nodes/${id}`, data),
     delete: (id: string) => del(`/nodes/${id}`),
+    // Stops every server on the node gracefully, then reboots its host. Needs
+    // a fresh password (+ TOTP when enrolled); the API answers 202 once the
+    // agent has accepted, before the host actually goes down.
+    reboot: (id: string, auth: { password: string; totp_code?: string }) =>
+      post<{ status: string }>(`/nodes/${id}/reboot`, auth),
   },
 
   backups: {

@@ -473,49 +473,7 @@ func (h *MCPGrantHandlers) UpdateGrantApprovalSettings(w http.ResponseWriter, r 
 // is the same generic 401, so the response cannot distinguish a wrong password
 // from a wrong code.
 func (h *MCPGrantHandlers) reauthenticate(w http.ResponseWriter, r *http.Request, userID string, body approvalRequest) bool {
-	ipKey := passwordIPKey(r)
-	acctKey := stepUpAccountKey(userID)
-	if ok, retry := h.ipThrottle.Allowed(ipKey); !ok {
-		tooManyRequests(w, retry)
-		return false
-	}
-	if ok, retry := h.acctThrottle.Allowed(acctKey); !ok {
-		tooManyRequests(w, retry)
-		return false
-	}
-	fail := func() {
-		h.ipThrottle.Fail(ipKey)
-		h.acctThrottle.Fail(acctKey)
-		writeError(w, http.StatusUnauthorized, "reauthentication failed")
-	}
-
-	if body.Password == "" {
-		// An empty password is a failed attempt, not a free probe.
-		fail()
-		return false
-	}
-	hash, err := h.store.GetUserPasswordHash(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "reauthentication failed")
-		return false
-	}
-	if !auth.CheckPassword(hash, body.Password) {
-		fail()
-		return false
-	}
-	cfg, err := h.store.GetUserTOTP(r.Context(), userID)
-	if err != nil {
-		writeServerError(w, r, "mcp approval: totp lookup", err)
-		return false
-	}
-	if cfg.Enabled && !auth.ValidateTOTP(cfg.Secret, body.TOTPCode, time.Now()) {
-		fail()
-		return false
-	}
-
-	h.ipThrottle.Reset(ipKey)
-	h.acctThrottle.Reset(acctKey)
-	return true
+	return verifyStepUp(w, r, h.store, h.ipThrottle, h.acctThrottle, userID, body.Password, body.TOTPCode, "mcp approval")
 }
 
 // ── Connect instructions ─────────────────────────────────────────

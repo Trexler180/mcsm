@@ -1,0 +1,22 @@
+// Lets the ServerManager agent reboot this host — and nothing else.
+//
+// The agent runs as the unprivileged "mcsm" user and reboots through
+// systemd-logind, which asks polkit. This rule answers yes for exactly two
+// actions, for exactly that user:
+//
+//   org.freedesktop.login1.reboot                  reboot
+//   org.freedesktop.login1.reboot-multiple-sessions reboot while someone else
+//                                                   is logged in (e.g. SSH)
+//
+// It does not grant power-off, suspend, ignoring inhibitor locks, or any other
+// privilege. Installed by install.sh to /etc/polkit-1/rules.d/ (polkit >= 0.106).
+polkit.addRule(function (action, subject) {
+    if (subject.user != "mcsm") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id == "org.freedesktop.login1.reboot" ||
+        action.id == "org.freedesktop.login1.reboot-multiple-sessions") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

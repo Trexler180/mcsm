@@ -187,6 +187,26 @@ func (c *Client) RestartServer(ctx context.Context, serverID string, cfg map[str
 	return checkError(resp)
 }
 
+// RebootHost asks the agent to stop every server gracefully and then reboot the
+// machine it runs on. The agent answers 202 once it has verified it may reboot
+// and before it starts stopping servers, so a nil error means "accepted", not
+// "done". On refusal it returns the agent's HTTP status alongside the error so
+// the caller can tell a configuration problem from an outage.
+func (c *Client) RebootHost(ctx context.Context) (int, error) {
+	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/host/reboot", nil)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
+		return resp.StatusCode, nil
+	}
+	if err := checkError(resp); err != nil {
+		return resp.StatusCode, err
+	}
+	return resp.StatusCode, fmt.Errorf("agent: unexpected HTTP %d", resp.StatusCode)
+}
+
 func (c *Client) KillServer(ctx context.Context, serverID string) error {
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/kill", nil)
 	if err != nil {

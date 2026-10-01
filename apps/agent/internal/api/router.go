@@ -17,8 +17,10 @@ import (
 //
 // links may be nil, in which case the helper-mod endpoint is simply not mounted
 // and every server falls back to log scraping and stdin. linkSink may likewise
-// be nil; the vitals endpoint then reports every server as unlinked.
-func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector, serverRoot string, links *link.Registry, linkSink *link.MemorySink) http.Handler {
+// be nil; the vitals endpoint then reports every server as unlinked. host
+// serves host-level operations (reboot); it is always mounted and refuses on
+// its own when the operator has not enabled them.
+func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector, serverRoot string, links *link.Registry, linkSink *link.MemorySink, host *handlers.HostHandlers) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
@@ -57,6 +59,9 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 			r.Get("/metrics", mh.HostMetrics)
 			// Discover existing server directories on disk so the panel can import them.
 			r.Get("/import/scan", h.ScanImports)
+			// Reboot the whole host. Off unless AGENT_ALLOW_REBOOT=1, and the
+			// OS must separately grant it (polkit); see HostHandlers.
+			r.Post("/host/reboot", host.Reboot)
 
 			r.Route("/servers/{id}", func(r chi.Router) {
 				r.Post("/start", h.Start)

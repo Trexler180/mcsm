@@ -1,0 +1,10 @@
+# Legacy equivalent of 50-mcsm-reboot.rules for polkit 0.105 (Ubuntu <= 22.04,
+# Debian <= 11), which does not read JavaScript rules. Same grant: the "mcsm"
+# user may reboot, including while others are logged in, and nothing else.
+# Installed by install.sh to /etc/polkit-1/localauthority/50-local.d/.
+[ServerManager agent reboot]
+Identity=unix-user:mcsm
+Action=org.freedesktop.login1.reboot;org.freedesktop.login1.reboot-multiple-sessions
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes

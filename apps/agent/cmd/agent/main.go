@@ -230,7 +230,14 @@ func main() {
 		}
 	})
 
-	router := agentapi.NewRouter(token, mgr, collector, serverRoot, links, linkSink)
+	// Host reboot is opt-in: the agent token already controls every server,
+	// but taking the machine down is a separate decision for the operator.
+	allowReboot := os.Getenv("AGENT_ALLOW_REBOOT") == "1"
+	if allowReboot {
+		log.Println("AGENT_ALLOW_REBOOT=1: host reboot is enabled (the OS must also grant it)")
+	}
+	hostH := handlers.NewHostHandlers(allowReboot, mgr, handlers.NewHostPower())
+	router := agentapi.NewRouter(token, mgr, collector, serverRoot, links, linkSink, hostH)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", host, port),

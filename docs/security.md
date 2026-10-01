@@ -378,6 +378,26 @@ capabilities, which are displayed as mutation authority at consent time.
 Setup, connection, and revocation guidance is in [operations.md](operations.md);
 the reverse-proxy and TLS requirements are in [deployment.md](deployment.md).
 
+## Host reboot
+
+Rebooting a node's host is the most disruptive action the panel has, so it is
+gated at three layers:
+
+- **API:** global admins only, on an interactive sign-in. Access keys and MCP
+  grants are refused by the router (`requireAdmin`, `requireHuman`), whoever
+  owns them. The request needs the current password and, when enrolled, a TOTP
+  code, spending from the same throttle as login. Every attempt is audited:
+  `node.reboot`, `node.reboot.denied`, or `node.reboot.failed`.
+- **Agent:** refuses unless `AGENT_ALLOW_REBOOT=1`. Before stopping any server
+  it asks logind whether it may reboot (`CanReboot`), so a refused reboot never
+  leaves the host up with its servers down. A second request while one is in
+  progress is refused.
+- **OS:** the agent runs unprivileged and reboots through logind, so a polkit
+  rule must grant its user `org.freedesktop.login1.reboot` (and
+  `reboot-multiple-sessions`) — nothing else, not power-off and not inhibitor
+  overrides. No sudo and no shell are involved; both commands have fixed
+  arguments. See `deploy/host-reboot/`.
+
 ## Multi-factor auth (optional TOTP)
 
 - Users can enable time-based one-time-password (TOTP) MFA from Settings →

@@ -238,6 +238,23 @@ Operator guidance for connecting and revoking is in
 [operations.md](operations.md#remote-agent-connections-mcp); the security model
 is in [security.md](security.md#remote-agent-connections-mcp-over-oauth).
 
+### Host reboot from the dashboard (optional)
+
+Global admins can reboot a node's machine from **Nodes → Reboot host**, which
+stops every Minecraft server gracefully and then runs `systemctl reboot`. It is
+off until you enable it on that host, because the agent runs unprivileged and
+needs the OS to grant it exactly one action. From `deploy/host-reboot/`, as
+root:
+
+```bash
+sudo sh ./install.sh            # polkit grant + AGENT_ALLOW_REBOOT=1 drop-in + checks
+sudo systemctl restart mcsm-agent
+```
+
+The installer also reports whether `mcsm-api`, `mcsm-agent`, and nginx are
+enabled at boot; they must be, or the dashboard will not come back. See
+`deploy/host-reboot/README.md` for verification and removal.
+
 ### Public status pages (optional)
 
 Servers can opt into a public, unauthenticated status page (Options → Public

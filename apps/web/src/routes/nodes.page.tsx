@@ -14,6 +14,7 @@ import {
   Timer,
   CheckCircle2,
   XCircle,
+  Power,
 } from 'lucide-react'
 import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,7 @@ import { Dialog, ConfirmDialog } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { EmptyState } from '@/components/ui/empty-state'
+import { RebootNodeDialog } from '@/components/nodes/reboot-dialog'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/time'
 import { useNotifications } from '@/store/notifications'
@@ -84,11 +86,13 @@ function NodeCard({
   serverCount,
   onEdit,
   onDelete,
+  onReboot,
 }: {
   node: Node
   serverCount: number
   onEdit: () => void
   onDelete: () => void
+  onReboot: () => void
 }) {
   // Usage percentages; null (no bar fill) when the agent hasn't reported yet.
   const memPct =
@@ -152,6 +156,20 @@ function NodeCard({
             />
             {node.online ? 'Online' : 'Offline'}
           </span>
+          {node.online && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onReboot()
+              }}
+              title="Reboot host"
+              aria-label={`Reboot ${node.name}`}
+              className="rounded-md p-1 text-text-secondary opacity-0 transition-opacity hover:bg-surface-2 hover:text-amber-400 focus:opacity-100 group-hover:opacity-100"
+            >
+              <Power className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={(e) => {
@@ -396,6 +414,7 @@ export function NodesPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [editTarget, setEditTarget] = useState<Node | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Node | null>(null)
+  const [rebootTarget, setRebootTarget] = useState<Node | null>(null)
   const qc = useQueryClient()
   const { success, error } = useNotifications()
 
@@ -462,6 +481,7 @@ export function NodesPage() {
                 serverCount={serverCounts.get(node.id) ?? 0}
                 onEdit={() => setEditTarget(node)}
                 onDelete={() => setDeleteTarget(node)}
+                onReboot={() => setRebootTarget(node)}
               />
             ))}
           </div>
@@ -474,6 +494,12 @@ export function NodesPage() {
         open={editTarget !== null}
         node={editTarget}
         onClose={() => setEditTarget(null)}
+      />
+
+      <RebootNodeDialog
+        node={rebootTarget}
+        serverCount={rebootTarget ? (serverCounts.get(rebootTarget.id) ?? 0) : 0}
+        onClose={() => setRebootTarget(null)}
       />
 
       <ConfirmDialog

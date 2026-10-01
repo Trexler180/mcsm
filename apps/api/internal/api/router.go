@@ -93,7 +93,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	passwordThrottles := handlers.NewPasswordThrottles()
 	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets, passwordThrottles)
 	apiKeyH := handlers.NewAPIKeyHandlers(s, passwordThrottles)
-	nodeH := handlers.NewNodeHandlers(s)
+	nodeH := handlers.NewNodeHandlers(s, passwordThrottles)
 	serverH := handlers.NewServerHandlers(s, serverRoot)
 	folderH := handlers.NewFolderHandlers(s)
 	memberH := handlers.NewServerMemberHandlers(s)
@@ -307,6 +307,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 				r.Get("/{id}", nodeH.Get)
 				r.Put("/{id}", nodeH.Update)
 				r.Delete("/{id}", nodeH.Delete)
+				// Reboot the node's host machine. requireAdmin above already
+				// refuses machine principals; requireHuman says so locally, and
+				// the handler adds a password/MFA step-up.
+				r.With(requireHuman).Post("/{id}/reboot", nodeH.Reboot)
 			})
 
 			// Server folders — flat grouping over the fleet. Listing is scoped
