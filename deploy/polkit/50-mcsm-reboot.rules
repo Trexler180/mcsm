@@ -9,7 +9,8 @@
 //                                                   is logged in (e.g. SSH)
 //
 // It does not grant power-off, suspend, ignoring inhibitor locks, or any other
-// privilege. Installed by install.sh to /etc/polkit-1/rules.d/ (polkit >= 0.106).
+// privilege. Installed to /etc/polkit-1/rules.d/ by deploy/provision.sh (polkit
+// >= 0.106); edit it in the repo, not on the server.
 polkit.addRule(function (action, subject) {
     if (subject.user != "mcsm") {
         return polkit.Result.NOT_HANDLED;

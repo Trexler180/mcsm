@@ -1,0 +1,12 @@
+[Unit]
+Description=Check OpenSSH health every 10 seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=ssh-watchdog.service
+
+[Install]
+WantedBy=timers.target
+

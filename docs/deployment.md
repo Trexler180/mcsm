@@ -206,7 +206,9 @@ configuration.
 OAuth discovery is **origin-rooted by specification**, so the proxy must forward
 the `.well-known` documents in addition to `/api/`. Without this a client can
 reach the MCP endpoint but never discover where to authorize, and connecting
-fails with an unhelpful 401.
+fails with an unhelpful 401. On the production host this block, and
+`APP_BASE_PATH`, are managed by host provisioning (see
+[Host provisioning](#host-provisioning)); other deployments add them by hand:
 
 ```nginx
     # OAuth discovery for the MCP endpoint. Origin-rooted, so it cannot live
@@ -242,18 +244,33 @@ is in [security.md](security.md#remote-agent-connections-mcp-over-oauth).
 
 Global admins can reboot a node's machine from **Nodes → Reboot host**, which
 stops every Minecraft server gracefully and then runs `systemctl reboot`. It is
-off until you enable it on that host, because the agent runs unprivileged and
-needs the OS to grant it exactly one action. From `deploy/host-reboot/`, as
-root:
+off until the host grants it, because the agent runs unprivileged and needs the
+OS to allow exactly one action. Host provisioning installs both halves — the
+polkit grant in `deploy/polkit/` and the `AGENT_ALLOW_REBOOT=1` drop-in — and
+its check confirms that logind answers `yes` for the agent's user and that
+`mcsm-api`, `mcsm-agent`, nginx, and SSH all start at boot, so the dashboard
+comes back after a reboot.
 
-```bash
-sudo sh ./install.sh            # polkit grant + AGENT_ALLOW_REBOOT=1 drop-in + checks
-sudo systemctl restart mcsm-agent
+### Host provisioning
+
+Everything the production host needs outside `/srv/dashboard` lives in
+`deploy/` and is applied by `deploy/provision.sh` — never edited by hand on the
+server. See [`deploy/README.md`](../deploy/README.md) for what is managed.
+
+```powershell
+.\scripts\Deploy-Dashboard.ps1 -Part host     # converge host config only
+.\scripts\Deploy-Dashboard.ps1 -Provision     # code deploy + converge
 ```
 
-The installer also reports whether `mcsm-api`, `mcsm-agent`, and nginx are
-enabled at boot; they must be, or the dashboard will not come back. See
-`deploy/host-reboot/README.md` for verification and removal.
+Every deploy, with or without `-Provision`, ships the bundle and prints a
+`[config]` report comparing the host with the repo. Drift on a code-only deploy
+is a warning; a provisioning run that does not converge fails the deploy.
+Applying is idempotent: identical files are left alone, replaced files are
+backed up under `/var/backups/mcsm-provision/`, nginx changes are tested with
+`nginx -t` and rolled back if the test or the post-reload dashboard check
+fails, and SSH is never restarted. Secrets stay in
+`/srv/dashboard/data/secrets.env`, which provisioning never reads or writes;
+anything set there overrides the managed drop-ins.
 
 ### Public status pages (optional)
 

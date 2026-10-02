@@ -392,11 +392,17 @@ gated at three layers:
   it asks logind whether it may reboot (`CanReboot`), so a refused reboot never
   leaves the host up with its servers down. A second request while one is in
   progress is refused.
+- **Deploy path:** uploads land in a root-only staging directory
+  (`/root/mcsm-deploy`), never in the `mcsm`-owned data directory, and the
+  applier refuses to run from anywhere `mcsm` can write. Otherwise anything
+  running as `mcsm` — the API, the agent, a Minecraft server or its mods —
+  could swap the root-run applier or provisioning bundle mid-deploy.
 - **OS:** the agent runs unprivileged and reboots through logind, so a polkit
   rule must grant its user `org.freedesktop.login1.reboot` (and
   `reboot-multiple-sessions`) — nothing else, not power-off and not inhibitor
   overrides. No sudo and no shell are involved; both commands have fixed
-  arguments. See `deploy/host-reboot/`.
+  arguments. The grant lives in `deploy/polkit/` and is installed by host
+  provisioning.
 
 ## Multi-factor auth (optional TOTP)
 

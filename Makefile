@@ -60,6 +60,7 @@ build-web:
 test:
 	cd apps/agent && go test ./...
 	cd apps/api && go test ./...
+	bash deploy/provision_test.sh
 
 # ── Clean ────────────────────────────────────────────────────────────
 clean:

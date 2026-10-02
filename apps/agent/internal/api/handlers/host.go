@@ -36,7 +36,8 @@ type serverStopper interface {
 // machine down is a different kind of authority, and a deployment that never
 // asked for it should not have it. The OS is the second gate — the agent runs
 // unprivileged, so the host must also grant it the reboot action (a polkit
-// rule; see docs/deployment.md), and the handler checks that grant before it
+// rule from deploy/polkit/, installed by host provisioning), and the handler
+// checks that grant before it
 // touches a single server.
 type HostHandlers struct {
 	enabled     bool
@@ -68,7 +69,7 @@ func NewHostHandlers(enabled bool, servers serverStopper, power HostPower) *Host
 // offline and coming back.
 func (h *HostHandlers) Reboot(w http.ResponseWriter, r *http.Request) {
 	if !h.enabled {
-		writeError(w, http.StatusForbidden, "host reboot is disabled on this agent (set AGENT_ALLOW_REBOOT=1 to enable it)")
+		writeError(w, http.StatusForbidden, "host reboot is disabled on this agent (AGENT_ALLOW_REBOOT=1 is not set; provision the host with Deploy-Dashboard.ps1 -Part host)")
 		return
 	}
 	if h.power == nil {
@@ -86,7 +87,7 @@ func (h *HostHandlers) Reboot(w http.ResponseWriter, r *http.Request) {
 		h.inProgress.Store(false)
 		log.Printf("host reboot refused by the OS: %v", err)
 		writeError(w, http.StatusPreconditionFailed,
-			"the host does not allow this agent to reboot it; install the polkit rule from docs/deployment.md")
+			"the host does not allow this agent to reboot it; provision the host's polkit grant (Deploy-Dashboard.ps1 -Part host)")
 		return
 	}
 

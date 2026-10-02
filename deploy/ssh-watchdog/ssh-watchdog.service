@@ -1,0 +1,13 @@
+[Unit]
+Description=Check and repair the OpenSSH daemon and listening socket
+After=multi-user.target
+ConditionFileIsExecutable=/usr/local/sbin/ssh-watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ssh-watchdog
+TimeoutStartSec=20s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+

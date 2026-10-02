@@ -50,11 +50,21 @@ of hand-written SSH or upload commands:
 .\scripts\Deploy-Dashboard.ps1 -Test
 .\scripts\Deploy-Dashboard.ps1 -Part web
 .\scripts\Deploy-Dashboard.ps1 -Part binaries
+.\scripts\Deploy-Dashboard.ps1 -Part host
+.\scripts\Deploy-Dashboard.ps1 -Provision
 .\scripts\Deploy-Dashboard.ps1 -Rollback
 ```
 
 The default deployment includes web, API, and agent. `-Test` is expected for
 non-trivial changes. A failed build must not be deployed.
+
+Host configuration outside `/srv/dashboard` (nginx snippets, systemd drop-ins,
+the polkit reboot grant, the SSH watchdog) is code in `deploy/`, applied by
+`deploy/provision.sh` through `-Part host` or `-Provision`. Change it there,
+never by hand on the server, and keep `bash deploy/provision_test.sh` passing.
+Every deploy prints a `[config]` drift report; treat drift as something to
+reconcile, not ignore. New non-secret settings go in a `deploy/systemd`
+drop-in; secrets stay in `secrets.env`, which provisioning never touches.
 
 The wrapper protects machine-local connection details and performs upload,
 service restart, rollback preparation, and basic health checks. Do not print or
