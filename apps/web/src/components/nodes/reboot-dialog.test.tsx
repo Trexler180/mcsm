@@ -3,12 +3,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { Node } from "@/lib/types";
+import { useRebootTracker } from "@/lib/reboot-tracker";
 import { RebootNodeDialog } from "./reboot-dialog";
 
 const notify = { success: vi.fn(), error: vi.fn() };
 vi.mock("@/store/notifications", () => ({ useNotifications: () => notify }));
 
-const node = { id: "node-1", name: "host-1" } as Node;
+const node = {
+  id: "node-1",
+  name: "host-1",
+  online: true,
+  last_seen: "2026-10-01T12:00:00Z",
+  uptime_seconds: 86_400,
+} as Node;
 
 function renderDialog(onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -24,6 +31,7 @@ describe("RebootNodeDialog", () => {
   beforeEach(() => {
     notify.success.mockReset();
     notify.error.mockReset();
+    useRebootTracker.getState().clear();
   });
 
   afterEach(() => {
@@ -43,9 +51,11 @@ describe("RebootNodeDialog", () => {
     expect(reboot).not.toHaveBeenCalled();
   });
 
-  it("sends the step-up and closes once the agent accepts", async () => {
+  it("sends the step-up, hands over to the rebooting screen, and closes", async () => {
     vi.spyOn(api.auth.mfa, "status").mockResolvedValue({ enabled: true });
-    const reboot = vi.spyOn(api.nodes, "reboot").mockResolvedValue({ status: "rebooting" });
+    const reboot = vi
+      .spyOn(api.nodes, "reboot")
+      .mockResolvedValue({ status: "rebooting", requested_at: "2026-10-01T12:00:05Z" });
     const onClose = renderDialog();
 
     fireEvent.change(screen.getByLabelText(/confirm your password/i), {
@@ -63,7 +73,13 @@ describe("RebootNodeDialog", () => {
       }),
     );
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(notify.success).toHaveBeenCalled();
+    // Tracked against the server's timestamp and the boot time seen before it.
+    expect(useRebootTracker.getState().tracked).toMatchObject({
+      nodeId: "node-1",
+      nodeName: "host-1",
+      requestedAt: "2026-10-01T12:00:05Z",
+      previousBoot: Date.parse("2026-10-01T12:00:00Z") - 86_400_000,
+    });
   });
 
   it("shows the API's refusal and stays open", async () => {
@@ -85,5 +101,6 @@ describe("RebootNodeDialog", () => {
       ),
     );
     expect(onClose).not.toHaveBeenCalled();
+    expect(useRebootTracker.getState().tracked).toBeNull();
   });
 });

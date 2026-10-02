@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { Sidebar } from '@/components/layout/sidebar'
 import { CommandPalette } from '@/components/layout/command-palette'
 import { McpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
+import { RebootOverlay } from '@/components/layout/reboot-overlay'
 import { Toaster } from '@/components/ui/toast'
 import { useAuthStore } from '@/store/auth'
 import { notificationStream } from '@/lib/notify-stream'
@@ -73,6 +74,10 @@ function RootLayout() {
           answerable from whatever screen the operator is on, and the step-up
           half of that answer needs somewhere to put a password field. */}
       <McpApprovalDialog />
+      {/* Takes over the screen while a host reboot is followed down and back
+          up. Static import on purpose: if the dashboard's own host is the one
+          restarting, a lazy chunk could not load. */}
+      <RebootOverlay />
       <Toaster />
     </div>
   )

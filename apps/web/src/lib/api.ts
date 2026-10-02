@@ -979,9 +979,10 @@ export const api = {
     delete: (id: string) => del(`/nodes/${id}`),
     // Stops every server on the node gracefully, then reboots its host. Needs
     // a fresh password (+ TOTP when enrolled); the API answers 202 once the
-    // agent has accepted, before the host actually goes down.
+    // agent has accepted, before the host actually goes down. requested_at is
+    // the server's clock, which the rebooting screen measures the restart by.
     reboot: (id: string, auth: { password: string; totp_code?: string }) =>
-      post<{ status: string }>(`/nodes/${id}/reboot`, auth),
+      post<{ status: string; requested_at: string }>(`/nodes/${id}/reboot`, auth),
   },
 
   backups: {

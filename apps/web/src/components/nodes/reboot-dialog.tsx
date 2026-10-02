@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { StepUpFields, stepUpReady, useMfaEnabled } from '@/components/settings/step-up-fields'
 import { api } from '@/lib/api'
+import { useRebootTracker } from '@/lib/reboot-tracker'
 import { useNotifications } from '@/store/notifications'
 import type { Node } from '@/lib/types'
 
@@ -21,7 +22,8 @@ interface RebootDialogProps {
 
 export function RebootNodeDialog({ node, serverCount, onClose }: RebootDialogProps) {
   const qc = useQueryClient()
-  const { success, error } = useNotifications()
+  const { error } = useNotifications()
+  const startTracking = useRebootTracker((s) => s.start)
   const mfaEnabled = useMfaEnabled()
   const [password, setPassword] = useState('')
   const [totp, setTotp] = useState('')
@@ -38,11 +40,10 @@ export function RebootNodeDialog({ node, serverCount, onClose }: RebootDialogPro
         password,
         totp_code: mfaEnabled ? totp.trim() : undefined,
       }),
-    onSuccess: () => {
-      success(
-        'Reboot started',
-        `${node?.name} is stopping its servers and will restart. It should be back in a few minutes.`,
-      )
+    onSuccess: (res) => {
+      // Hand over to the full-screen rebooting view, which follows the host
+      // down and back up and reconnects on its own.
+      if (node) startTracking(node, res.requested_at)
       qc.invalidateQueries({ queryKey: ['nodes'] })
       onClose()
     },

@@ -157,6 +157,11 @@ func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type rebootAccepted struct {
+	Status      string    `json:"status"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
 type rebootRequest struct {
 	Password string `json:"password"`
 	TOTPCode string `json:"totp_code"`
@@ -216,7 +221,11 @@ func (h *NodeHandlers) Reboot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audit(h.store, r, "", "node.reboot", map[string]any{"node_id": node.ID, "node_name": node.Name})
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "rebooting"})
+	// requested_at is the server's clock, the same clock that stamps a node's
+	// last_seen. The dashboard compares the host's boot time (last_seen minus
+	// uptime) against it to know the machine really restarted, so it must not
+	// come from the browser, whose clock may be off.
+	writeJSON(w, http.StatusAccepted, rebootAccepted{Status: "rebooting", RequestedAt: time.Now().UTC()})
 }
 
 func nodeOnline(lastSeen *time.Time) bool {

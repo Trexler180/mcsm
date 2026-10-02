@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/auth"
@@ -110,9 +111,21 @@ func TestNodeRebootRequiresTheStepUp(t *testing.T) {
 
 func TestNodeRebootAcceptedByTheAgent(t *testing.T) {
 	e := newRebootEnv(t)
+	before := time.Now().UTC().Add(-time.Second)
 	rr := e.reboot(t, e.node.ID, rebootTestPassword)
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s, want 202", rr.Code, rr.Body.String())
+	}
+	// The dashboard tracks the reboot against the server's own clock.
+	var accepted struct {
+		Status      string    `json:"status"`
+		RequestedAt time.Time `json:"requested_at"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Status != "rebooting" || accepted.RequestedAt.Before(before) || accepted.RequestedAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("response=%+v, want status rebooting and a current server time", accepted)
 	}
 	if e.calls != 1 {
 		t.Fatalf("agent calls=%d, want 1", e.calls)
