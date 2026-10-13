@@ -197,3 +197,47 @@ func (s *Store) ListLogEvents(ctx context.Context, serverID, level string, limit
 	}
 	return out, rows.Err()
 }
+
+// ListLogEventsForServers is ListLogEvents scoped to a set of servers, with the
+// scope applied before the limit. Filtering after a global LIMIT is what left a
+// non-admin with an empty feed whenever other servers had logged more
+// recently. A nil serverIDs means every server; an empty one means none.
+func (s *Store) ListLogEventsForServers(ctx context.Context, serverIDs []string, level string, limit int) ([]*LogEvent, error) {
+	if serverIDs == nil {
+		return s.ListLogEvents(ctx, "", level, limit)
+	}
+	if len(serverIDs) == 0 {
+		return []*LogEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	q := `SELECT id, server_id, level, message, source, created_at FROM server_log_events
+	       WHERE server_id IN (` + placeholders(len(serverIDs)) + `)`
+	args := make([]any, 0, len(serverIDs)+1)
+	for _, id := range serverIDs {
+		args = append(args, id)
+	}
+	if level == "error" {
+		q += " AND level = 'error'"
+	}
+	q += " ORDER BY created_at DESC, id DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*LogEvent{}
+	for rows.Next() {
+		var e LogEvent
+		if err := rows.Scan(&e.ID, &e.ServerID, &e.Level, &e.Message, &e.Source, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}

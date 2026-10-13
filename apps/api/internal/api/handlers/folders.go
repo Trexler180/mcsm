@@ -68,11 +68,13 @@ func (h *FolderHandlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		folders []*store.ServerFolder
-		err     error
-	)
-	if claims.Role == "admin" {
+	isAdmin, err := callerIsAdmin(r, h.store)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var folders []*store.ServerFolder
+	if isAdmin {
 		folders, err = h.store.ListServerFolders(r.Context())
 	} else {
 		// Non-admins never learn about folders holding nothing they can open.

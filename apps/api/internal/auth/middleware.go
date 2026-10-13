@@ -143,3 +143,10 @@ func writeUnauth(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusUnauthorized)
 	w.Write([]byte(`{"error":"unauthorized"}`))
 }
+
+// WithClaims attaches user claims to a context. It authenticates nothing: it is
+// for code that has already established who is acting (tests, and internal
+// invocations of handlers) and needs the handlers' usual view of the caller.
+func WithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, claimsKey, claims)
+}

@@ -66,7 +66,8 @@ type overviewCounts struct {
 }
 
 // Overview assembles the overview payload. Non-admins only see their own servers;
-// admins see everything. Node/activity/conflict feeds are scoped to that set.
+// admins see everything. Node/activity/conflict feeds are scoped to that set,
+// and the scope is applied inside each query rather than after a global limit.
 func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	claims := auth.ClaimsFrom(ctx)
@@ -74,12 +75,14 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	isAdmin, err := callerIsAdmin(r, h.store)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 
-	var (
-		servers []*store.Server
-		err     error
-	)
-	if claims.Role == "admin" {
+	var servers []*store.Server
+	if isAdmin {
 		servers, err = h.store.ListServers(ctx)
 	} else {
 		servers, err = h.store.ListServersForUser(ctx, claims.UserID)
@@ -90,8 +93,10 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowed := map[string]bool{}
+	serverIDs := make([]string, 0, len(servers))
 	for _, s := range servers {
 		allowed[s.ID] = true
+		serverIDs = append(serverIDs, s.ID)
 	}
 
 	// Active conflicts, filtered to the caller's servers.
@@ -115,6 +120,12 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 	out.Counts.Servers = len(servers)
 	out.Counts.Conflicts = len(conflicts)
 
+	// Backup freshness for the whole fleet in one query.
+	lastBackup, err := h.store.LatestSuccessfulBackups(ctx)
+	if err != nil {
+		lastBackup = map[string]time.Time{}
+	}
+
 	nodeIDs := map[string]bool{}
 	for _, s := range servers {
 		switch s.Status {
@@ -135,15 +146,10 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 			FolderID:       s.FolderID,
 			ActiveConflict: conflictByServer[s.ID],
 		}
-		// Backup freshness: newest successful backup.
-		if backups, err := h.store.ListBackups(ctx, s.ID); err == nil {
-			for _, b := range backups {
-				if b.Status == "success" && b.CompletedAt != nil {
-					so.LastBackupAt = b.CompletedAt
-					so.LastBackupOK = true
-					break
-				}
-			}
+		if at, ok := lastBackup[s.ID]; ok {
+			at := at
+			so.LastBackupAt = &at
+			so.LastBackupOK = true
 		}
 		out.Servers = append(out.Servers, so)
 	}
@@ -167,25 +173,20 @@ func (h *OverviewHandlers) Overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Recent warnings/errors and audit activity. ListLogEvents/ListAudit with an
-	// empty server id span all servers for admins; for non-admins we filter to
-	// the allowed set below.
-	if events, err := h.store.ListLogEvents(ctx, "", "", 25); err == nil {
-		for _, e := range events {
-			if allowed[e.ServerID] {
-				out.Warnings = append(out.Warnings, e)
-			}
-		}
+	// Recent warnings and activity, scoped inside the query. A non-admin sees
+	// rows for their servers plus their own panel-wide actions — never another
+	// user's login, key, node or integration events, which are the admin log.
+	var scopeIDs []string
+	var auditScope *store.AuditScope
+	if !isAdmin {
+		scopeIDs = serverIDs
+		auditScope = &store.AuditScope{ServerIDs: serverIDs, UserID: claims.UserID}
 	}
-	if entries, err := h.store.ListAudit(ctx, "", 50); err == nil {
-		for _, e := range entries {
-			if e.ServerID == nil || allowed[*e.ServerID] {
-				out.Activity = append(out.Activity, e)
-			}
-			if len(out.Activity) >= 25 {
-				break
-			}
-		}
+	if events, err := h.store.ListLogEventsForServers(ctx, scopeIDs, "", 25); err == nil {
+		out.Warnings = events
+	}
+	if entries, _, err := h.store.ListAuditPage(ctx, store.AuditQuery{Scope: auditScope, Limit: 25}); err == nil {
+		out.Activity = entries
 	}
 
 	writeJSON(w, http.StatusOK, out)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -121,4 +122,29 @@ func (s *Store) CreateBackup(ctx context.Context, b *Backup) (*Backup, error) {
 		 FROM backups WHERE id = ?`, id,
 	).Scan(&out.ID, &out.ServerID, &out.TargetID, &out.TriggeredBy, &out.Trigger, &out.Status, &out.SizeBytes, &out.SnapshotID, (*jsonRaw)(&out.Metadata), &out.StartedAt, &out.CompletedAt)
 	return &out, err
+}
+
+// LatestSuccessfulBackups returns, per server, when its newest successful
+// backup completed — one query for the whole fleet instead of a full backup
+// listing per server.
+func (s *Store) LatestSuccessfulBackups(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT b.server_id, b.completed_at FROM backups b
+		  WHERE b.status = 'success' AND b.completed_at IS NOT NULL
+		    AND b.completed_at = (SELECT MAX(b2.completed_at) FROM backups b2
+		                           WHERE b2.server_id = b.server_id AND b2.status = 'success')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id string
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = at
+	}
+	return out, rows.Err()
 }

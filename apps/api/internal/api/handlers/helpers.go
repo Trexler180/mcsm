@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -86,4 +87,21 @@ func audit(s *store.Store, r *http.Request, serverID, action string, detail any)
 		keyID = m.KeyID
 	}
 	_ = s.LogActionWithKey(r.Context(), userID, keyID, serverID, action, clientIP(r), detail)
+}
+
+// callerIsAdmin reports whether the caller holds the global admin role right
+// now, read from the database. The role baked into an access token is up to 15
+// minutes old, so trusting it kept a demoted admin's fleet-wide view alive
+// until the token expired. An error means the caller's account is gone or
+// unreadable; treat it as unauthorized.
+func callerIsAdmin(r *http.Request, s *store.Store) (bool, error) {
+	uid := currentUserID(r)
+	if uid == "" {
+		return false, errors.New("no caller")
+	}
+	u, err := s.GetUserByID(r.Context(), uid)
+	if err != nil {
+		return false, err
+	}
+	return u.Role == "admin", nil
 }

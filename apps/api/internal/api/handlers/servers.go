@@ -223,11 +223,13 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		servers []*store.Server
-		err     error
-	)
-	if claims.Role == "admin" {
+	isAdmin, err := callerIsAdmin(r, h.store)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var servers []*store.Server
+	if isAdmin {
 		servers, err = h.store.ListServers(r.Context())
 	} else {
 		servers, err = h.store.ListServersForUser(r.Context(), claims.UserID)
@@ -245,7 +247,7 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 	// members/me round trip per row. Admins and owners resolve to the full set,
 	// mirroring requireServerPermission's bypasses.
 	granted := map[string][]string{}
-	if claims.Role != "admin" {
+	if !isAdmin {
 		granted, err = h.store.AllServerPermissionsForUser(r.Context(), claims.UserID)
 		if err != nil {
 			writeServerError(w, r, "list server permissions", err)
@@ -264,7 +266,7 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		perms := granted[srv.ID]
-		if claims.Role == "admin" || srv.OwnerID == claims.UserID {
+		if isAdmin || srv.OwnerID == claims.UserID {
 			perms = store.AllServerPermissions()
 		}
 		if machine != nil {
