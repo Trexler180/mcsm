@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -21,6 +22,13 @@ type AuthHandlers struct {
 	tickets      *auth.TicketStore
 	ipThrottle   *auth.LoginThrottle
 	acctThrottle *auth.LoginThrottle
+	notifier     *notify.Engine
+}
+
+// WithNotifier enables the new-device sign-in alert.
+func (h *AuthHandlers) WithNotifier(n *notify.Engine) *AuthHandlers {
+	h.notifier = n
+	return h
 }
 
 const refreshCookieName = "mcsm_refresh_token"
@@ -159,8 +167,13 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = h.store.UpdateUserLastLogin(r.Context(), user.ID)
+	device := deviceFingerprint(userAgent(r))
+	newDevice := h.isNewDevice(r, user.ID, device)
 	// Login is a public route (no JWT claims yet), so attribute directly.
-	h.store.LogAction(r.Context(), user.ID, "", "auth.login", clientIP(r), nil)
+	h.store.LogAction(r.Context(), user.ID, "", "auth.login", clientIP(r), map[string]any{"device": device})
+	if newDevice {
+		h.notifier.EmitToUser(user.ID, notify.NewDeviceLogin(clientIP(r), deviceLabel(userAgent(r))))
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": accessToken,
@@ -424,4 +437,56 @@ func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
 
 func requestIsHTTPS(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// deviceFingerprint identifies the kind of browser and system a sign-in came
+// from, stable across browser updates: the user agent with its version
+// numbers removed, hashed so the audit log carries no raw user agent.
+func deviceFingerprint(ua string) string {
+	stripped := strings.Map(func(r rune) rune {
+		if (r >= '0' && r <= '9') || r == '.' || r == '_' {
+			return -1
+		}
+		return r
+	}, strings.ToLower(ua))
+	sum := sha256.Sum256([]byte(stripped))
+	return hex.EncodeToString(sum[:8])
+}
+
+// deviceLabel is a short readable description of a user agent for the alert.
+func deviceLabel(ua string) string {
+	lower := strings.ToLower(ua)
+	browser := "a browser"
+	for _, b := range []struct{ token, name string }{
+		{"edg/", "Edge"}, {"firefox/", "Firefox"}, {"chrome/", "Chrome"}, {"safari/", "Safari"},
+	} {
+		if strings.Contains(lower, b.token) {
+			browser = b.name
+			break
+		}
+	}
+	system := ""
+	for _, o := range []struct{ token, name string }{
+		{"windows", "Windows"}, {"android", "Android"}, {"iphone", "iOS"}, {"ipad", "iPadOS"},
+		{"mac os", "macOS"}, {"linux", "Linux"},
+	} {
+		if strings.Contains(lower, o.token) {
+			system = o.name
+			break
+		}
+	}
+	if system == "" {
+		return browser
+	}
+	return browser + " on " + system
+}
+
+// isNewDevice reports whether this account has signed in before, but never
+// from this kind of device. A first-ever sign-in is not "new device".
+func (h *AuthHandlers) isNewDevice(r *http.Request, userID, device string) bool {
+	if h.notifier == nil {
+		return false
+	}
+	before, seen, err := h.store.LoginDeviceHistory(r.Context(), userID, device)
+	return err == nil && before && !seen
 }

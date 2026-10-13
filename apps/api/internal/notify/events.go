@@ -57,6 +57,9 @@ const (
 	EventMCPActionResolved  = "mcp.action_resolved"
 	EventTaskFailed         = "schedule.failed"
 	EventOperationAborted   = "operation.interrupted"
+	EventServerTPSLow       = "server.tps_low"
+	EventModUpdateReverted  = "mod.update_reverted"
+	EventAuthNewDevice      = "auth.new_device"
 )
 
 // EventDef is the static description of an event type, surfaced to the frontend
@@ -90,6 +93,9 @@ var Catalog = []EventDef{
 	{EventBackupSuccess, "Backup succeeded", "A backup completed successfully.", SeverityInfo, ScopeServer, false},
 	{EventBackupFailed, "Backup failed", "A backup did not complete.", SeverityWarning, ScopeServer, false},
 	{EventServerPerformance, "Server under sustained load", "CPU or memory stayed above the alert threshold for several consecutive samples.", SeverityWarning, ScopeServer, false},
+	{EventServerTPSLow, "Server running slowly", "The helper mod reported fewer than 18 ticks per second for several minutes, so the game is lagging.", SeverityWarning, ScopeServer, false},
+	{EventModUpdateReverted, "Mod update reverted", "A safe update broke the server's boot, so the mod was put back to its previous version and the new one skipped.", SeverityWarning, ScopeServer, false},
+	{EventAuthNewDevice, "Sign-in from a new device", "Your account signed in from a browser or device it has not used before.", SeverityWarning, ScopeGlobal, true},
 	{EventNodeOffline, "Node offline", "An agent node stopped responding to heartbeats.", SeverityWarning, ScopeNode, false},
 	{EventNodeOnline, "Node online", "An agent node started responding again.", SeverityInfo, ScopeNode, false},
 	{EventNodeDiskLow, "Node disk low", "A backup left the node's disk nearly full.", SeverityWarning, ScopeNode, false},

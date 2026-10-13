@@ -245,3 +245,39 @@ func OperationInterrupted(serverID, serverName, kind string) Event {
 		Data:       map[string]any{"kind": kind},
 	}
 }
+
+// ServerTPSLow reports a server whose game loop has fallen behind.
+func ServerTPSLow(serverID, serverName string, tps float64, minutes int) Event {
+	return Event{
+		Type: EventServerTPSLow, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s is running slowly", display(serverName, serverID)),
+		Body:  fmt.Sprintf("Ticks per second have been below 18 for about %d minutes (now %.1f of 20).", minutes, tps),
+		Data:  map[string]any{"tps": tps},
+	}
+}
+
+// ModUpdateReverted reports an update the safe-update run took back out.
+func ModUpdateReverted(serverID, serverName, mod, version, reason string) Event {
+	return Event{
+		Type: EventModUpdateReverted, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s update reverted on %s", mod, display(serverName, serverID)),
+		Body:  fmt.Sprintf("Version %s broke the server's boot (%s), so the previous version was restored and %s will be skipped.", version, reason, version),
+		Data:  map[string]any{"mod": mod, "skipped_version": version},
+	}
+}
+
+// NewDeviceLogin warns an account owner of a sign-in from a device the
+// account has not used before. Sent only to that person.
+func NewDeviceLogin(ip, device string) Event {
+	body := "Your account signed in from a browser or device it has not used before"
+	if ip != "" {
+		body += " (from " + ip + ")"
+	}
+	body += ". If this wasn't you, change your password and review your sessions."
+	return Event{
+		Type:  EventAuthNewDevice,
+		Title: "New sign-in to your account",
+		Body:  body,
+		Data:  map[string]any{"ip": ip, "device": device},
+	}
+}

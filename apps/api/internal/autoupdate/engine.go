@@ -376,6 +376,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 			return
 		}
 		e.markSkipped(ctx, srv.ID, cand, h.reason)
+		e.notifier.Emit(notify.ModUpdateReverted(srv.ID, srv.Name, cand.mod.Name, cand.target.VersionNumber, h.reason))
 		cand.step.Status = stepRevertedSkipped
 		cand.step.Error = h.reason
 
@@ -441,6 +442,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 			return
 		}
 		e.markSkipped(ctx, srv.ID, cand, ih.reason)
+		e.notifier.Emit(notify.ModUpdateReverted(srv.ID, srv.Name, cand.mod.Name, cand.target.VersionNumber, ih.reason))
 		cand.step.Status = stepRevertedSkipped
 		cand.step.Error = ih.reason
 		if rb := e.startAndWatch(ctx, c, srv, nil); !rb.ok {

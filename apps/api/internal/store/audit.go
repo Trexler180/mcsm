@@ -251,3 +251,15 @@ func likePrefix(p string) string {
 func sqliteTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05")
 }
+
+// LoginDeviceHistory reports whether the user has any recorded sign-in, and
+// whether one came from this device fingerprint.
+func (s *Store) LoginDeviceHistory(ctx context.Context, userID, device string) (hasLogins, seen bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) > 0,
+		        COALESCE(SUM(json_extract(detail, '$.device') = ?), 0) > 0
+		   FROM audit_log WHERE user_id = ? AND action = 'auth.login'`,
+		device, userID,
+	).Scan(&hasLogins, &seen)
+	return hasLogins, seen, err
+}

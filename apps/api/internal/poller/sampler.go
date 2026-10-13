@@ -44,11 +44,12 @@ type sampler struct {
 	highStreak map[string]int
 	lowTPS     map[string]int
 	alerted    map[string]bool
+	tpsAlerted map[string]bool
 	rounds     int
 }
 
 func newSampler() *sampler {
-	return &sampler{highStreak: map[string]int{}, lowTPS: map[string]int{}, alerted: map[string]bool{}}
+	return &sampler{highStreak: map[string]int{}, lowTPS: map[string]int{}, alerted: map[string]bool{}, tpsAlerted: map[string]bool{}}
 }
 
 type sampleResult struct {
@@ -192,13 +193,17 @@ func (sm *sampler) trackLoad(srv *store.Server, stats *agent.ServerStats, tps *f
 	case memPct >= memHighPct:
 		reason = fmt.Sprintf("memory at %.0f%% of its %d MB limit", memPct, memLimit)
 	}
+	// A lagging game loop is its own alert, raised once per excursion.
 	if tps != nil && *tps < tpsLow {
 		sm.lowTPS[srv.ID]++
-		if reason == "" && sm.lowTPS[srv.ID] >= lowTPSSampleCount {
-			reason = fmt.Sprintf("running slowly at %.1f ticks per second", *tps)
+		if sm.lowTPS[srv.ID] >= lowTPSSampleCount && !sm.tpsAlerted[srv.ID] {
+			sm.tpsAlerted[srv.ID] = true
+			mins := lowTPSSampleCount * sampleEvery * int(pollInterval/time.Second) / 60
+			engine.Emit(notify.ServerTPSLow(srv.ID, srv.Name, *tps, mins))
 		}
 	} else {
 		sm.lowTPS[srv.ID] = 0
+		sm.tpsAlerted[srv.ID] = false
 	}
 
 	if reason == "" {
@@ -208,7 +213,7 @@ func (sm *sampler) trackLoad(srv *store.Server, stats *agent.ServerStats, tps *f
 	}
 
 	sm.highStreak[srv.ID]++
-	if (sm.highStreak[srv.ID] >= highSampleCount || sm.lowTPS[srv.ID] >= lowTPSSampleCount) && !sm.alerted[srv.ID] {
+	if sm.highStreak[srv.ID] >= highSampleCount && !sm.alerted[srv.ID] {
 		sm.alerted[srv.ID] = true
 		mins := highSampleCount * sampleEvery * int(pollInterval/time.Second) / 60
 		engine.Emit(notify.ServerPerformance(srv.ID, srv.Name,

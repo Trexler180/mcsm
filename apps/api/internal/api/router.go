@@ -164,6 +164,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// holding a session cannot multiply their guesses across endpoints.
 	passwordThrottles := handlers.NewPasswordThrottles()
 	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets, passwordThrottles)
+	if notifier != nil {
+		authH.WithNotifier(notifier.Engine)
+	}
 	apiKeyH := handlers.NewAPIKeyHandlers(s, passwordThrottles)
 	nodeH := handlers.NewNodeHandlers(s, passwordThrottles)
 	serverH := handlers.NewServerHandlers(s, serverRoot).WithLifecycle(svc.Life)
