@@ -214,6 +214,8 @@ type Instance struct {
 	// fresh roster signal. It lets API calls briefly wait for `/list` output.
 	playersChanged  chan struct{}
 	lastListRefresh time.Time
+	// listConfirmed is when a `list` answer last restated the whole roster.
+	listConfirmed time.Time
 
 	// Startup-failure detection. Both detectors are fed every console line
 	// (under conflictMu since stdout/stderr pipes run concurrently): detector
@@ -331,6 +333,7 @@ func (inst *Instance) start() error {
 		return fmt.Errorf("create runtime dir: %w", err)
 	}
 	_ = os.Remove(inst.logPath)
+	_ = os.Remove(previousLogPath(inst.logPath))
 	fifoPath := consoleFifoPath(inst.serverRoot, inst.ID)
 	_ = os.Remove(fifoPath)
 
@@ -509,6 +512,11 @@ const reattachOnlineAfter = 15 * time.Minute
 // "Done (" startup marker. Runs once per reattach, so a linear read is fine
 // even on chatty modded logs.
 func logContainsDone(path string) bool {
+	// The marker may have been rotated into the previous generation.
+	return fileContainsDone(path) || fileContainsDone(previousLogPath(path))
+}
+
+func fileContainsDone(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -612,11 +620,14 @@ func (inst *Instance) tailLog(start int64) {
 		}
 	}
 	defer f.Close()
+	var pos int64
 	if start > 0 {
 		if _, err := f.Seek(start, io.SeekStart); err != nil {
 			// Tailing from 0 replays old console lines into the ring, which
 			// beats silently dropping the tail altogether.
 			log.Printf("[%s] tail: seek to %d failed (%v); replaying from start", inst.ID, start, err)
+		} else {
+			pos = start
 		}
 	}
 
@@ -624,6 +635,7 @@ func (inst *Instance) tailLog(start int64) {
 	var pending string
 	for {
 		chunk, readErr := reader.ReadString('\n')
+		pos += int64(len(chunk))
 		pending += chunk
 		if strings.HasSuffix(pending, "\n") {
 			inst.consumeLine(strings.TrimRight(pending, "\r\n"), "stdout")
@@ -633,6 +645,12 @@ func (inst *Instance) tailLog(start int64) {
 		// No complete line yet. If the process has finalized, drain whatever
 		// remains once and stop; otherwise wait for more output.
 		if readErr == io.EOF {
+			if pending == "" && inst.checkConsoleLog(pos) == logRestart {
+				if _, err := f.Seek(0, io.SeekStart); err == nil {
+					reader.Reset(f)
+					pos = 0
+				}
+			}
 			select {
 			case <-inst.detaching:
 				return
@@ -658,23 +676,6 @@ func (inst *Instance) tailLogFromEnd() {
 		size = fi.Size()
 	}
 	inst.tailLog(size)
-}
-
-// readLastLines returns up to n trailing lines of the file (empty on error).
-func readLastLines(path string, n int) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	// Drop a trailing empty element from a final newline.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines
 }
 
 // consumeLine handles one console line: broadcast it, scan for startup-failure
@@ -786,6 +787,7 @@ func (inst *Instance) markPlayersChangedLocked() {
 func (inst *Instance) replacePlayers(names []string, now time.Time) {
 	inst.playersMu.Lock()
 	defer inst.playersMu.Unlock()
+	inst.listConfirmed = now
 
 	previous := make(map[string]time.Time, len(inst.players))
 	for name, joined := range inst.players {
@@ -818,6 +820,14 @@ func (inst *Instance) Players() []Player {
 // RefreshPlayers asks the Minecraft server for its authoritative player list
 // and briefly waits for the console response before returning the latest known
 // roster. The refresh is throttled because the web UI polls this endpoint.
+// listRetryInterval spaces out `list` while the roster is unconfirmed (the
+// server may not answer while still starting); listReconcileInterval is how
+// often a confirmed roster is re-checked against the server.
+const (
+	listRetryInterval     = 5 * time.Second
+	listReconcileInterval = 2 * time.Minute
+)
+
 func (inst *Instance) RefreshPlayers(timeout time.Duration) []Player {
 	status := inst.statusInfo().Status
 	if status != StatusStarting && status != StatusOnline {
@@ -827,7 +837,12 @@ func (inst *Instance) RefreshPlayers(timeout time.Duration) []Player {
 	now := time.Now()
 	inst.playersMu.Lock()
 	waitCh := inst.playersChanged
-	shouldRefresh := now.Sub(inst.lastListRefresh) >= 2*time.Second
+	// Join and leave lines keep the roster current between checks, so `list`
+	// is typed into the console only to establish the roster (after a start or
+	// a reattach) and to re-check it now and then — not on every poll, where it
+	// filled the console of every server without the helper mod.
+	due := inst.listConfirmed.IsZero() || now.Sub(inst.listConfirmed) >= listReconcileInterval
+	shouldRefresh := due && now.Sub(inst.lastListRefresh) >= listRetryInterval
 	if shouldRefresh {
 		inst.lastListRefresh = now
 	}

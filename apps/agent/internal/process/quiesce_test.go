@@ -73,11 +73,13 @@ func newConsoleServer(t *testing.T, m *Manager, id string) *consoleServer {
 	t.Helper()
 	cs := &consoleServer{}
 	inst := &Instance{
-		ID:          id,
-		status:      StatusOnline,
-		done:        make(chan struct{}),
-		broadcastCh: make(chan ConsoleEvent, 16),
-		subs:        map[chan ConsoleEvent]struct{}{},
+		ID:             id,
+		status:         StatusOnline,
+		done:           make(chan struct{}),
+		broadcastCh:    make(chan ConsoleEvent, 16),
+		subs:           map[chan ConsoleEvent]struct{}{},
+		players:        map[string]time.Time{},
+		playersChanged: make(chan struct{}),
 	}
 	inst.stdin = cs
 	cs.inst = inst
