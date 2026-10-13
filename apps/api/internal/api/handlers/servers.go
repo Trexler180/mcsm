@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/api/apierr"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/operations"
@@ -1040,21 +1041,26 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 // node's own refusal.
 func writeLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
 	if busy, ok := store.AsServerBusy(err); ok {
-		writeJSON(w, http.StatusConflict, map[string]any{
+		// operation is kept at the top level for clients written against it,
+		// and also carried in details like every other envelope.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"error":     busy.Error(),
 			"code":      "server_busy",
 			"operation": busy.Current,
+			"details":   map[string]any{"operation": busy.Current},
 			"retryable": true,
 		})
 		return
 	}
 	if errors.Is(err, lifecycle.ErrNodeUnreachable) {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "code": "node_unreachable", "retryable": true})
+		apierr.WriteBody(w, http.StatusBadGateway, apierr.Body{Error: err.Error(), Code: "node_unreachable", Retryable: true})
 		return
 	}
 	if err.Error() == "node not found" {
 		writeCodedError(w, http.StatusBadGateway, "node_unreachable", "the server's node is not registered")
 		return
 	}
-	writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "code": "agent_error"})
+	apierr.WriteBody(w, http.StatusBadGateway, apierr.Body{Error: err.Error(), Code: "agent_error"})
 }

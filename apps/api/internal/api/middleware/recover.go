@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/mcsm/api/internal/api/apierr"
 )
 
 // Recoverer turns a panic in any later handler into a logged 500. It logs with
@@ -31,9 +33,7 @@ func Recoverer(next http.Handler) http.Handler {
 			)
 			// A WebSocket that already hijacked the connection cannot be
 			// written to; the header write below is then a no-op.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":"internal error","code":"internal"}`))
+			apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
 		}()
 		next.ServeHTTP(w, r)
 	})

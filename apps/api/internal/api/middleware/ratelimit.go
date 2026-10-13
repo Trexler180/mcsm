@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mcsm/api/internal/api/apierr"
 	"github.com/mcsm/api/internal/auth"
 )
 
@@ -53,11 +54,8 @@ func (rl *RateLimiter) KeyedMiddleware(key func(*http.Request) string) func(http
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !rl.allow(key(r)) {
-				h := w.Header()
-				h.Set("Retry-After", "1")
-				h.Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
+				w.Header().Set("Retry-After", "1")
+				apierr.Write(w, http.StatusTooManyRequests, "", "rate limit exceeded")
 				return
 			}
 			next.ServeHTTP(w, r)

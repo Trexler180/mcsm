@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mcsm/api/internal/api/apierr"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 )
@@ -195,7 +196,5 @@ func requireHuman(next http.Handler) http.Handler {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	apierr.Write(w, status, "", msg)
 }

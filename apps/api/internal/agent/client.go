@@ -754,7 +754,7 @@ func (c *Client) ProxyHTTP(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"proxy error"}`, http.StatusBadGateway)
+		writeProxyError(w, "proxy error")
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -767,7 +767,7 @@ func (c *Client) ProxyHTTP(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		http.Error(w, `{"error":"agent unreachable"}`, http.StatusBadGateway)
+		writeProxyError(w, "agent unreachable")
 		return
 	}
 	defer resp.Body.Close()
@@ -804,4 +804,12 @@ func checkError(resp *http.Response) error {
 		return fmt.Errorf("agent: HTTP %d", resp.StatusCode)
 	}
 	return fmt.Errorf("agent: %s", e["error"])
+}
+
+// writeProxyError answers a proxied request the node never answered, in the
+// API's error envelope.
+func writeProxyError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadGateway)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg, "code": "node_unreachable", "retryable": true})
 }

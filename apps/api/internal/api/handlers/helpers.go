@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mcsm/api/internal/api/apierr"
 	apimw "github.com/mcsm/api/internal/api/middleware"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
@@ -23,8 +24,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeError answers in the API's error envelope with the status's default
+// code (see apierr). Prefer writeCodedError when the client can act on a more
+// specific code.
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	apierr.Write(w, status, "", msg)
 }
 
 // writeServerError logs the real error server-side (with request context) and
@@ -32,7 +36,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // paths, agent URLs — never leak to a caller probing the API.
 func writeServerError(w http.ResponseWriter, r *http.Request, context string, err error) {
 	slog.Error("request failed", "context", context, "err", err, "path", r.URL.Path, "method", r.Method)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+	apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
 }
 
 // tooManyRequests writes a 429 with a Retry-After hint.
@@ -166,7 +170,7 @@ func callerIsAdmin(r *http.Request, s *store.Store) (bool, error) {
 // writeCodedError writes an error with a stable machine-readable code next to
 // the human message, so a client can decide what to do without parsing prose.
 func writeCodedError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+	apierr.Write(w, status, code, msg)
 }
 
 // currentSessionID is the session the caller's access token belongs to, or ""
@@ -181,9 +185,5 @@ func currentSessionID(r *http.Request) string {
 // writeFieldError rejects a request because of one input field, naming it so a
 // form can mark the field rather than show a banner.
 func writeFieldError(w http.ResponseWriter, field, msg string) {
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"error": msg,
-		"code":  "validation",
-		"field": field,
-	})
+	apierr.WriteBody(w, http.StatusBadRequest, apierr.Body{Error: msg, Code: apierr.CodeValidation, Field: field})
 }

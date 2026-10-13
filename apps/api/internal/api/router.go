@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/mcsm/api/internal/api/apierr"
 	"github.com/mcsm/api/internal/api/handlers"
 	apimw "github.com/mcsm/api/internal/api/middleware"
 	"github.com/mcsm/api/internal/api/ws"
@@ -123,6 +124,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	}
 
 	r := chi.NewRouter()
+	r.NotFound(apierr.NotFound)
+	r.MethodNotAllowed(apierr.MethodNotAllowed)
 	// Request ids come first so everything after, including a recovered
 	// panic, is logged with one.
 	r.Use(apimw.RequestID)

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/mcsm/api/internal/api/apierr"
 )
 
 type ctxKey int
@@ -172,11 +174,11 @@ func AdminOnly(next http.Handler) http.Handler {
 		// A machine key never holds administrative authority, however
 		// privileged its owner is: the key's bounds are the ceiling.
 		if MachineFrom(r.Context()) != nil {
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			apierr.Write(w, http.StatusForbidden, "", "forbidden")
 			return
 		}
 		if claims == nil || claims.Role != "admin" {
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			apierr.Write(w, http.StatusForbidden, "", "forbidden")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -191,9 +193,10 @@ func ClaimsFrom(ctx context.Context) *Claims {
 // writeUnauth refuses a request. code tells a client what to do about it:
 // token_expired means refresh and retry, session_revoked means sign in again.
 func writeUnauth(w http.ResponseWriter, code string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":"unauthorized","code":"` + code + `"}`))
+	// token_expired is the one an automatic refresh-and-retry can fix.
+	apierr.WriteBody(w, http.StatusUnauthorized, apierr.Body{
+		Error: "unauthorized", Code: code, Retryable: code == "token_expired",
+	})
 }
 
 // WithClaims attaches user claims to a context. It authenticates nothing: it is
