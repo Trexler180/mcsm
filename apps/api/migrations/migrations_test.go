@@ -9,7 +9,7 @@ import (
 )
 
 func TestMigrationsApplyFromEmptySQLite(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestMigrationsApplyFromEmptySQLite(t *testing.T) {
 // must survive the upgrade and be unusable afterwards (empty capabilities, no
 // expiry), and the rollback must not take the audit history with it.
 func TestAgentAccessKeysMigrationIsAdditiveAndReversible(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestAgentAccessKeysMigrationIsAdditiveAndReversible(t *testing.T) {
 // upgrades and configures nothing must keep the 027 behavior exactly — every
 // pre-existing grant still demands a step-up and auto-approves nothing.
 func TestMCPApprovalSettingsMigrationDefaultsToSecure(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestMCPApprovalSettingsMigrationDefaultsToSecure(t *testing.T) {
 // index still references it — so the Down leg has to drop servers_folder_id
 // first. Rolling down and back up must also leave existing servers intact.
 func TestServerFoldersMigrationRollsBack(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestServerFoldersMigrationRollsBack(t *testing.T) {
 // feature — without which the alert exists but fires for nobody — while leaving
 // anyone who already has a rule for it alone, including one they disabled.
 func TestJoinDeniedSubscriptionBackfill(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestJoinDeniedSubscriptionBackfill(t *testing.T) {
 // Migration 018 must remove duplicate managed-mod rows (keeping the oldest per
 // project+dir) and then reject new duplicates via the unique index.
 func TestModProjectUniqueMigrationDedupes(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestModProjectUniqueMigrationDedupes(t *testing.T) {
 // only by case must survive, with the newer one parked under an address an
 // administrator can see and fix, and the retired operator role folds to user.
 func TestSessionsAndEmailsMigrationDedupes(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func TestSessionsAndEmailsMigrationDedupes(t *testing.T) {
 // Migration 034 detaches audit rows from the server they describe. It must
 // carry existing rows across with their server's name, and roll back cleanly.
 func TestAuditKeepsDeletedServersMigration(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}

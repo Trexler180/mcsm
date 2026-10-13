@@ -45,7 +45,7 @@ type keyHandlerEnv struct {
 // of them.
 func newKeyHandlerEnv(t *testing.T) *keyHandlerEnv {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}

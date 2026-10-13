@@ -168,11 +168,15 @@ func main() {
 	//    fsyncs at checkpoint instead of every commit, which is markedly
 	//    faster for writes and cannot corrupt the DB (a crash may at most
 	//    lose the last committed transaction, not integrity).
+	//  - _time_format=datetime, _timezone=UTC: Go times are written exactly as
+	//    CURRENT_TIMESTAMP writes them (UTC "YYYY-MM-DD HH:MM:SS"), so every
+	//    stored time compares correctly with every other, whatever the host's
+	//    zone. Older rows are rewritten to match by store.NormalizeTimes.
 	//  - _txlock=immediate: transactions take the write lock when they begin.
 	//    A deferred BEGIN that reads and then writes fails at once with
 	//    SQLITE_BUSY_SNAPSHOT if another connection committed in between, and
 	//    busy_timeout does not cover that case; an immediate one waits its turn.
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_txlock=immediate",
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_txlock=immediate&_time_format=datetime&_timezone=UTC",
 		url.PathEscape(dbPath))
 
 	db, err := sql.Open("sqlite", dsn)
@@ -203,6 +207,12 @@ func main() {
 		log.Printf("encryption upgrade: %v", err)
 	} else if n > 0 {
 		log.Printf("re-encrypted %d stored secret(s) bound to their rows", n)
+	}
+	// Rewrite times stored before the database used one format for all of them.
+	if n, err := s.NormalizeTimes(ctx); err != nil {
+		log.Printf("time normalization: %v", err)
+	} else if n > 0 {
+		log.Printf("normalized %d stored time(s) to UTC", n)
 	}
 
 	// Seed admin user on first boot

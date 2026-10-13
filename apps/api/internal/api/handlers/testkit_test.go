@@ -30,7 +30,7 @@ func newTestStore(t *testing.T) *store.Store {
 func newTestStoreDB(t *testing.T) (*store.Store, *sql.DB) {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
-	db, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
