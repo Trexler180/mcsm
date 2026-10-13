@@ -2,6 +2,7 @@ package helpermod
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,9 @@ import (
 )
 
 var embeddedJar = []byte("embedded-build-bytes")
+
+// testKey signs every index the tests publish, as the release process does.
+var testPub, testKey, _ = ed25519.GenerateKey(nil)
 
 func digest(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -50,6 +54,10 @@ func indexServer(t *testing.T, builds func(baseURL string) Index, jars map[strin
 		}
 		_, _ = w.Write(body)
 	})
+	mux.HandleFunc("/index.json.sig", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal(builds(srv.URL))
+		_, _ = w.Write(SignIndex(testKey, body))
+	})
 
 	for name, data := range jars {
 		payload := data
@@ -68,6 +76,7 @@ func newResolver(t *testing.T, srv *httptest.Server, indexPath string) *Resolver
 		CacheDir:    t.TempDir(),
 		MaxProtocol: 1,
 		Fallback:    testFallback(),
+		PublicKeys:  []ed25519.PublicKey{testPub},
 	}
 	if srv != nil {
 		r.IndexURL = srv.URL + indexPath
@@ -180,6 +189,7 @@ func TestResolveUsesDiskCacheOnSecondCall(t *testing.T) {
 		MaxProtocol: 1,
 		Fallback:    testFallback(),
 		HTTPClient:  srv.Client(),
+		PublicKeys:  []ed25519.PublicKey{testPub},
 	}
 	got, err := r2.Resolve(context.Background(), "fabric", "26.3")
 	if err != nil {
@@ -301,6 +311,9 @@ func TestResolveUsesStaleIndexWhenOffline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cacheDir, indexCacheName), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(cacheDir, indexCacheName+SignatureSuffix), SignIndex(testKey, body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// The jar is already cached from that earlier successful run.
 	if err := os.WriteFile(filepath.Join(cacheDir, jarCacheName(digest(remote))), remote, 0o644); err != nil {
 		t.Fatal(err)
@@ -312,6 +325,7 @@ func TestResolveUsesStaleIndexWhenOffline(t *testing.T) {
 		MaxProtocol: 1,
 		Fallback:    testFallback(),
 		HTTPClient:  &http.Client{Timeout: 2 * time.Second},
+		PublicKeys:  []ed25519.PublicKey{testPub},
 	}
 
 	got, err := r.Resolve(context.Background(), "fabric", "26.3")

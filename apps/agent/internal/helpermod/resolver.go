@@ -2,6 +2,7 @@ package helpermod
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -65,6 +66,14 @@ type Resolver struct {
 	MaxProtocol int
 	// Fallback is the embedded build.
 	Fallback Fallback
+
+	// PublicKeys verify the index signature (see SignatureSuffix). An index,
+	// fetched or cached, is used only when one of them signed it.
+	PublicKeys []ed25519.PublicKey
+	// AllowUnsigned accepts an index with no valid signature. It exists for
+	// operators who serve their own index and accept that its host chooses
+	// the jars; it is never the default.
+	AllowUnsigned bool
 
 	HTTPClient *http.Client
 	// Now is injectable for tests.
@@ -184,18 +193,28 @@ func (r *Resolver) loadIndex(ctx context.Context) (idx *Index, consulted bool) {
 	}
 
 	if data, err := r.fetch(ctx, r.IndexURL, maxIndexBytes); err == nil {
-		if parsed, err := ParseIndex(data); err == nil {
-			r.index = parsed
-			r.indexFetched = r.now()
-			r.writeCache(indexCacheName, data)
-			return parsed, true
+		sig, _ := r.fetch(ctx, r.IndexURL+SignatureSuffix, maxSignatureBytes)
+		if r.trusted(data, sig) {
+			if parsed, err := ParseIndex(data); err == nil {
+				r.index = parsed
+				r.indexFetched = r.now()
+				r.writeCache(indexCacheName, data)
+				r.writeCache(indexCacheName+SignatureSuffix, sig)
+				return parsed, true
+			}
 		}
 	}
 
 	// Network failed or served something unusable. A previously cached index is
 	// still better information than none — a host that has been offline for a
-	// week should keep installing the build it last knew about.
+	// week should keep installing the build it last knew about. The cached copy
+	// is verified again: the cache directory is writable by anything running as
+	// the agent's user, and a rewritten index would choose the jar.
 	if data, err := r.readCache(indexCacheName); err == nil {
+		sig, _ := r.readCache(indexCacheName + SignatureSuffix)
+		if !r.trusted(data, sig) {
+			data = nil
+		}
 		if parsed, err := ParseIndex(data); err == nil {
 			r.index = parsed
 			// Deliberately not stamping indexFetched: this is stale data, so the
@@ -211,9 +230,18 @@ func (r *Resolver) loadIndex(ctx context.Context) (idx *Index, consulted bool) {
 }
 
 const (
-	indexCacheName = "index.json"
-	maxIndexBytes  = 1 << 20
+	indexCacheName    = "index.json"
+	maxIndexBytes     = 1 << 20
+	maxSignatureBytes = 1 << 10
 )
+
+// trusted reports whether an index may be used.
+func (r *Resolver) trusted(index, sig []byte) bool {
+	if r.AllowUnsigned {
+		return true
+	}
+	return len(r.PublicKeys) > 0 && VerifyIndex(r.PublicKeys, index, sig)
+}
 
 // fetchJar returns the build's jar, from disk cache when possible.
 func (r *Resolver) fetchJar(ctx context.Context, b *Build) (*Resolved, error) {

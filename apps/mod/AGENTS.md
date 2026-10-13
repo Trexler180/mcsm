@@ -67,15 +67,17 @@ code you hope compiles.**
 6. **Verify reproducibility.** Build twice from clean and confirm identical
    sha256. Non-reproducible jars break the manager's verification.
 
-7. **Publish.** Tag, let CI build and attach the jar to a GitHub release, and
-   regenerate `versions.json`. See `INDEX-FORMAT.md` — especially the rules
-   about never mutating a released entry.
+7. **Publish.** Tag, let CI build and attach the jar to a GitHub release,
+   regenerate `versions.json`, and sign it (`versions.json.sig`). See
+   `INDEX-FORMAT.md` — especially the rules about never mutating a released
+   entry, and the signature section.
 
 ## Definition of done
 
 - `./gradlew build` passes.
 - Two clean builds produce identical sha256.
 - `versions.json` has a **new** entry; no existing entry was modified or removed.
+- `versions.json.sig` verifies against the release key.
 - `minecraft_versions` lists only versions actually built and tested against.
 - `protocol_version` is unchanged unless the wire protocol genuinely changed.
 - Fixtures in `fixtures/` are untouched, or changed deliberately with the

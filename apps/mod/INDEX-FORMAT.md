@@ -8,6 +8,35 @@ as `https://raw.githubusercontent.com/<owner>/<repo>/main/versions.json`, or a
 release asset. With that variable unset the agent uses only the build embedded in
 its binary.
 
+## Signature
+
+The index names the digest of every jar an agent installs into a server, so
+whoever can change the index chooses that jar. A digest only proves the jar
+matches the index. The index itself is therefore signed:
+
+- `versions.json.sig` sits beside the index (`<index URL>.sig`) and holds a
+  base64 ed25519 signature over the exact bytes of `versions.json`.
+- Agents pin the release public key in `MCSM_HELPER_INDEX_PUBKEY`
+  (comma-separated, so a key can be rotated by publishing under the new one
+  while agents trust both).
+- An index whose signature does not verify is treated as **unreachable**, not as
+  "no build": the installed jar is left alone, exactly as for a network failure.
+- The cached copy on disk is verified again on every read.
+- An operator serving an unsigned index of their own sets
+  `MCSM_HELPER_INDEX_INSECURE=1` and accepts that the index host chooses the
+  jars. Without a key or that opt-in, a configured index URL is ignored.
+
+Signing uses `apps/agent/cmd/helper-index`:
+
+```bash
+helper-index keygen -out release                  # once; keep release.key secret
+helper-index sign -key release.key versions.json  # every publish, after generating the index
+helper-index verify -pubkey <base64> versions.json
+```
+
+The private key belongs in CI secrets, never in the repository. Sign after the
+index is generated from the uploaded artifacts, and publish both files together.
+
 Consumer: `apps/agent/internal/helpermod`.
 
 ---
@@ -104,3 +133,5 @@ not "delete everyone's mod".
    Minecraft version.
 4. **Generate this file from the build**, never hand-edit it. The digest and size
    must come from the artifact that was actually uploaded.
+5. **Sign every published version of the file** and publish `versions.json.sig`
+   with it. An unsigned or mis-signed index is ignored by agents.

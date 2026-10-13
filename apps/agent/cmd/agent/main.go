@@ -19,6 +19,7 @@ import (
 	agentapi "github.com/mcsm/agent/internal/api"
 	"github.com/mcsm/agent/internal/api/handlers"
 	"github.com/mcsm/agent/internal/hardening"
+	"github.com/mcsm/agent/internal/helpermod"
 	"github.com/mcsm/agent/internal/link"
 	"github.com/mcsm/agent/internal/metrics"
 	"github.com/mcsm/agent/internal/process"
@@ -178,10 +179,27 @@ func main() {
 	helperResolver := process.EmbeddedOnlyResolver()
 	helperResolver.IndexURL = os.Getenv("MCSM_HELPER_INDEX_URL")
 	helperResolver.CacheDir = filepath.Join(serverRoot, ".mcsm-run", "helper-cache")
-	process.HelperModResolver = helperResolver
-	if helperResolver.IndexURL != "" {
-		log.Printf("helper mod index: %s", helperResolver.IndexURL)
+	// The index chooses the jar installed into every helper-enabled server, so
+	// it must be signed by a release key the operator pins here. Serving an
+	// unsigned index of your own is possible, but has to be said out loud.
+	keys, err := helpermod.ParsePublicKeys(os.Getenv("MCSM_HELPER_INDEX_PUBKEY"))
+	if err != nil {
+		log.Fatalf("MCSM_HELPER_INDEX_PUBKEY: %v", err)
 	}
+	helperResolver.PublicKeys = keys
+	helperResolver.AllowUnsigned = os.Getenv("MCSM_HELPER_INDEX_INSECURE") == "1"
+	if helperResolver.IndexURL != "" {
+		switch {
+		case helperResolver.AllowUnsigned:
+			log.Printf("helper mod index: %s (MCSM_HELPER_INDEX_INSECURE=1: signatures are not checked)", helperResolver.IndexURL)
+		case len(keys) == 0:
+			log.Printf("helper mod index %s ignored: set MCSM_HELPER_INDEX_PUBKEY to the release key that signs it (or MCSM_HELPER_INDEX_INSECURE=1); using the embedded build only", helperResolver.IndexURL)
+			helperResolver.IndexURL = ""
+		default:
+			log.Printf("helper mod index: %s (signature required, %d key(s))", helperResolver.IndexURL, len(keys))
+		}
+	}
+	process.HelperModResolver = helperResolver
 
 	// Helper-mod link. Servers without the mod never touch this and keep using
 	// the log-scraping and stdin paths.
