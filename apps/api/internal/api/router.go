@@ -412,12 +412,15 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 				r.With(requireAdmin(s)).Post("/", folderH.Create)
 				r.With(requireAdmin(s)).Put("/{id}", folderH.Update)
 				r.With(requireAdmin(s)).Delete("/{id}", folderH.Delete)
+				r.With(requireAdmin(s)).Post("/restore", folderH.Restore)
 			})
 
 			// Servers
 			r.Route("/servers", func(r chi.Router) {
 				r.Get("/", serverH.List)
 				r.With(requireAdmin(s)).Post("/", serverH.Create)
+				// Folder membership and order are fleet-wide, like the folders.
+				r.With(requireAdmin(s)).Put("/placement", folderH.PlaceServers)
 				// Discover existing on-disk servers to import (admin, like create).
 				r.With(requireAdmin(s)).Get("/import-candidates", serverH.ImportCandidates)
 

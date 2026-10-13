@@ -593,6 +593,19 @@ export interface GameVersion {
   stable: boolean;
 }
 
+// Where a server sits in the dashboard.
+export interface ServerPlacement {
+  id: string;
+  folder_id: string | null;
+  sort_order: number;
+}
+
+// Returned by a folder delete; POST it to folders.restore to undo.
+export interface FolderUndo {
+  folder: ServerFolder;
+  servers: ServerPlacement[];
+}
+
 export interface PermissionGroup {
   group: string;
   label: string;
@@ -670,6 +683,8 @@ export interface OverviewServer {
   mc_version: string;
   node_id: string;
   folder_id: string | null;
+  // Position within its folder (or among the ungrouped); lower comes first.
+  sort_order: number;
   active_conflict: boolean;
   last_backup_at: string | null;
   last_backup_ok: boolean;

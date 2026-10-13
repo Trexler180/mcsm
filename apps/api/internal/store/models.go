@@ -278,6 +278,9 @@ type Server struct {
 	// ungrouped; deleting a folder resets its servers to nil rather than
 	// removing them.
 	FolderID *string `json:"folder_id"`
+	// SortOrder is the server's position within its folder (or among the
+	// ungrouped servers); lower comes first.
+	SortOrder int `json:"sort_order"`
 	// Public status page: exposed at /status/<slug> (and the status subdomain)
 	// with no auth when PublicStatus is set and a slug is chosen.
 	PublicStatus bool      `json:"public_status"`

@@ -89,8 +89,13 @@ func (s *Store) GetServerFolder(ctx context.Context, id string) (*ServerFolder, 
 	return &f, nil
 }
 
+// CreateServerFolder creates a folder. f.ID, when set, is kept — that is how a
+// deleted folder is restored under the id its servers referred to.
 func (s *Store) CreateServerFolder(ctx context.Context, f *ServerFolder) (*ServerFolder, error) {
-	id := uuid.NewString()
+	id := f.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO server_folders (id, name, description, color, sort_order)
 		 VALUES (?,?,?,?,?)`,

@@ -7,6 +7,8 @@ import type {
   AuditPageQuery,
   PermissionGroup,
   PermissionPreset,
+  ServerPlacement,
+  FolderUndo,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -574,7 +576,11 @@ export const api = {
       data: Partial<Pick<ServerFolder, "name" | "description" | "color" | "sort_order">>,
     ) => put<ServerFolder>(`/server-folders/${id}`, data),
     // Servers inside are kept — they just become ungrouped.
-    delete: (id: string) => del(`/server-folders/${id}`),
+    // Answers with what restores the folder and puts its servers back.
+    delete: (id: string) =>
+      del<{ undo: FolderUndo } | undefined>(`/server-folders/${id}`),
+    restore: (undo: FolderUndo) =>
+      post<ServerFolder>("/server-folders/restore", undo),
   },
 
   servers: {
@@ -626,6 +632,10 @@ export const api = {
     // Starts in the background (installing the runtime first when needed); the
     // answer carries the operation, and the server's status follows it.
     start: (id: string) => post<OperationAccepted>(`/servers/${id}/start`),
+    // Moves servers between folders and positions in one step. Answers with
+    // where they were; place(previous) undoes it.
+    place: (servers: ServerPlacement[]) =>
+      put<{ previous: ServerPlacement[] }>("/servers/placement", { servers }),
     stop: (id: string, graceful = true) =>
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),
     restart: (id: string) => post(`/servers/${id}/restart`),

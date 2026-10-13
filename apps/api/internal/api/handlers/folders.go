@@ -204,6 +204,11 @@ func (h *FolderHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	placements, err := h.store.FolderPlacements(r.Context(), id)
+	if err != nil {
+		writeServerError(w, r, "delete server folder: placements", err)
+		return
+	}
 	if err := h.store.DeleteServerFolder(r.Context(), id); err != nil {
 		if errors.Is(err, store.ErrFolderNotFound) {
 			writeError(w, http.StatusNotFound, "folder not found")
@@ -216,5 +221,98 @@ func (h *FolderHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	audit(h.store, r, "", "folder.delete", map[string]any{
 		"folder_id": id, "name": folder.Name, "servers_ungrouped": folder.ServerCount,
 	})
-	w.WriteHeader(http.StatusNoContent)
+	// Everything needed to undo the delete: POST it to /server-folders/restore.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"undo": folderUndo{Folder: folder, Servers: placements},
+	})
+}
+
+// folderUndo restores a deleted folder and puts its servers back.
+type folderUndo struct {
+	Folder  *store.ServerFolder     `json:"folder"`
+	Servers []store.ServerPlacement `json:"servers"`
+}
+
+// Restore undoes a folder delete: it recreates the folder under its old id and
+// places its servers back where they were.
+func (h *FolderHandlers) Restore(w http.ResponseWriter, r *http.Request) {
+	var body folderUndo
+	if err := decode(r, &body); err != nil || body.Folder == nil || body.Folder.ID == "" {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	name, description, color, err := normalizeFolderInput(body.Folder.Name, body.Folder.Description, body.Folder.Color)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Servers) > maxPlacements {
+		writeFieldError(w, "servers", "too many servers")
+		return
+	}
+	created, err := h.store.CreateServerFolder(r.Context(), &store.ServerFolder{
+		ID: body.Folder.ID, Name: name, Description: description, Color: color, SortOrder: body.Folder.SortOrder,
+	})
+	if errors.Is(err, store.ErrFolderNameTaken) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, "the folder could not be restored")
+		return
+	}
+	for i := range body.Servers {
+		body.Servers[i].FolderID = &created.ID
+	}
+	if _, err := h.store.PlaceServers(r.Context(), body.Servers); err != nil && !errors.Is(err, store.ErrUnknownServerOrFolder) {
+		writeServerError(w, r, "restore folder: place servers", err)
+		return
+	}
+	audit(h.store, r, "", "folder.restore", map[string]any{"folder_id": created.ID, "name": created.Name, "servers": len(body.Servers)})
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// maxPlacements bounds one placement request.
+const maxPlacements = 2000
+
+// PlaceServers moves servers between folders and positions in one step, and
+// answers with where they were, so the move can be undone by sending that back:
+//
+//	PUT /servers/placement {"servers": [{"id", "folder_id", "sort_order"}]}
+//	-> {"previous": [...]}
+func (h *FolderHandlers) PlaceServers(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Servers []store.ServerPlacement `json:"servers"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if len(body.Servers) == 0 || len(body.Servers) > maxPlacements {
+		writeFieldError(w, "servers", "send between 1 and 2000 servers")
+		return
+	}
+	seen := map[string]bool{}
+	for _, p := range body.Servers {
+		if p.ServerID == "" || seen[p.ServerID] {
+			writeFieldError(w, "servers", "each server must appear once, with its id")
+			return
+		}
+		seen[p.ServerID] = true
+		if p.FolderID != nil && *p.FolderID == "" {
+			writeFieldError(w, "servers", "folder_id must be a folder id or null")
+			return
+		}
+	}
+	previous, err := h.store.PlaceServers(r.Context(), body.Servers)
+	if errors.Is(err, store.ErrUnknownServerOrFolder) {
+		writeFieldError(w, "servers", err.Error())
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "place servers", err)
+		return
+	}
+	audit(h.store, r, "", "server.placement", map[string]any{"servers": len(body.Servers)})
+	writeJSON(w, http.StatusOK, map[string]any{"previous": previous})
 }
