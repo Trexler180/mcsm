@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/mods/modrinth"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -301,7 +302,8 @@ func classifyForTarget(ctx context.Context, src sourceClient, projectID, current
 // the boot. Returns 202 with the run row; poll GET /mods/update-runs/{runId}.
 func (h *ModHandlers) AutoUpdate(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
-	run, err := h.updater.Trigger(r.Context(), serverID, "manual")
+	ctx := operations.ContextWithActor(r.Context(), operations.ActorFromRequest(r, clientIP(r)))
+	run, err := h.updater.Trigger(ctx, serverID, "manual")
 	if err != nil {
 		if errors.Is(err, autoupdate.ErrAlreadyRunning) {
 			writeError(w, http.StatusConflict, err.Error())

@@ -53,6 +53,24 @@ type Actor struct {
 	ClientName string
 	IP         string
 	Trigger    string
+	// TaskID and RunID name the scheduled task, and the run of it, behind a
+	// scheduled action, so its audit rows lead back to the schedule.
+	TaskID string
+	RunID  string
+}
+
+type actorKey struct{}
+
+// ContextWithActor carries an actor to code that starts work on someone's
+// behalf without taking an Actor parameter (the update and migration engines).
+func ContextWithActor(ctx context.Context, a Actor) context.Context {
+	return context.WithValue(ctx, actorKey{}, a)
+}
+
+// ActorFromContext returns the actor set by ContextWithActor.
+func ActorFromContext(ctx context.Context) (Actor, bool) {
+	a, ok := ctx.Value(actorKey{}).(Actor)
+	return a, ok
 }
 
 // System is the actor for work the panel does on its own (autostart, a
@@ -88,12 +106,18 @@ func (a Actor) Audit(ctx context.Context, s *store.Store, serverID, action strin
 		})
 		return
 	}
-	if a.Trigger == TriggerScheduled || a.Trigger == TriggerAutomatic {
+	if a.Trigger == TriggerScheduled || a.Trigger == TriggerAutomatic || a.TaskID != "" {
 		if m, ok := detail.(map[string]any); ok || detail == nil {
 			if m == nil {
 				m = map[string]any{}
 			}
 			m["trigger"] = a.Trigger
+			if a.TaskID != "" {
+				m["task_id"] = a.TaskID
+			}
+			if a.RunID != "" {
+				m["task_run_id"] = a.RunID
+			}
 			detail = m
 		}
 	}

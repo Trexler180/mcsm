@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/mc"
 	"github.com/mcsm/api/internal/migrate"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -73,7 +74,7 @@ func (h *MigrationHandlers) Migrate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	run, err := h.engine.Trigger(r.Context(), serverID, target)
+	run, err := h.engine.Trigger(operations.ContextWithActor(r.Context(), operations.ActorFromRequest(r, clientIP(r))), serverID, target)
 	if err != nil {
 		if errors.Is(err, migrate.ErrAlreadyRunning) {
 			writeError(w, http.StatusConflict, err.Error())

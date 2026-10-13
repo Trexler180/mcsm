@@ -444,7 +444,7 @@ func (svc *Service) runAction(ctx context.Context, srv *store.Server, action str
 		if svc.migrations == nil {
 			return errors.New("version upgrades unavailable")
 		}
-		_, err := svc.migrations.Trigger(context.WithoutCancel(ctx), srv.ID, target)
+		_, err := svc.migrations.Trigger(operations.ContextWithActor(context.WithoutCancel(ctx), actor), srv.ID, target)
 		return err
 	}
 	if svc.power == nil {

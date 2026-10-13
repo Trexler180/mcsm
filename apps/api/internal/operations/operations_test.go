@@ -148,3 +148,27 @@ func TestSweepClosesWhatARestartCutOff(t *testing.T) {
 }
 
 func ptr(f float64) *float64 { return &f }
+
+// A scheduled action's audit row leads back to the task and the run behind it.
+func TestScheduledActorNamesItsTask(t *testing.T) {
+	s, _, serverID := testEnv(t)
+	ctx := context.Background()
+	a := Actor{Trigger: TriggerScheduled, TaskID: "task-1", RunID: "run-1"}
+	a.Audit(ctx, s, serverID, "server.restart", nil)
+
+	entries, err := s.ListAudit(ctx, serverID, 10)
+	if err != nil || len(entries) != 1 || entries[0].Detail == nil {
+		t.Fatalf("entries = %v, %v", entries, err)
+	}
+	for _, want := range []string{`"task_id":"task-1"`, `"task_run_id":"run-1"`, `"trigger":"scheduled"`} {
+		if !strings.Contains(*entries[0].Detail, want) {
+			t.Errorf("detail %s lacks %s", *entries[0].Detail, want)
+		}
+	}
+
+	// The actor travels to engines that take no Actor parameter.
+	got, ok := ActorFromContext(ContextWithActor(ctx, a))
+	if !ok || got.TaskID != "task-1" {
+		t.Fatalf("actor from context = %+v, %v", got, ok)
+	}
+}

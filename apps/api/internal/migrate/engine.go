@@ -71,6 +71,8 @@ type Engine struct {
 
 	mu     sync.Mutex
 	active map[string]bool
+	// actors holds who started each server's active run, for its audit rows.
+	actors sync.Map
 	// ops, when set, makes every migration an operation holding its server.
 	ops *operations.Manager
 
@@ -188,9 +190,15 @@ func (e *Engine) Trigger(ctx context.Context, serverID, targetMC string) (*store
 	e.active[serverID] = true
 	e.mu.Unlock()
 
+	actor, ok := operations.ActorFromContext(ctx)
+	if !ok {
+		actor = operations.Actor{Trigger: operations.TriggerManual}
+	}
+	e.actors.Store(serverID, actor)
+
 	var op *operations.Op
 	if e.ops != nil {
-		op, err = e.ops.Begin(ctx, serverID, operations.KindMigrate, operations.Actor{Trigger: operations.TriggerManual},
+		op, err = e.ops.Begin(ctx, serverID, operations.KindMigrate, actor,
 			operations.Options{Timeout: e.runTimeout, Phase: "checking", Msg: "Planning the migration to " + targetMC})
 		if err != nil {
 			e.release(serverID)
@@ -232,6 +240,7 @@ func (e *Engine) Trigger(ctx context.Context, serverID, targetMC string) (*store
 }
 
 func (e *Engine) release(serverID string) {
+	e.actors.Delete(serverID)
 	e.mu.Lock()
 	delete(e.active, serverID)
 	e.mu.Unlock()
@@ -722,10 +731,16 @@ func (e *Engine) setStatus(serverID, status string) {
 	_ = e.store.UpdateServerStatus(ctx, serverID, status)
 }
 
+// audit records an action of the server's active run, attributed to whoever
+// started it (a person, a schedule, a delegation).
 func (e *Engine) audit(serverID, action string, detail map[string]any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	e.store.LogAction(ctx, "", serverID, action, "", detail)
+	actor := operations.System
+	if a, ok := e.actors.Load(serverID); ok {
+		actor = a.(operations.Actor)
+	}
+	actor.Audit(ctx, e.store, serverID, action, detail)
 }
 
 // ── small helpers ────────────────────────────────────────────────────

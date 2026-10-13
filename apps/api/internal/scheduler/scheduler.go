@@ -276,7 +276,7 @@ func (s *Scheduler) runTask(ctx context.Context, task *store.ScheduledTask) {
 		return
 	}
 
-	actor := operations.Actor{Trigger: operations.TriggerScheduled}
+	actor := operations.Actor{Trigger: operations.TriggerScheduled, TaskID: task.ID, RunID: run.ID}
 	if task.CreatedBy != nil {
 		actor.UserID = *task.CreatedBy
 	}
@@ -287,7 +287,7 @@ func (s *Scheduler) runTask(ctx context.Context, task *store.ScheduledTask) {
 			finish("failed", "safe updates are unavailable", "")
 			return
 		}
-		r, err := s.updater.Trigger(ctx, srv.ID, "scheduled")
+		r, err := s.updater.Trigger(operations.ContextWithActor(ctx, actor), srv.ID, "scheduled")
 		if err != nil {
 			finish("failed", err.Error(), "")
 			return
