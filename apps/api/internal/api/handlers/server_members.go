@@ -75,7 +75,7 @@ func (h *ServerMemberHandlers) serverAndOwner(r *http.Request) (*store.Server, *
 func (h *ServerMemberHandlers) List(w http.ResponseWriter, r *http.Request) {
 	srv, owner, err := h.serverAndOwner(r)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	members, err := h.store.ListServerMembers(r.Context(), srv.ID)
@@ -105,7 +105,7 @@ func (h *ServerMemberHandlers) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	srv, err := h.server(r)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
@@ -159,7 +159,7 @@ func (h *ServerMemberHandlers) Me(w http.ResponseWriter, r *http.Request) {
 func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.server(r)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	var body struct {
@@ -215,7 +215,7 @@ func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 func (h *ServerMemberHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.server(r)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	targetID := chi.URLParam(r, "userId")
@@ -278,7 +278,7 @@ func (h *ServerMemberHandlers) Update(w http.ResponseWriter, r *http.Request) {
 func (h *ServerMemberHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.server(r)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	targetID := chi.URLParam(r, "userId")

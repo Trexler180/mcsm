@@ -40,7 +40,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, string
 		NormalizeEmail(email),
 	).Scan(&u.ID, &u.Email, &hash, &u.DisplayName, &u.Role, &u.CreatedAt, &u.LastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", fmt.Errorf("user not found")
+		return nil, "", fmt.Errorf("user %w", ErrNotFound)
 	}
 	return &u, hash, err
 }
@@ -52,7 +52,7 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
 		id,
 	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.Role, &u.CreatedAt, &u.LastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user %w", ErrNotFound)
 	}
 	return &u, err
 }
@@ -60,7 +60,7 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
 func (s *Store) GetUserByEmailInsensitive(ctx context.Context, email string) (*User, error) {
 	needle := strings.ToLower(strings.TrimSpace(email))
 	if needle == "" {
-		return nil, fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user %w", ErrNotFound)
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, email, display_name, role, created_at, last_login
@@ -85,7 +85,7 @@ func (s *Store) GetUserByEmailInsensitive(ctx context.Context, email string) (*U
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user %w", ErrNotFound)
 	case 1:
 		return matches[0], nil
 	default:
@@ -100,7 +100,7 @@ func (s *Store) GetUserPasswordHash(ctx context.Context, id string) (string, err
 	var hash string
 	err := s.db.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, id).Scan(&hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("user not found")
+		return "", fmt.Errorf("user %w", ErrNotFound)
 	}
 	return hash, err
 }
@@ -239,7 +239,7 @@ func (s *Store) UpdateUserAdmin(ctx context.Context, id string, u UserAdminUpdat
 	var role string
 	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ?`, id).Scan(&role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("user not found")
+			return false, fmt.Errorf("user %w", ErrNotFound)
 		}
 		return false, err
 	}

@@ -22,7 +22,7 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	mods, err := h.store.ListMods(r.Context(), serverID)
@@ -139,7 +139,7 @@ func (h *ModHandlers) VersionCheck(w http.ResponseWriter, r *http.Request) {
 
 	srv, err := h.store.GetServer(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	mods, err := h.store.ListMods(r.Context(), serverID)

@@ -85,7 +85,7 @@ func (s *Store) GetBackup(ctx context.Context, id string) (*Backup, error) {
 		 FROM backups WHERE id=?`, id,
 	).Scan(&b.ID, &b.ServerID, &b.TargetID, &b.TriggeredBy, &b.Trigger, &b.Status, &b.SizeBytes, &b.SnapshotID, (*jsonRaw)(&b.Metadata), &b.StartedAt, &b.CompletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("backup not found")
+		return nil, fmt.Errorf("backup %w", ErrNotFound)
 	}
 	return &b, err
 }

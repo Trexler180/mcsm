@@ -325,7 +325,7 @@ func (h *AuthHandlers) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeLookupError(w, r, "user", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)

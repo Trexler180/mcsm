@@ -67,7 +67,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (*ScheduledTask, error) 
 		 FROM scheduled_tasks WHERE id=?`, id,
 	).Scan(&t.ID, &t.ServerID, &t.Name, &t.CronExpr, &t.Action, (*jsonRaw)(&t.Payload), &t.Enabled, &t.LastRun, &t.NextRun, &t.CreatedAt, &t.CreatedBy)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("task not found")
+		return nil, fmt.Errorf("task %w", ErrNotFound)
 	}
 	return &t, err
 }

@@ -115,7 +115,7 @@ func (s *Store) GetModUpdateRun(ctx context.Context, id string) (*ModUpdateRun, 
 		 FROM mod_update_runs WHERE id = ?`, id,
 	).Scan(&r.ID, &r.ServerID, &r.Trigger, &r.Status, &detail, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("update run not found")
+		return nil, fmt.Errorf("update run %w", ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

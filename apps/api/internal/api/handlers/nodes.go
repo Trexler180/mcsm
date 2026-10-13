@@ -131,7 +131,7 @@ func (h *NodeHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	n, err := h.store.GetNode(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+		writeLookupError(w, r, "node", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
@@ -146,7 +146,7 @@ func (h *NodeHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, err := h.store.GetNode(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+		writeLookupError(w, r, "node", err)
 		return
 	}
 	before := *existing
@@ -214,7 +214,7 @@ func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	node, err := h.store.GetNode(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+		writeLookupError(w, r, "node", err)
 		return
 	}
 	if err := h.store.DeleteNode(r.Context(), id); err != nil {
@@ -266,7 +266,7 @@ func (h *NodeHandlers) Reboot(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := h.store.GetNode(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+		writeLookupError(w, r, "node", err)
 		return
 	}
 	if !verifyStepUp(w, r, h.store, h.ipThrottle, h.acctThrottle, uid, body.Password, body.TOTPCode, "node reboot") {

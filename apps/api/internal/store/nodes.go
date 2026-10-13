@@ -75,7 +75,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 		id,
 	).Scan(nodeScanDest(&n)...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("node not found")
+		return nil, fmt.Errorf("node %w", ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

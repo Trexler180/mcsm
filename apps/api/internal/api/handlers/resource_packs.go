@@ -37,7 +37,7 @@ func (h *ResourcePackHandlers) Download(w http.ResponseWriter, r *http.Request) 
 	publicID := chi.URLParam(r, "publicID")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "resource pack not found")
+		writeLookupError(w, r, "resource pack", err)
 		return
 	}
 
@@ -57,7 +57,7 @@ func (h *ResourcePackHandlers) Download(w http.ResponseWriter, r *http.Request) 
 
 	node, err := h.store.GetNode(r.Context(), srv.NodeID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "node not found")
+		writeLookupError(w, r, "node", err)
 		return
 	}
 	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)

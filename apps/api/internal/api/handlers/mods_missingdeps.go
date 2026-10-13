@@ -89,7 +89,7 @@ func (h *ModHandlers) ResolveMissingDeps(w http.ResponseWriter, r *http.Request)
 
 	srv, err := h.store.GetServer(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 

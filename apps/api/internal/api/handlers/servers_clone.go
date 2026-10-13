@@ -44,7 +44,7 @@ func (h *ModHandlers) Clone(w http.ResponseWriter, r *http.Request) {
 
 	src, err := h.store.GetServer(r.Context(), sourceID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "source server not found")
+		writeLookupError(w, r, "source server", err)
 		return
 	}
 

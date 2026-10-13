@@ -169,7 +169,7 @@ func (s *Store) StatsSummary(ctx context.Context, serverID string, since, now ti
 // TopPlayers ranks the window's players by clamped in-window playtime. Names
 // group case-insensitively; the display name comes from an arbitrary session
 // row (variants differ only in case) and the uuid from MAX(), which prefers
-// any non-empty value over ''.
+// any non-empty value over ”.
 func (s *Store) TopPlayers(ctx context.Context, serverID string, since, now time.Time, limit int) ([]TopPlayer, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25

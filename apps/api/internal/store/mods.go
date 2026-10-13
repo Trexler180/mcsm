@@ -81,7 +81,7 @@ func (s *Store) GetMod(ctx context.Context, id string) (*InstalledMod, error) {
 	var m InstalledMod
 	err := scanMod(s.db.QueryRowContext(ctx, `SELECT `+modCols+` FROM installed_mods WHERE id = ?`, id), &m)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("mod not found")
+		return nil, fmt.Errorf("mod %w", ErrNotFound)
 	}
 	return &m, err
 }
@@ -121,7 +121,7 @@ func (s *Store) DeleteMod(ctx context.Context, id string) (*InstalledMod, error)
 		`SELECT id, server_id, file_name FROM installed_mods WHERE id = ?`, id,
 	).Scan(&m.ID, &m.ServerID, &m.FileName)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("mod not found")
+		return nil, fmt.Errorf("mod %w", ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

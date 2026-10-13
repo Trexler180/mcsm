@@ -45,7 +45,7 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 		&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings),
 		&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("server not found")
+		return nil, fmt.Errorf("server %w", ErrNotFound)
 	}
 	return &srv, err
 }
@@ -60,7 +60,7 @@ func (s *Store) GetServerByPublicSlug(ctx context.Context, slug string) (*Server
 		slug,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("server not found")
+		return nil, fmt.Errorf("server %w", ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

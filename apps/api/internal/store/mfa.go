@@ -28,7 +28,7 @@ func (s *Store) GetUserTOTP(ctx context.Context, userID string) (TOTPConfig, err
 		`SELECT totp_secret, totp_enabled FROM users WHERE id = ?`, userID,
 	).Scan(&enc, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		return TOTPConfig{}, fmt.Errorf("user not found")
+		return TOTPConfig{}, fmt.Errorf("user %w", ErrNotFound)
 	}
 	if err != nil {
 		return TOTPConfig{}, err

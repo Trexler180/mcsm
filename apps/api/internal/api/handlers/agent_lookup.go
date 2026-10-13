@@ -14,7 +14,7 @@ import (
 func serverAgent(w http.ResponseWriter, r *http.Request, s *store.Store, serverID string) (*store.Server, *agent.Client, bool) {
 	srv, err := s.GetServer(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return nil, nil, false
 	}
 	node, err := s.GetNode(r.Context(), srv.NodeID)

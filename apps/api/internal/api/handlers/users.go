@@ -155,7 +155,7 @@ func (h *UserHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, err := h.store.GetUserByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeLookupError(w, r, "user", err)
 		return
 	}
 
@@ -249,7 +249,7 @@ func (h *UserHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := h.store.GetUserByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeLookupError(w, r, "user", err)
 		return
 	}
 	if target.Role == "admin" {

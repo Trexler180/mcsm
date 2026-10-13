@@ -89,7 +89,7 @@ type createdBackup struct {
 func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	b, op, err := h.svc.Create(r.Context(), srv, h.actor(r), "manual")
@@ -105,7 +105,7 @@ func (h *BackupHandlers) CreateBackup(w http.ResponseWriter, r *http.Request) {
 func (h *BackupHandlers) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	op, err := h.svc.Restore(r.Context(), srv, chi.URLParam(r, "backupId"), h.actor(r), backups.RestoreOptions{
@@ -126,7 +126,7 @@ func (h *BackupHandlers) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 func (h *BackupHandlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	err = h.svc.Delete(r.Context(), srv, chi.URLParam(r, "backupId"), h.actor(r))

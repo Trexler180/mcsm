@@ -28,8 +28,8 @@ type UptimeReport struct {
 	WindowSeconds   int64           `json:"window_seconds"`
 	UptimeSeconds   int64           `json:"uptime_seconds"`
 	AvailabilityPct float64         `json:"availability_pct"`
-	Stops           int             `json:"stops"`   // clean stops ended inside the window
-	Crashes         int             `json:"crashes"` // crash-attributed ends inside the window
+	Stops           int             `json:"stops"`                  // clean stops ended inside the window
+	Crashes         int             `json:"crashes"`                // crash-attributed ends inside the window
 	OnlineSince     int64           `json:"online_since,omitempty"` // 0 = offline now
 	LongestSeconds  int64           `json:"longest_uptime_seconds"`
 	Segments        []UptimeSegment `json:"segments"`

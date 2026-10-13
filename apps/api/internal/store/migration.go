@@ -63,7 +63,7 @@ func (s *Store) GetVersionMigration(ctx context.Context, id string) (*VersionMig
 		 FROM server_version_migrations WHERE id = ?`, id,
 	).Scan(&r.ID, &r.ServerID, &r.FromMCVersion, &r.ToMCVersion, &r.BackupID, &r.Status, &detail, &r.StartedAt, &r.FinishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("version migration not found")
+		return nil, fmt.Errorf("version migration %w", ErrNotFound)
 	}
 	if err != nil {
 		return nil, err

@@ -491,7 +491,7 @@ func (h *ServerHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
@@ -501,7 +501,7 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 
@@ -768,7 +768,7 @@ func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	q := r.URL.Query()
@@ -796,7 +796,7 @@ func (h *ServerHandlers) actor(r *http.Request) operations.Actor {
 func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	op, err := h.life.Start(r.Context(), srv, h.actor(r))
@@ -814,7 +814,7 @@ func (h *ServerHandlers) JavaInstallations(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
@@ -837,7 +837,7 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	var body struct {
@@ -905,7 +905,7 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	body := struct {
@@ -923,7 +923,7 @@ func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
 func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	if err := h.life.Restart(r.Context(), srv, h.actor(r)); err != nil {
@@ -938,7 +938,7 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
 	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	if err := h.life.Kill(r.Context(), srv, h.actor(r), r.URL.Query().Get("force") == "true"); err != nil {
@@ -969,7 +969,7 @@ func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 	unknown := map[string]any{"id": id, "status": "unknown", "node_reachable": false, "last_known_status": srv.Status}
@@ -1000,7 +1000,7 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
+		writeLookupError(w, r, "server", err)
 		return
 	}
 

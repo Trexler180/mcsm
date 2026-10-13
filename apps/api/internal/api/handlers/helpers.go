@@ -93,6 +93,17 @@ func audit(s *store.Store, r *http.Request, serverID, action string, detail any)
 	_ = s.LogActionWithKey(r.Context(), userID, keyID, serverID, action, clientIP(r), detail)
 }
 
+// writeLookupError answers a failed store lookup: 404 when the row does not
+// exist, and a logged 500 for anything else, so a database failure no longer
+// reads as a missing server.
+func writeLookupError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, what+" not found")
+		return
+	}
+	writeServerError(w, r, "lookup "+what, err)
+}
+
 // auditOutcome records a proxied mutation with the status the node answered,
 // so a refused change reads as a refusal in the log rather than as done.
 func auditOutcome(s *store.Store, r *http.Request, serverID, action string, detail map[string]any, status int) {
