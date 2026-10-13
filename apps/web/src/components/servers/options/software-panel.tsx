@@ -93,17 +93,19 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
     platform: server.platform,
     mc_version: server.mc_version,
     loader_version: server.loader_version ?? "",
-    java_binary: server.java_binary,
-    jvm_args: server.jvm_args.join(" "),
+    java_binary: server.java_binary ?? "",
+    jvm_args: (server.jvm_args ?? []).join(" "),
   });
+  // Null for anyone but an administrator, who alone may change them.
+  const canEditRuntime = server.java_binary !== null;
 
   useEffect(() => {
     setForm({
       platform: server.platform,
       mc_version: server.mc_version,
       loader_version: server.loader_version ?? "",
-      java_binary: server.java_binary,
-      jvm_args: server.jvm_args.join(" "),
+      java_binary: server.java_binary ?? "",
+      jvm_args: (server.jvm_args ?? []).join(" "),
     });
   }, [server]);
 
@@ -130,8 +132,9 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
     form.mc_version !== server.mc_version ||
     loaderPin !== (server.loader_version ?? "");
   const settingsChanged =
-    form.java_binary !== server.java_binary ||
-    form.jvm_args !== server.jvm_args.join(" ");
+    canEditRuntime &&
+    (form.java_binary !== (server.java_binary ?? "") ||
+      form.jvm_args !== (server.jvm_args ?? []).join(" "));
 
   const saveSettings = () =>
     api.servers.update(server.id, {
@@ -320,23 +323,27 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
               )}
             </div>
           )}
-          <div className="space-y-1.5">
-            <Label>Java Binary</Label>
-            <Input
-              value={form.java_binary}
-              onChange={f("java_binary")}
-              className="font-mono"
-            />
-          </div>
-          <div className="col-span-2 space-y-1.5">
-            <Label>JVM Arguments</Label>
-            <Input
-              value={form.jvm_args}
-              onChange={f("jvm_args")}
-              className="font-mono"
-              placeholder="-XX:+UseG1GC"
-            />
-          </div>
+          {canEditRuntime && (
+            <>
+              <div className="space-y-1.5">
+                <Label>Java Binary</Label>
+                <Input
+                  value={form.java_binary}
+                  onChange={f("java_binary")}
+                  className="font-mono"
+                />
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label>JVM Arguments</Label>
+                <Input
+                  value={form.jvm_args}
+                  onChange={f("jvm_args")}
+                  className="font-mono"
+                  placeholder="-XX:+UseG1GC"
+                />
+              </div>
+            </>
+          )}
         </div>
     </Panel>
   );

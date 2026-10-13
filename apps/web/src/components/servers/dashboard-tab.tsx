@@ -585,14 +585,22 @@ export function DashboardTab({
             <dl className="grid grid-cols-[100px_minmax(0,1fr)] gap-y-2 text-sm sm:grid-cols-[120px_minmax(0,1fr)]">
               <dt className="text-text-secondary">Name</dt>
               <dd className="truncate text-text-primary">{server.name}</dd>
-              <dt className="text-text-secondary">Directory</dt>
-              <dd className="truncate font-mono text-text-primary">
-                {server.directory_path}
-              </dd>
-              <dt className="text-text-secondary">Java</dt>
-              <dd className="truncate font-mono text-text-primary">
-                {server.java_binary}
-              </dd>
+              {server.directory_path !== null && (
+                <>
+                  <dt className="text-text-secondary">Directory</dt>
+                  <dd className="truncate font-mono text-text-primary">
+                    {server.directory_path}
+                  </dd>
+                </>
+              )}
+              {server.java_binary !== null && (
+                <>
+                  <dt className="text-text-secondary">Java</dt>
+                  <dd className="truncate font-mono text-text-primary">
+                    {server.java_binary}
+                  </dd>
+                </>
+              )}
               <dt className="text-text-secondary">Auto Start</dt>
               <dd className="text-text-primary">
                 {server.auto_start ? "Enabled" : "Disabled"}

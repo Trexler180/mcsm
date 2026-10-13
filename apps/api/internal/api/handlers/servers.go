@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -233,7 +234,7 @@ func (h *ServerHandlers) List(w http.ResponseWriter, r *http.Request) {
 		if perms == nil {
 			perms = []string{}
 		}
-		out = append(out, serverListItem{Server: srv, Permissions: perms})
+		out = append(out, serverListItem{serverView: viewServer(srv, isAdmin && machine == nil), Permissions: perms})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -293,8 +294,33 @@ func intersectWithScopes(perms, scopes []string) []string {
 // it. The embedded pointer flattens into the same JSON shape the panel already
 // reads, so `permissions` is purely additive.
 type serverListItem struct {
-	*store.Server
+	serverView
 	Permissions []string `json:"permissions"`
+}
+
+// serverView is a server as one caller may see it. directory_path,
+// java_binary and jvm_args are the agent's start command — where it runs and
+// what it executes — so only administrators read them (as only they may
+// change them); for everyone else they are null. The fields here shadow the
+// embedded server's.
+type serverView struct {
+	*store.Server
+	DirectoryPath *string  `json:"directory_path"`
+	JavaBinary    *string  `json:"java_binary"`
+	JVMArgs       []string `json:"jvm_args"`
+}
+
+func viewServer(srv *store.Server, isAdmin bool) serverView {
+	v := serverView{Server: srv}
+	if isAdmin {
+		v.DirectoryPath = &srv.DirectoryPath
+		v.JavaBinary = &srv.JavaBinary
+		v.JVMArgs = srv.JVMArgs
+		if v.JVMArgs == nil {
+			v.JVMArgs = []string{}
+		}
+	}
+	return v
 }
 
 func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
@@ -474,7 +500,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform, "imported": body.ImportExisting})
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, viewServer(created, h.isAdmin(r)))
 }
 
 // dirsOverlap reports whether two server directories are the same or one
@@ -495,7 +521,7 @@ func (h *ServerHandlers) Get(w http.ResponseWriter, r *http.Request) {
 		writeLookupError(w, r, "server", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, srv)
+	writeJSON(w, http.StatusOK, viewServer(srv, h.isAdmin(r)))
 }
 
 func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
@@ -538,7 +564,10 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	// executes, so changing them is effectively host code execution. Confine those
 	// to global admins — a server-scoped `settings` collaborator must not be able
 	// to escalate to running arbitrary binaries/flags on the agent host.
-	if body.JavaBinary != nil || body.JVMArgs != nil || body.DirectoryPath != nil {
+	hostChange := (body.JavaBinary != nil && *body.JavaBinary != existing.JavaBinary) ||
+		(body.JVMArgs != nil && !slices.Equal(body.JVMArgs, existing.JVMArgs)) ||
+		(body.DirectoryPath != nil && *body.DirectoryPath != existing.DirectoryPath)
+	if hostChange {
 		if !isAdmin {
 			writeCodedError(w, http.StatusForbidden, "forbidden", "only an administrator may change java_binary, jvm_args, or directory_path")
 			return
@@ -755,7 +784,7 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	if len(changes) > 0 {
 		audit(h.store, r, id, "server.update", map[string]any{"changes": changes})
 	}
-	writeJSON(w, http.StatusOK, existing)
+	writeJSON(w, http.StatusOK, viewServer(existing, isAdmin))
 }
 
 func deref(p *string) string {

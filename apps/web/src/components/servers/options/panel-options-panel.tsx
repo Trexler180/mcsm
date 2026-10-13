@@ -55,7 +55,7 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
   const [form, setForm] = useState({
     name: server.name,
     description: server.description ?? "",
-    directory_path: server.directory_path,
+    directory_path: server.directory_path ?? "",
     port: String(server.port),
     ram_mb_max: String(server.ram_mb_max),
     ram_mb_min: String(server.ram_mb_min),
@@ -66,7 +66,9 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
       api.servers.update(server.id, {
         name: form.name,
         description: form.description || null,
-        directory_path: form.directory_path,
+        // Hidden (null) for non-admins, who may not change it: not sent.
+        directory_path:
+          server.directory_path === null ? undefined : form.directory_path,
         port: Number(form.port),
         ram_mb_max: Number(form.ram_mb_max),
         ram_mb_min: Number(form.ram_mb_min),
@@ -155,7 +157,8 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
   const dirty =
     form.name !== server.name ||
     form.description !== (server.description ?? "") ||
-    form.directory_path !== server.directory_path ||
+    (server.directory_path !== null &&
+      form.directory_path !== server.directory_path) ||
     form.port !== String(server.port) ||
     form.ram_mb_max !== String(server.ram_mb_max) ||
     form.ram_mb_min !== String(server.ram_mb_min) ||
@@ -208,18 +211,20 @@ export function PanelOptionsPanel({ server }: { server: Server }) {
                 />
               </div>
             </div>
-            <div className="space-y-1">
-              <Label className="flex items-center gap-1.5">
-                <FolderTree className="h-3.5 w-3.5 text-text-secondary" />
-                Server directory
-              </Label>
-              <Input
-                value={form.directory_path}
-                onChange={f("directory_path")}
-                className={`font-mono ${inputLife}`}
-                placeholder="E:/mc-test"
-              />
-            </div>
+            {server.directory_path !== null && (
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1.5">
+                  <FolderTree className="h-3.5 w-3.5 text-text-secondary" />
+                  Server directory
+                </Label>
+                <Input
+                  value={form.directory_path}
+                  onChange={f("directory_path")}
+                  className={`font-mono ${inputLife}`}
+                  placeholder="E:/mc-test"
+                />
+              </div>
+            )}
             {/* Panel-side grouping only — this has no bearing on where the
                 server's files live on the node. */}
             <div className="space-y-1">

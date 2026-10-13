@@ -308,9 +308,12 @@ export interface Server {
   platform: string;
   mc_version: string;
   loader_version: string | null;
-  directory_path: string;
-  java_binary: string;
-  jvm_args: string[];
+  // The agent's start command: where the server runs and what it executes.
+  // Only administrators can read (or change) these; for anyone else they are
+  // null.
+  directory_path: string | null;
+  java_binary: string | null;
+  jvm_args: string[] | null;
   port: number;
   ram_mb_min: number;
   ram_mb_max: number;
