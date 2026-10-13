@@ -84,6 +84,8 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// The fleet summary reports this count without asking upstream again.
+	_ = h.store.RecordModUpdateCheck(r.Context(), serverID, len(out))
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/events"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -15,10 +16,17 @@ import (
 // lookups — so it stays fast under the dashboard's short poll interval.
 type OverviewHandlers struct {
 	store *store.Store
+	bus   *events.Bus
 }
 
 func NewOverviewHandlers(s *store.Store) *OverviewHandlers {
 	return &OverviewHandlers{store: s}
+}
+
+// WithBus lets the fleet summary report the event stream position it reflects.
+func (h *OverviewHandlers) WithBus(bus *events.Bus) *OverviewHandlers {
+	h.bus = bus
+	return h
 }
 
 // nodeFreshWindow mirrors the poller's heartbeat cadence: a node not heard from

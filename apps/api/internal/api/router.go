@@ -188,7 +188,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	auditH := handlers.NewAuditHandlers(s)
 	mcH := handlers.NewMinecraftHandlers()
 	settingsH := handlers.NewSettingsHandlers(s)
-	overviewH := handlers.NewOverviewHandlers(s)
+	overviewH := handlers.NewOverviewHandlers(s).WithBus(svc.Bus)
 	mfaH := handlers.NewMFAHandlers(s, passwordThrottles)
 	sessionH := handlers.NewSessionHandlers(s)
 	notifyH := handlers.NewNotificationHandlers(s, notifier)
@@ -366,6 +366,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Overview aggregate (scoped to the caller's servers)
 			r.Get("/overview", overviewH.Overview)
+			r.Get("/fleet", overviewH.Fleet)
 
 			// Notifications — per-user alert subscriptions, channels, feed, and
 			// the live WebSocket stream. All scoped to the caller.

@@ -593,6 +593,76 @@ export interface GameVersion {
   stable: boolean;
 }
 
+// The Home screen in one request (GET /fleet). Built from stored data only;
+// live changes arrive on the event stream from event_seq on.
+export interface FleetServer {
+  id: string;
+  name: string;
+  status: ServerStatus;
+  platform: string;
+  mc_version: string;
+  node_id: string;
+  folder_id: string | null;
+  sort_order: number;
+  port: number;
+  online_since: number | null;
+  // Live numbers: null while the server is not online or has no fresh sample.
+  players: number | null;
+  tps: number | null;
+  cpu_percent: number | null;
+  ram_used_mb: number | null;
+  ram_limit_mb: number;
+  sampled_at: string | null;
+  // Peak players per hour, oldest first, ending with the current hour; null
+  // where there was no sample.
+  players_24h: (number | null)[];
+  last_backup_at: string | null;
+  backup_overdue: boolean;
+  active_conflict: boolean;
+  // From the last mod-update check; null if never checked.
+  mod_updates: number | null;
+  operation: Operation | null;
+}
+
+export interface FleetNode {
+  id: string;
+  name: string;
+  online: boolean;
+  cpu_pct: number | null;
+  mem_used_mb: number | null;
+  memory_mb: number | null;
+  disk_used_gb: number | null;
+  disk_gb: number | null;
+  last_seen: string | null;
+}
+
+export interface FleetSummary {
+  generated_at: string;
+  figures: {
+    players_online: number;
+    servers_up: number;
+    servers_total: number;
+    servers_unknown: number;
+    nodes_online: number;
+    nodes_total: number;
+    alerts_unread: number;
+    backups_overdue: number;
+    mod_updates: number;
+  };
+  servers: FleetServer[];
+  nodes: FleetNode[];
+  upcoming: {
+    task_id: string;
+    server_id: string;
+    server_name: string;
+    name: string;
+    action: string;
+    next_run: string;
+  }[];
+  activity: AuditEntry[];
+  event_seq: number;
+}
+
 // Where a server sits in the dashboard.
 export interface ServerPlacement {
   id: string;

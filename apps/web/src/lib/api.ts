@@ -9,6 +9,7 @@ import type {
   PermissionPreset,
   ServerPlacement,
   FolderUndo,
+  FleetSummary,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -412,6 +413,7 @@ const del = <T>(path: string) => request<T>("DELETE", path);
 
 export const api = {
   health: () => get<{ status: string; version?: string }>("/health"),
+  fleet: () => get<FleetSummary>("/fleet"),
   time: () => get<ServerTime>("/time"),
 
   auth: {
