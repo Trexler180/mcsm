@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"github.com/mcsm/agent/internal/childenv"
 )
 
 // supportsReattach is true on platforms where servers are spawned detached and
@@ -36,9 +38,9 @@ func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv 
 
 	cmd := exec.Command(java, args...)
 	cmd.Dir = dir
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	// Always an explicit environment: a nil Env would inherit the agent's,
+	// including AGENT_TOKEN, and hand it to every mod and plugin.
+	cmd.Env = childenv.Build(extraEnv...)
 	cmd.Stdin = stdin.(*os.File) // passed as a real fd, so the child reads the FIFO directly
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

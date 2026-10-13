@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/mcsm/agent/internal/childenv"
 )
 
 // supportsReattach is false on Windows: local dev has no systemd and no
@@ -25,9 +27,9 @@ func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv 
 	}
 	cmd := exec.Command(java, args...)
 	cmd.Dir = dir
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	// Always an explicit environment: a nil Env would inherit the agent's,
+	// including AGENT_TOKEN, and hand it to every mod and plugin.
+	cmd.Env = childenv.Build(extraEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		logFile.Close()

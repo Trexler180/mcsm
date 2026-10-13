@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.12
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/shirou/gopsutil/v4 v4.24.11
+	golang.org/x/sys v0.29.0
 )
 
 require (
@@ -17,5 +18,4 @@ require (
 	github.com/tklauser/go-sysconf v0.3.14 // indirect
 	github.com/tklauser/numcpus v0.9.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.29.0 // indirect
 )

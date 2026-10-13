@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/mcsm/agent/internal/childenv"
 )
 
 type Installation struct {
@@ -43,7 +45,9 @@ func Detect() []Installation {
 		}
 		seen[resolved] = true
 
-		out, err := exec.Command(resolved, "-version").CombinedOutput()
+		probe := exec.Command(resolved, "-version")
+		probe.Env = childenv.Build()
+		out, err := probe.CombinedOutput()
 		if err != nil {
 			continue
 		}

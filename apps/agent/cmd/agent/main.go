@@ -18,6 +18,7 @@ import (
 
 	agentapi "github.com/mcsm/agent/internal/api"
 	"github.com/mcsm/agent/internal/api/handlers"
+	"github.com/mcsm/agent/internal/hardening"
 	"github.com/mcsm/agent/internal/link"
 	"github.com/mcsm/agent/internal/metrics"
 	"github.com/mcsm/agent/internal/process"
@@ -90,6 +91,11 @@ func (slogWriter) Write(p []byte) (int, error) {
 
 func main() {
 	setupLogging()
+	if applied, err := hardening.Apply(); err != nil {
+		log.Printf("could not mark the process non-dumpable: %v", err)
+	} else if applied {
+		log.Println("process marked non-dumpable: AGENT_TOKEN in its environment is hidden from server processes")
+	}
 
 	handlers.Version = resolveVersion()
 	log.Printf("mcsm-agent %s starting", handlers.Version)

@@ -27,6 +27,7 @@ import (
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autostart"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/hardening"
 	"github.com/mcsm/api/internal/mcpjanitor"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/poller"
@@ -107,6 +108,11 @@ func resolveVersion() string {
 
 func main() {
 	setupLogging()
+	if applied, err := hardening.Apply(); err != nil {
+		log.Printf("could not mark the process non-dumpable: %v", err)
+	} else if applied {
+		log.Println("process marked non-dumpable: its environment and memory are hidden from other processes of the same user")
+	}
 
 	handlers.Version = resolveVersion()
 	log.Printf("mcsm-api %s starting", handlers.Version)

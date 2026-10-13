@@ -28,6 +28,8 @@ import (
 	goruntime "runtime"
 	"strings"
 	"time"
+
+	"github.com/mcsm/agent/internal/childenv"
 )
 
 const (
@@ -412,6 +414,9 @@ func spigotJar(ctx context.Context, dir, mcVersion, javaBinary string) error {
 
 	cmd := exec.CommandContext(ctx, javaBinary, "-jar", "BuildTools.jar", "--rev", mcVersion)
 	cmd.Dir = tmpDir
+	// BuildTools is third-party code: it gets the allowlisted environment, not
+	// the agent's, which carries the agent token.
+	cmd.Env = childenv.Build()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("BuildTools failed: %w (last output: %s)", err, snippet(out, 500))
@@ -519,6 +524,8 @@ func neoforgeInstall(ctx context.Context, dir, mcVersion, javaBinary string) err
 func runInstallerAndCaptureRuntime(ctx context.Context, dir, installerJar, javaBinary string) error {
 	cmd := exec.CommandContext(ctx, javaBinary, "-jar", installerJar, "--installServer")
 	cmd.Dir = dir
+	// The installer is third-party code; see childenv.
+	cmd.Env = childenv.Build()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("installer failed: %w (output: %s)", err, snippet(out, 500))
