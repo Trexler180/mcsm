@@ -40,6 +40,10 @@ func (h *MigrationHandlers) Migrate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := strings.TrimSpace(body.MCVersion)
+	if err := validateVersion("mc_version", target); err != nil {
+		respondInvalid(w, err)
+		return
+	}
 
 	srv, err := h.store.GetServer(r.Context(), serverID)
 	if err != nil {

@@ -274,12 +274,18 @@ func (inst *Instance) buildArgs() ([]string, string, string, error) {
 			if jarFile == "" {
 				jarFile = "server.jar"
 			}
+			if !safeJarName(jarFile) {
+				return nil, "", "", fmt.Errorf("jar_file must be a .jar file name in the server directory, got %q", jarFile)
+			}
 			args = append(args, "-jar", jarFile)
 		}
 	} else {
 		jarFile := cfg.JarFile
 		if jarFile == "" {
 			jarFile = "server.jar"
+		}
+		if !safeJarName(jarFile) {
+			return nil, "", "", fmt.Errorf("jar_file must be a .jar file name in the server directory, got %q", jarFile)
 		}
 		args = append(args, "-jar", jarFile)
 	}
@@ -1060,4 +1066,12 @@ func (inst *Instance) ClearConflict() {
 // carries text the player chose and must never be read as a diagnostic.
 func isChatLine(line string) bool {
 	return chatLineRe.MatchString(line)
+}
+
+// safeJarName accepts only a bare .jar file name. The server runs with its own
+// directory as the working directory, so a path could start a jar that belongs
+// to another server.
+func safeJarName(name string) bool {
+	return name == filepath.Base(name) && !strings.ContainsAny(name, `/\`) &&
+		!strings.HasPrefix(name, "-") && strings.HasSuffix(strings.ToLower(name), ".jar")
 }

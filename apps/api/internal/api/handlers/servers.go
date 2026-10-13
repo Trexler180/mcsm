@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -367,35 +366,28 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		ImportExisting bool   `json:"import_existing"`
 		JarFile        string `json:"jar_file"`
 	}
-	if err := decode(r, &body); err != nil || body.NodeID == "" || body.Name == "" {
-		writeError(w, http.StatusBadRequest, "node_id and name are required")
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.NodeID == "" {
+		writeFieldError(w, "node_id", "node_id is required")
+		return
+	}
+	name, err := validateServerName(body.Name)
+	if err != nil {
+		respondInvalid(w, err)
+		return
+	}
+	body.Name = name
+	node, err := h.store.GetNode(r.Context(), body.NodeID)
+	if err != nil {
+		writeFieldError(w, "node_id", "node not found")
 		return
 	}
 	if body.ImportExisting && strings.TrimSpace(body.DirectoryPath) == "" {
-		writeError(w, http.StatusBadRequest, "a server directory is required to import")
+		writeFieldError(w, "directory_path", "a server directory is required to import")
 		return
-	}
-
-	directoryPath, err := resolveServerDirectory(h.serverRoot, body.DirectoryPath, body.Name)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// Never let two servers manage the same directory — that's how an import (or a
-	// name collision) would "step on" an existing server.
-	if existing, err := h.store.ListServers(r.Context()); err == nil {
-		for _, e := range existing {
-			if filepath.Clean(e.DirectoryPath) == filepath.Clean(directoryPath) {
-				writeError(w, http.StatusConflict, "a server already manages that directory")
-				return
-			}
-		}
-	}
-
-	// Record import metadata so start runs the existing runtime as-is.
-	if body.ImportExisting {
-		body.Settings = withImportSettings(body.Settings, body.JarFile)
 	}
 
 	if body.Platform == "" {
@@ -416,20 +408,73 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if body.RAMMbMin == 0 {
 		body.RAMMbMin = 512
 	}
+	for _, check := range []error{
+		validatePlatform(body.Platform),
+		validateVersion("mc_version", body.MCVersion),
+		validatePort(body.Port),
+		validateRAM(body.RAMMbMin, body.RAMMbMax, node),
+		validateJarFile(body.JarFile),
+		validateTags(body.Tags),
+		validateDescription(body.Description),
+	} {
+		if check != nil {
+			respondInvalid(w, check)
+			return
+		}
+	}
+	if body.LoaderVersion != nil && strings.TrimSpace(*body.LoaderVersion) != "" {
+		if err := validateVersion("loader_version", strings.TrimSpace(*body.LoaderVersion)); err != nil {
+			respondInvalid(w, err)
+			return
+		}
+	}
+
+	directoryPath, err := resolveServerDirectory(h.serverRoot, body.DirectoryPath, body.Name)
+	if err != nil {
+		writeFieldError(w, "directory_path", err.Error())
+		return
+	}
+
+	// Never let two servers manage the same directory, or one inside another's —
+	// that's how an import (or a name collision) would "step on" an existing
+	// server, and nested directories would let one server's file manager reach
+	// into the other.
+	if existing, err := h.store.ListServers(r.Context()); err == nil {
+		for _, e := range existing {
+			if dirsOverlap(e.DirectoryPath, directoryPath) {
+				writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("that directory overlaps %q's", e.Name))
+				return
+			}
+		}
+	}
+	if taken, err := portTaken(r.Context(), h.store, body.NodeID, "", body.Port); err == nil && taken != "" {
+		writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("port %d is already used by %q on this node", body.Port, taken))
+		return
+	}
+
+	// Record import metadata so start runs the existing runtime as-is.
+	if body.ImportExisting {
+		body.Settings = withImportSettings(body.Settings, body.JarFile)
+	}
+	if body.Settings == nil {
+		body.Settings = json.RawMessage("{}")
+	}
+	settings, err := validateSettingsChange(nil, body.Settings, true)
+	if err != nil {
+		respondInvalid(w, err)
+		return
+	}
 	if body.JVMArgs == nil {
 		body.JVMArgs = []string{}
 	}
 	if body.Tags == nil {
 		body.Tags = []string{}
 	}
-	if body.Settings == nil {
-		body.Settings = json.RawMessage("{}")
-	}
 	// Resolve the folder up front: a bad id should read as a 400 here, not as an
 	// opaque foreign-key failure from the insert.
 	folderID, err := h.resolveFolder(r, body.FolderID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeFieldError(w, "folder_id", err.Error())
 		return
 	}
 
@@ -449,7 +494,7 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		RAMMbMax:      body.RAMMbMax,
 		AutoStart:     body.AutoStart,
 		Tags:          body.Tags,
-		Settings:      body.Settings,
+		Settings:      settings,
 		FolderID:      folderID,
 	}
 
@@ -465,15 +510,25 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	// again at every start. Skipped for imports: the directory already exists and
 	// must not be modified (writing eula.txt would step on it).
 	if !body.ImportExisting {
-		if c, err := h.agentClient(r.Context(), h.store, created.NodeID); err == nil {
-			setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-			_ = c.Setup(setupCtx, created.ID, created.DirectoryPath, created.Port)
-			cancel()
-		}
+		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+		setupCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		_ = c.Setup(setupCtx, created.ID, created.DirectoryPath, created.Port)
+		cancel()
 	}
 
 	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform, "imported": body.ImportExisting})
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// dirsOverlap reports whether two server directories are the same or one
+// contains the other.
+func dirsOverlap(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(a, b+sep) || strings.HasPrefix(b, a+sep)
 }
 
 func (h *ServerHandlers) Get(w http.ResponseWriter, r *http.Request) {
@@ -520,16 +575,28 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	isAdmin := h.isAdmin(r)
 
 	// java_binary, jvm_args, and directory_path are start-command inputs the agent
 	// executes, so changing them is effectively host code execution. Confine those
 	// to global admins — a server-scoped `settings` collaborator must not be able
 	// to escalate to running arbitrary binaries/flags on the agent host.
 	if body.JavaBinary != nil || body.JVMArgs != nil || body.DirectoryPath != nil {
-		if !h.isAdmin(r) {
-			writeError(w, http.StatusForbidden, "only an administrator may change java_binary, jvm_args, or directory_path")
+		if !isAdmin {
+			writeCodedError(w, http.StatusForbidden, "forbidden", "only an administrator may change java_binary, jvm_args, or directory_path")
 			return
 		}
+	}
+	// The version fields describe the runtime on disk. Changing them here
+	// installs nothing, so the record would stop matching the server; Reinstall
+	// and Migrate change both together. An administrator may still correct the
+	// record by hand (after upgrading a server outside the panel, say).
+	versionChange := (body.Platform != nil && *body.Platform != existing.Platform) ||
+		(body.MCVersion != nil && *body.MCVersion != existing.MCVersion) ||
+		(body.LoaderVersion != nil && *body.LoaderVersion != deref(existing.LoaderVersion))
+	if versionChange && !isAdmin {
+		writeFieldError(w, "mc_version", "use Reinstall or Migrate to change the server's software or version")
+		return
 	}
 
 	// Record a before/after diff of the fields the request actually changes, so
@@ -540,38 +607,63 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			changes[field] = map[string]any{"from": from, "to": to}
 		}
 	}
-	deref := func(p *string) string {
-		if p == nil {
-			return ""
-		}
-		return *p
-	}
 
 	if body.Name != nil {
-		record("name", existing.Name, *body.Name)
-		existing.Name = *body.Name
+		name, err := validateServerName(*body.Name)
+		if err != nil {
+			respondInvalid(w, err)
+			return
+		}
+		record("name", existing.Name, name)
+		existing.Name = name
 	}
 	if body.Description != nil {
+		if err := validateDescription(body.Description); err != nil {
+			respondInvalid(w, err)
+			return
+		}
 		record("description", deref(existing.Description), *body.Description)
 		existing.Description = body.Description
 	}
 	if body.Platform != nil {
+		if err := validatePlatform(*body.Platform); err != nil {
+			respondInvalid(w, err)
+			return
+		}
 		record("platform", existing.Platform, *body.Platform)
 		existing.Platform = *body.Platform
 	}
 	if body.MCVersion != nil {
+		if err := validateVersion("mc_version", *body.MCVersion); err != nil {
+			respondInvalid(w, err)
+			return
+		}
 		record("mc_version", existing.MCVersion, *body.MCVersion)
 		existing.MCVersion = *body.MCVersion
 	}
 	if body.LoaderVersion != nil {
+		if v := strings.TrimSpace(*body.LoaderVersion); v != "" {
+			if err := validateVersion("loader_version", v); err != nil {
+				respondInvalid(w, err)
+				return
+			}
+		}
 		record("loader_version", deref(existing.LoaderVersion), *body.LoaderVersion)
 		existing.LoaderVersion = body.LoaderVersion
 	}
 	if body.DirectoryPath != nil {
 		dir, err := resolveServerDirectory(h.serverRoot, *body.DirectoryPath, existing.Name)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeFieldError(w, "directory_path", err.Error())
 			return
+		}
+		if servers, err := h.store.ListServers(r.Context()); err == nil {
+			for _, other := range servers {
+				if other.ID != existing.ID && dirsOverlap(other.DirectoryPath, dir) {
+					writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("that directory overlaps %q's", other.Name))
+					return
+				}
+			}
 		}
 		record("directory_path", existing.DirectoryPath, dir)
 		existing.DirectoryPath = dir
@@ -586,42 +678,74 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	portChanged := false
 	if body.Port != nil {
-		record("port", existing.Port, *body.Port)
+		if err := validatePort(*body.Port); err != nil {
+			respondInvalid(w, err)
+			return
+		}
 		portChanged = *body.Port != existing.Port
+		if portChanged {
+			if taken, err := portTaken(r.Context(), h.store, existing.NodeID, existing.ID, *body.Port); err == nil && taken != "" {
+				writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("port %d is already used by %q on this node", *body.Port, taken))
+				return
+			}
+		}
+		record("port", existing.Port, *body.Port)
 		existing.Port = *body.Port
 	}
-	if body.RAMMbMin != nil {
-		record("ram_mb_min", existing.RAMMbMin, *body.RAMMbMin)
-		existing.RAMMbMin = *body.RAMMbMin
-	}
-	if body.RAMMbMax != nil {
-		record("ram_mb_max", existing.RAMMbMax, *body.RAMMbMax)
-		existing.RAMMbMax = *body.RAMMbMax
+	if body.RAMMbMin != nil || body.RAMMbMax != nil {
+		minMb, maxMb := existing.RAMMbMin, existing.RAMMbMax
+		if body.RAMMbMin != nil {
+			minMb = *body.RAMMbMin
+		}
+		if body.RAMMbMax != nil {
+			maxMb = *body.RAMMbMax
+		}
+		node, _ := h.store.GetNode(r.Context(), existing.NodeID)
+		if err := validateRAM(minMb, maxMb, node); err != nil {
+			respondInvalid(w, err)
+			return
+		}
+		record("ram_mb_min", existing.RAMMbMin, minMb)
+		record("ram_mb_max", existing.RAMMbMax, maxMb)
+		existing.RAMMbMin, existing.RAMMbMax = minMb, maxMb
 	}
 	if body.AutoStart != nil {
 		record("auto_start", existing.AutoStart, *body.AutoStart)
 		existing.AutoStart = *body.AutoStart
 	}
 	if body.Tags != nil {
+		if err := validateTags(body.Tags); err != nil {
+			respondInvalid(w, err)
+			return
+		}
 		record("tags", strings.Join(existing.Tags, ", "), strings.Join(body.Tags, ", "))
 		existing.Tags = body.Tags
 	}
 	if body.Settings != nil {
-		if !bytes.Equal(existing.Settings, body.Settings) {
+		settings, err := validateSettingsChange(existing.Settings, body.Settings, isAdmin)
+		if err != nil {
+			if fe, ok := asFieldError(err); ok && strings.HasPrefix(fe.Msg, "only an administrator") {
+				writeCodedError(w, http.StatusForbidden, "forbidden", fe.Msg)
+				return
+			}
+			respondInvalid(w, err)
+			return
+		}
+		if !jsonEqual(existing.Settings, settings) {
 			// Avoid dumping the whole config blob; just flag that it changed.
 			changes["settings"] = map[string]any{"from": "previous config", "to": "updated config"}
 		}
-		existing.Settings = body.Settings
+		existing.Settings = settings
 	}
 	if len(body.FolderID) > 0 {
 		var target *string
 		if err := json.Unmarshal(body.FolderID, &target); err != nil {
-			writeError(w, http.StatusBadRequest, "folder_id must be a folder id or null")
+			writeFieldError(w, "folder_id", "folder_id must be a folder id or null")
 			return
 		}
 		resolved, err := h.resolveFolder(r, target)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeFieldError(w, "folder_id", err.Error())
 			return
 		}
 		record("folder_id", folderLabel(existing.FolderID), folderLabel(resolved))
@@ -631,7 +755,7 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		slug := strings.ToLower(strings.TrimSpace(*body.PublicSlug))
 		if slug != "" {
 			if err := ValidatePublicSlug(slug); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
+				writeFieldError(w, "public_slug", err.Error())
 				return
 			}
 		}
@@ -645,14 +769,14 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	// Enabling the page without a slug would publish nothing reachable —
 	// reject so the UI surfaces the missing piece instead of silently no-oping.
 	if existing.PublicStatus && existing.PublicSlug == "" {
-		writeError(w, http.StatusBadRequest, "public_slug is required while the public status page is enabled")
+		writeFieldError(w, "public_slug", "public_slug is required while the public status page is enabled")
 		return
 	}
 
 	if err := h.store.UpdateServer(r.Context(), id, existing); err != nil {
 		if strings.Contains(err.Error(), "servers_public_slug") ||
 			strings.Contains(err.Error(), "servers.public_slug") {
-			writeError(w, http.StatusConflict, "that public URL is already taken by another server")
+			writeCodedError(w, http.StatusConflict, "conflict", "that public URL is already taken by another server")
 			return
 		}
 		writeServerError(w, r, "update server", err)
@@ -675,6 +799,13 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		audit(h.store, r, id, "server.update", map[string]any{"changes": changes})
 	}
 	writeJSON(w, http.StatusOK, existing)
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
@@ -837,6 +968,18 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 		if mcVersion == "" {
 			writeError(w, http.StatusBadRequest, "mc_version required")
 			return
+		}
+		for _, check := range []error{validatePlatform(platform), validateVersion("mc_version", mcVersion)} {
+			if check != nil {
+				respondInvalid(w, check)
+				return
+			}
+		}
+		if loaderVersion != "" {
+			if err := validateVersion("loader_version", loaderVersion); err != nil {
+				respondInvalid(w, err)
+				return
+			}
 		}
 		// Only fabric and quilt runtimes take a pinned loader version; accepting
 		// one for other platforms would store metadata the install never honors.

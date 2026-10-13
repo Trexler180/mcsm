@@ -71,9 +71,20 @@ func EnsureRuntime(ctx context.Context, dir, platform, mcVersion, loaderVersion,
 	return installRuntime(ctx, dir, platform, mcVersion, loaderVersion, javaBinary)
 }
 
+// safeVersionRe is the shape of a Minecraft or loader version. Versions are
+// interpolated into download URLs and installer arguments, so anything else is
+// refused before it gets that far.
+var safeVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
+
 func installRuntime(ctx context.Context, dir, platform, mcVersion, loaderVersion, javaBinary string) error {
 	if mcVersion == "" {
 		return fmt.Errorf("mc_version required to auto-install %s", platform)
+	}
+	if !safeVersionRe.MatchString(mcVersion) {
+		return fmt.Errorf("invalid mc_version %q", mcVersion)
+	}
+	if loaderVersion != "" && !safeVersionRe.MatchString(loaderVersion) {
+		return fmt.Errorf("invalid loader_version %q", loaderVersion)
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
