@@ -21,6 +21,12 @@ import (
 // have the player name immediately after `: ` (e.g. `[INFO]: Bob joined the
 // game`); chat lines wrap the speaker in `< >` (e.g. `[INFO]: <Bob> ...`).
 var (
+	// chatLineRe matches a player chat line as the server logs it, with or
+	// without the "[Not Secure]" tag unsigned messages carry:
+	//   [12:00:00] [Server thread/INFO]: <Steve> hello
+	//   [12:00:00] [Async Chat Thread - #0/INFO]: [Not Secure] <Steve> hello
+	chatLineRe = regexp.MustCompile(`\]:\s+(?:\[Not Secure\]\s+)?<[^<>\s]+>\s`)
+
 	playerJoinRe  = regexp.MustCompile(`:\s+([A-Za-z0-9_]{2,16})\s+joined the game\s*$`)
 	playerLeaveRe = regexp.MustCompile(`:\s+([A-Za-z0-9_]{2,16})\s+left the game\s*$`)
 	playerListRe  = regexp.MustCompile(`:\s*There are\s+\d+(?:\s*/\s*\d+|\s+of a max of\s+\d+)\s+players?\s+online(?::\s*(.*))?\.?\s*$`)
@@ -639,29 +645,45 @@ func (inst *Instance) consumeLine(line, stream string) {
 	default:
 	}
 
-	// Watch every line for a Fabric incompatible-mods block or a mod that crashes
-	// startup. On detection, stash the parsed conflict, flip status, and kill the
+	// Watch for a Fabric incompatible-mods block or a mod that crashes startup.
+	// On detection, stash the parsed conflict, flip status, and kill the
 	// process — it would die on its own, but this captures the diagnostic before
 	// the exit watcher relabels it "crashed".
-	inst.conflictMu.Lock()
-	mc := inst.detector.feed(line)
-	if mc == nil {
-		mc = inst.crashDetector.feed(line)
+	//
+	// Only while the server is starting, and never on a chat line. These are
+	// startup diagnostics, and their patterns are plain text: once players can
+	// talk, anyone could type the sentence a detector looks for and have the
+	// agent SIGKILL a running server without saving it.
+	inst.mu.RLock()
+	starting := inst.status == StatusStarting
+	inst.mu.RUnlock()
+	var mc *ModConflict
+	if starting && !isChatLine(line) {
+		inst.conflictMu.Lock()
+		mc = inst.detector.feed(line)
+		if mc == nil {
+			mc = inst.crashDetector.feed(line)
+		}
+		if mc == nil {
+			mc = inst.javaDetector.feed(line)
+		}
+		if mc != nil && inst.conflict == nil {
+			inst.conflict = mc
+		} else {
+			mc = nil // already have one; don't re-kill/relabel
+		}
+		inst.conflictMu.Unlock()
 	}
-	if mc == nil {
-		mc = inst.javaDetector.feed(line)
-	}
-	if mc != nil && inst.conflict == nil {
-		inst.conflict = mc
-	} else {
-		mc = nil // already have one; don't re-kill/relabel
-	}
-	inst.conflictMu.Unlock()
 	if mc != nil {
 		inst.mu.Lock()
-		inst.status = StatusStartupFailure
+		stillStarting := inst.status == StatusStarting
+		if stillStarting {
+			inst.status = StatusStartupFailure
+		}
 		inst.mu.Unlock()
-		_ = inst.kill()
+		if stillStarting {
+			_ = inst.kill()
+		}
 	}
 
 	if stream == "stdout" && strings.Contains(line, "Done (") {
@@ -1032,4 +1054,10 @@ func (inst *Instance) ClearConflict() {
 	inst.crashDetector = mixinCrashDetector{}
 	inst.javaDetector = javaVersionDetector{}
 	inst.conflictMu.Unlock()
+}
+
+// isChatLine reports whether a console line is a player's chat message, which
+// carries text the player chose and must never be read as a diagnostic.
+func isChatLine(line string) bool {
+	return chatLineRe.MatchString(line)
 }
