@@ -81,7 +81,20 @@ func (h *FileHandlers) GetContent(w http.ResponseWriter, r *http.Request) {
 // held in memory.
 const maxSyncedPropertiesBytes = 1 << 20
 
+// proxyAudited proxies a file mutation and records it with its outcome.
+func (h *FileHandlers) proxyAudited(w http.ResponseWriter, r *http.Request, run func(http.ResponseWriter), action string, detail map[string]any) {
+	rec := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+	run(rec)
+	auditOutcome(h.store, r, chi.URLParam(r, "id"), action, detail, rec.Status())
+}
+
 func (h *FileHandlers) PutContent(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.putContent(w, r) },
+		"file.write", map[string]any{"path": path, "bytes": r.ContentLength})
+}
+
+func (h *FileHandlers) putContent(w http.ResponseWriter, r *http.Request) {
 	// Editing server.properties is the other half of the port story. The panel's
 	// port is written into that file on setup and before every start, so an
 	// operator who edits server-port by hand would otherwise see it reverted at
@@ -198,19 +211,33 @@ func propertiesPort(body []byte) (int, bool) {
 }
 
 func (h *FileHandlers) Delete(w http.ResponseWriter, r *http.Request) {
-	h.proxyToAgent(w, r, "/files")
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.proxyToAgent(w, r, "/files") },
+		"file.delete", map[string]any{"path": r.URL.Query().Get("path")})
 }
 
 func (h *FileHandlers) Rename(w http.ResponseWriter, r *http.Request) {
-	h.proxyToAgent(w, r, "/files/rename")
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	peekJSON(r, &body)
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.proxyToAgent(w, r, "/files/rename") },
+		"file.rename", map[string]any{"from": body.From, "to": body.To})
 }
 
 func (h *FileHandlers) Mkdir(w http.ResponseWriter, r *http.Request) {
-	h.proxyToAgent(w, r, "/files/mkdir")
+	var body struct {
+		Path string `json:"path"`
+	}
+	peekJSON(r, &body)
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.proxyToAgent(w, r, "/files/mkdir") },
+		"file.mkdir", map[string]any{"path": body.Path})
 }
 
+// Download is a read, but it is how data leaves the host, so it is recorded.
 func (h *FileHandlers) Download(w http.ResponseWriter, r *http.Request) {
-	h.proxyToAgent(w, r, "/files/download")
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.proxyToAgent(w, r, "/files/download") },
+		"file.download", map[string]any{"path": r.URL.Query().Get("path")})
 }
 
 // Upload takes the request body as its payload, so it runs on the upload budget
@@ -221,7 +248,8 @@ func (h *FileHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, fileUploadRequestLimit)
-	h.proxyToAgentWithin(w, r, "/files/upload", UploadBudget)
+	h.proxyAudited(w, r, func(w http.ResponseWriter) { h.proxyToAgentWithin(w, r, "/files/upload", UploadBudget) },
+		"file.upload", map[string]any{"path": r.URL.Query().Get("path"), "bytes": r.ContentLength})
 }
 
 // worldUploadLimit caps a single world archive. Worlds run large — a

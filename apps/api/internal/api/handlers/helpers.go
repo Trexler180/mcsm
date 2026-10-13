@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -87,6 +91,48 @@ func audit(s *store.Store, r *http.Request, serverID, action string, detail any)
 		keyID = m.KeyID
 	}
 	_ = s.LogActionWithKey(r.Context(), userID, keyID, serverID, action, clientIP(r), detail)
+}
+
+// auditOutcome records a proxied mutation with the status the node answered,
+// so a refused change reads as a refusal in the log rather than as done.
+func auditOutcome(s *store.Store, r *http.Request, serverID, action string, detail map[string]any, status int) {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	if status == 0 {
+		status = http.StatusOK
+	}
+	detail["status"] = status
+	if status >= 400 {
+		detail["refused"] = true
+	}
+	audit(s, r, serverID, action, detail)
+}
+
+// peekJSON reads a small JSON body into dst and restores it for the proxy.
+// Bodies over the limit are left unread and reported as not decoded.
+func peekJSON(r *http.Request, dst any) bool {
+	if r.Body == nil || r.ContentLength > maxPeekBody {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxPeekBody+1))
+	if err != nil || len(body) > maxPeekBody {
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	return json.Unmarshal(body, dst) == nil
+}
+
+const maxPeekBody = 64 << 10
+
+// emailFingerprint is a short, stable stand-in for an email address in the
+// audit log: enough to see repeated attempts against one account, not enough
+// to read the address back.
+func emailFingerprint(email string) string {
+	sum := sha256.Sum256([]byte(store.NormalizeEmail(email)))
+	return hex.EncodeToString(sum[:6])
 }
 
 // callerIsAdmin reports whether the caller holds the global admin role right

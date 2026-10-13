@@ -78,16 +78,30 @@ Use long random values for:
 
 ## Backup And Restore
 
-Back up the SQLite database (`DATABASE_PATH`) and the `SERVER_ROOT` directory
-together, after stopping the services or ensuring SQLite has checkpointed
-cleanly. A plain `tar`/`zip` of both is enough:
+A complete backup has three parts, and all three must be restored together:
+
+1. the SQLite database (`DATABASE_PATH`);
+2. the app encryption key: `APP_ENCRYPTION_KEY` when it is set, otherwise the
+   key file (`APP_ENCRYPTION_KEY_FILE`, by default `.mcsm-secret-key` beside
+   the database);
+3. the `SERVER_ROOT` directory.
+
+The database stores agent tokens, two-factor secrets and integration secrets
+encrypted with that key. A database restored without its key still opens, but
+every node shows as unreachable and every account with two-factor sign-in is
+locked out, with sign-in reporting that the panel cannot read its two-factor
+secret.
+
+Stop the services (or make sure SQLite has checkpointed cleanly), then a plain
+`tar`/`zip` is enough:
 
 ```bash
-tar czf mcsm-backup.tgz "$DATABASE_PATH" "$SERVER_ROOT"
+tar czf mcsm-backup.tgz "$DATABASE_PATH" "$(dirname "$DATABASE_PATH")/.mcsm-secret-key" "$SERVER_ROOT"
 ```
 
-Restore by stopping the services, extracting the archive back to the same
-paths, and starting the services again.
+If you set `APP_ENCRYPTION_KEY` instead, keep a copy of its value with the
+backup (it never touches the disk). Restore by stopping the services,
+extracting the archive back to the same paths, and starting the services again.
 
 ## Checks
 

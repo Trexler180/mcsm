@@ -2,9 +2,11 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,7 +59,39 @@ var (
 
 // ProxyConsole upgrades the browser connection and bidirectionally proxies
 // to the agent's console WebSocket.
-func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Client, serverID string, canUse PermissionCheck) {
+// ConsoleInput is called with each command typed into a console socket,
+// before it is forwarded, so it can be recorded.
+type ConsoleInput func(ctx context.Context, command string)
+
+// maxConsoleCommand matches the limit on POST /command.
+const maxConsoleCommand = 1000
+
+// consoleCommand extracts the command from a browser console frame, which is
+// {"type":"input","data":{"command":"..."}}. ok is false for anything else;
+// forward reports whether the frame may go to the agent at all. A command with
+// a line break would run as several commands but be recorded as one, so it is
+// refused rather than forwarded.
+func consoleCommand(msgType websocket.MessageType, data []byte) (cmd string, isInput, forward bool) {
+	if msgType != websocket.MessageText {
+		return "", false, true
+	}
+	var frame struct {
+		Type string `json:"type"`
+		Data struct {
+			Command string `json:"command"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(data, &frame) != nil || frame.Type != "input" {
+		return "", false, true
+	}
+	cmd = frame.Data.Command
+	if cmd == "" || len(cmd) > maxConsoleCommand || strings.ContainsAny(cmd, "\r\n") {
+		return cmd, true, false
+	}
+	return cmd, true, true
+}
+
+func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Client, serverID string, canUse PermissionCheck, onInput ConsoleInput) {
 	browserConn, err := websocket.Accept(w, r, acceptOptions())
 	if err != nil {
 		return
@@ -110,6 +144,13 @@ func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Cli
 			if canUse != nil && !canUse(ctx) {
 				errc <- errors.New("permission revoked")
 				return
+			}
+			cmd, isInput, forward := consoleCommand(msgType, data)
+			if !forward {
+				continue
+			}
+			if isInput && onInput != nil {
+				onInput(ctx, cmd)
 			}
 			if err := agentConn.Write(ctx, msgType, data); err != nil {
 				errc <- err

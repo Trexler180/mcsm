@@ -106,7 +106,7 @@ func TestProxyConsoleStopsForwardingWhenRevoked(t *testing.T) {
 	check := func(context.Context) bool { return allowed.Load() }
 
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ProxyConsole(w, r, client, "srv1", check)
+		ProxyConsole(w, r, client, "srv1", check, nil)
 	}))
 	defer proxy.Close()
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 )
@@ -69,7 +70,10 @@ func (h *PlayersHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 // Delete proxies removal of a player's saved data files (gated on players.delete
 // by the router). The agent rejects it while the server is running.
 func (h *PlayersHandlers) Delete(w http.ResponseWriter, r *http.Request) {
-	h.proxy(w, r, "/players/"+chi.URLParam(r, "uuid"))
+	rec := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+	h.proxy(rec, r, "/players/"+chi.URLParam(r, "uuid"))
+	auditOutcome(h.store, r, chi.URLParam(r, "id"), "player.data_delete",
+		map[string]any{"uuid": chi.URLParam(r, "uuid")}, rec.Status())
 }
 
 // Meta proxies the server's Bedrock-bridge info (Geyser/Floodgate install +
@@ -138,9 +142,7 @@ func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	var parsed struct {
-		Action string `json:"action"`
-	}
+	var parsed playerActionBody
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -163,7 +165,40 @@ func (h *PlayersHandlers) Action(w http.ResponseWriter, r *http.Request) {
 	// Restore the consumed body so proxy() can stream it to the agent.
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
-	h.proxy(w, r, "/players/action")
+	rec := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+	h.proxy(rec, r, "/players/action")
+	auditOutcome(h.store, r, chi.URLParam(r, "id"), "player."+parsed.Action, parsed.detail(), rec.Status())
+}
+
+// playerActionBody is the part of a player action the audit log keeps.
+type playerActionBody struct {
+	Action   string `json:"action"`
+	Name     string `json:"name"`
+	UUID     string `json:"uuid"`
+	Reason   string `json:"reason"`
+	IP       string `json:"ip"`
+	Level    int    `json:"level"`
+	Bedrock  bool   `json:"bedrock"`
+	Gamertag string `json:"gamertag"`
+}
+
+func (b playerActionBody) detail() map[string]any {
+	d := map[string]any{}
+	for k, v := range map[string]string{"name": b.Name, "uuid": b.UUID, "reason": b.Reason, "ip": b.IP, "gamertag": b.Gamertag} {
+		if v != "" {
+			if len(v) > 200 {
+				v = v[:200]
+			}
+			d[k] = v
+		}
+	}
+	if b.Level != 0 {
+		d["level"] = b.Level
+	}
+	if b.Bedrock {
+		d["bedrock"] = true
+	}
+	return d
 }
 
 // ActionDelegated performs a player action for a caller whose authority was

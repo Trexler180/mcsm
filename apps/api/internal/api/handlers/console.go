@@ -24,7 +24,10 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ws.ProxyConsole(w, r, c, id, h.permissionCheck(r, id, store.ServerPermissionConsole))
+	ws.ProxyConsole(w, r, c, id, h.permissionCheck(r, id, store.ServerPermissionConsole),
+		func(_ context.Context, command string) {
+			audit(h.store, r, id, "console.command", map[string]any{"command": command, "via": "console"})
+		})
 }
 
 func (h *ConsoleHandlers) Metrics(w http.ResponseWriter, r *http.Request) {

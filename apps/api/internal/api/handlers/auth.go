@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -73,9 +74,17 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		tooManyRequests(w, retry)
 		return
 	}
-	failAuth := func() {
+	failAuth := func(reason, userID string) {
 		h.ipThrottle.Fail(ipKey)
 		h.acctThrottle.Fail(acctKey)
+		// The address is recorded as a short hash, never in the clear: the log
+		// should show a burst against one account without becoming a list of
+		// every address anyone has mistyped.
+		h.store.LogAction(r.Context(), userID, "", "auth.login_failed", clientIP(r), map[string]any{
+			"reason":        reason,
+			"account_match": userID != "",
+			"email_hash":    emailFingerprint(body.Email),
+		})
 	}
 
 	user, hash, err := h.store.GetUserByEmail(r.Context(), body.Email)
@@ -83,18 +92,29 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		// Spend equivalent CPU on a missing account so response time can't be used
 		// to tell "no such user" from "wrong password".
 		auth.DummyCheck(body.Password)
-		failAuth()
+		failAuth("unknown_account", "")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	if !auth.CheckPassword(hash, body.Password) {
-		failAuth()
+		failAuth("bad_password", user.ID)
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	// Second factor, when the account has TOTP enabled.
 	cfg, err := h.store.GetUserTOTP(r.Context(), user.ID)
+	if errors.Is(err, store.ErrSecretUnreadable) {
+		slog.Error("login: this account's second factor cannot be read; the database was likely restored without its encryption key",
+			"user_id", user.ID, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "Sign-in is unavailable for this account: the panel cannot read its two-factor secret. " +
+				"An administrator needs to restore the panel's encryption key.",
+			"code":      "encryption_key_mismatch",
+			"retryable": false,
+		})
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "login: totp lookup", err)
 		return
@@ -103,7 +123,7 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case body.TOTPCode != "":
 			if !auth.ValidateTOTP(cfg.Secret, body.TOTPCode, time.Now()) {
-				failAuth()
+				failAuth("bad_totp", user.ID)
 				writeError(w, http.StatusUnauthorized, "invalid authentication code")
 				return
 			}
@@ -114,7 +134,7 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !ok {
-				failAuth()
+				failAuth("bad_recovery_code", user.ID)
 				writeError(w, http.StatusUnauthorized, "invalid recovery code")
 				return
 			}

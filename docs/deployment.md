@@ -373,9 +373,13 @@ Before exposing the panel to the public internet:
   `.mcsm-initial-admin-password` (mode 0600) beside the database. Log in, change
   it, then delete the file.
 
-- **Stored agent tokens are encrypted at rest** using the app encryption key
-  (`APP_ENCRYPTION_KEY`, else the persisted key file beside the database). Set
-  `APP_ENCRYPTION_KEY` explicitly in production so the key never lives on disk.
+- **Stored agent tokens, two-factor secrets and integration secrets are
+  encrypted at rest** using the app encryption key (`APP_ENCRYPTION_KEY`, else
+  the persisted key file beside the database). Each value is bound to the row
+  it belongs to, so it cannot be copied onto another row. Set
+  `APP_ENCRYPTION_KEY` explicitly in production so the key never lives on disk,
+  and back it up with the database: a database restored without its key locks
+  out every two-factor account and every node.
 
 ### Reverse-proxy security headers (recommended)
 

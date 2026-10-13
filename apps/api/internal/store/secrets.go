@@ -61,21 +61,35 @@ func (s *Store) encryptAtRest(v string, aad []byte) (string, error) {
 	return encBoundPrefix + enc, nil
 }
 
+// ErrSecretUnreadable reports a stored secret the current encryption key
+// cannot decrypt. In practice it means the database was restored or moved
+// without the key it was written with (.mcsm-secret-key beside the database,
+// or APP_ENCRYPTION_KEY), so it calls for an operator, not a retry.
+var ErrSecretUnreadable = errors.New("a stored secret cannot be decrypted with the current encryption key; restore the key the database was written with (.mcsm-secret-key beside the database, or APP_ENCRYPTION_KEY)")
+
 // decryptAtRest reverses encryptAtRest for every stored form.
 func (s *Store) decryptAtRest(stored string, aad []byte) (string, error) {
+	var (
+		v   string
+		err error
+	)
 	if rest, ok := strings.CutPrefix(stored, encBoundPrefix); ok {
 		if len(s.secretKey) == 0 {
-			return "", errNoEncryptionKey
+			return "", fmt.Errorf("%w: %v", ErrSecretUnreadable, errNoEncryptionKey)
 		}
-		return decryptSecret(s.secretKey, rest, aad)
-	}
-	if rest, ok := strings.CutPrefix(stored, encTokenPrefix); ok {
+		v, err = decryptSecret(s.secretKey, rest, aad)
+	} else if rest, ok := strings.CutPrefix(stored, encTokenPrefix); ok {
 		if len(s.secretKey) == 0 {
-			return "", errNoEncryptionKey
+			return "", fmt.Errorf("%w: %v", ErrSecretUnreadable, errNoEncryptionKey)
 		}
-		return decryptSecret(s.secretKey, rest, nil)
+		v, err = decryptSecret(s.secretKey, rest, nil)
+	} else {
+		return stored, nil
 	}
-	return stored, nil
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrSecretUnreadable, err)
+	}
+	return v, nil
 }
 
 // EncryptNodeToken and DecryptNodeToken encrypt agent tokens at rest, bound to
