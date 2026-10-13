@@ -59,7 +59,7 @@ func NewManager(serverRoot string) *Manager {
 	return &Manager{
 		serverRoot:   serverRoot,
 		instances:    make(map[string]*Instance),
-		dirs:         make(map[string]string),
+		dirs:         loadRegistry(serverRoot),
 		roster:       make(map[string]rosterCache),
 		bedrockCache: make(map[string]bedrockLookup),
 		denials:      make(map[string]*denialLog),
@@ -89,7 +89,9 @@ func (m *Manager) Reattach() {
 		m.mu.Lock()
 		m.instances[st.ID] = inst
 		m.dirs[st.ID] = st.Directory
+		snapshot := m.dirsSnapshotLocked()
 		m.mu.Unlock()
+		saveRegistry(m.serverRoot, snapshot)
 		log.Printf("reattached to running server %s (pid %d)", st.ID, st.PID)
 	}
 }
@@ -113,7 +115,11 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 		return err
 	}
 	m.instances[id] = inst
-	m.dirs[id] = cfg.Directory
+	if m.dirs[id] != cfg.Directory {
+		m.dirs[id] = cfg.Directory
+		// Held under the lock: Start already holds it, and the write is small.
+		saveRegistry(m.serverRoot, m.dirsSnapshotLocked())
+	}
 	return nil
 }
 
@@ -134,7 +140,24 @@ func (m *Manager) Kill(id string) error {
 	if !ok {
 		return fmt.Errorf("server not found")
 	}
-	return inst.kill()
+	return inst.requestKill()
+}
+
+// AllStatus returns the status of every server the agent has run since it
+// started (or reattached), keyed by id. One call answers the panel's poll for
+// the whole node instead of one request per server.
+func (m *Manager) AllStatus() map[string]StatusInfo {
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.instances))
+	for id := range m.instances {
+		ids = append(ids, id)
+	}
+	m.mu.RUnlock()
+	out := make(map[string]StatusInfo, len(ids))
+	for _, id := range ids {
+		out[id] = m.Status(id)
+	}
+	return out
 }
 
 // Restart stops and restarts a server with the configuration it is already
@@ -292,8 +315,24 @@ func (m *Manager) Subscribe(id string) (<-chan ConsoleEvent, func(), error) {
 
 func (m *Manager) RegisterDir(id, dir string) {
 	m.mu.Lock()
+	changed := m.dirs[id] != dir
 	m.dirs[id] = dir
+	var snapshot map[string]string
+	if changed {
+		snapshot = m.dirsSnapshotLocked()
+	}
 	m.mu.Unlock()
+	if snapshot != nil {
+		saveRegistry(m.serverRoot, snapshot)
+	}
+}
+
+func (m *Manager) dirsSnapshotLocked() map[string]string {
+	out := make(map[string]string, len(m.dirs))
+	for k, v := range m.dirs {
+		out[k] = v
+	}
+	return out
 }
 
 // Unregister drops a server's tracked directory and instance. Called after a
@@ -302,7 +341,9 @@ func (m *Manager) Unregister(id string) {
 	m.mu.Lock()
 	delete(m.dirs, id)
 	delete(m.instances, id)
+	snapshot := m.dirsSnapshotLocked()
 	m.mu.Unlock()
+	saveRegistry(m.serverRoot, snapshot)
 
 	m.rosterMu.Lock()
 	delete(m.roster, id)

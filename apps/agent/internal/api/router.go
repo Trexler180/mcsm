@@ -61,6 +61,8 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 			// Reboot the whole host. Off unless AGENT_ALLOW_REBOOT=1, and the
 			// OS must separately grant it (polkit); see HostHandlers.
 			r.Post("/host/reboot", host.Reboot)
+			// Every server's status in one call, for the panel's poll.
+			r.Get("/servers/status", h.AllStatus)
 
 			r.Route("/servers/{id}", func(r chi.Router) {
 				r.Post("/start", h.Start)

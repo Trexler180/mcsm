@@ -271,6 +271,12 @@ func (h *ServerHandlers) Purge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// AllStatus reports every server the agent knows a run of, keyed by id. A
+// server absent from the map has not run since the agent started.
+func (h *ServerHandlers) AllStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"servers": h.mgr.AllStatus()})
+}
+
 func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	info := h.mgr.Status(id)

@@ -133,6 +133,7 @@ func main() {
 	}
 
 	serverRoot := defaultServerRoot()
+	handlers.DiskPath = serverRoot
 	mgr := process.NewManager(serverRoot)
 	collector := metrics.NewCollector()
 

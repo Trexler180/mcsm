@@ -131,6 +131,20 @@ type StatusInfo struct {
 	StartedAt   time.Time    `json:"started_at,omitempty"`
 	ModConflict *ModConflict `json:"mod_conflict,omitempty"`
 
+	// RunID identifies one launch. It changes on every start, so the panel can
+	// tell "still the same process" from "restarted since I last looked".
+	RunID string `json:"run_id,omitempty"`
+	// ExitCause says why the last run ended, once it has:
+	//   requested        stopped or killed through the panel or agent
+	//   exited           the server shut itself down cleanly (e.g. /stop in game)
+	//   crashed          it died: a non-zero exit, a signal, or a crash report
+	//   startup_failure  it failed to boot with a diagnosed cause
+	// The agent is the only party that sees the process end, so it is the
+	// authority on this rather than the panel guessing from its own records.
+	ExitCause string     `json:"exit_cause,omitempty"`
+	ExitCode  *int       `json:"exit_code,omitempty"`
+	ExitedAt  *time.Time `json:"exited_at,omitempty"`
+
 	// JoinDenied lists players the whitelist recently turned away and who have
 	// not been let in since. It rides on the status poll the panel already makes
 	// rather than a stream of its own: an attempt the operator hears about
@@ -148,6 +162,9 @@ type launched struct {
 	pgid  int
 	stdin io.WriteCloser
 	cmd   *exec.Cmd
+	// exited receives the exit status of a fresh detached launch (unix). Nil
+	// for a reattached process and on Windows, where cmd carries it.
+	exited <-chan *os.ProcessState
 }
 
 type Instance struct {
@@ -164,6 +181,14 @@ type Instance struct {
 
 	cmd   *exec.Cmd      // non-nil only when exit is via cmd.Wait (Windows)
 	stdin io.WriteCloser // FIFO writer (unix) or stdin pipe (Windows)
+
+	// Lifecycle record for the panel; see StatusInfo.
+	runID         string
+	exitCause     string
+	exitCode      *int
+	exitedAt      time.Time
+	stopRequested bool
+	exitStatus    <-chan *os.ProcessState
 
 	broadcastCh chan ConsoleEvent
 
@@ -352,12 +377,15 @@ func (inst *Instance) start() error {
 	inst.pgid = l.pgid
 	inst.stdin = l.stdin
 	inst.cmd = l.cmd
+	inst.exitStatus = l.exited
 	inst.startedAt = time.Now()
 	inst.status = StatusStarting
+	inst.runID = newRunID()
 	inst.mu.Unlock()
 
 	if err := writeRunState(inst.serverRoot, runState{
 		ID:        inst.ID,
+		RunID:     inst.runID,
 		PID:       l.pid,
 		PGID:      l.pgid,
 		StartedAt: inst.startedAt,
@@ -425,11 +453,18 @@ func reattachInstance(serverRoot string, st runState, onJoinDenied func(serverID
 	if pgid == 0 {
 		pgid = st.PID
 	}
+	runID := st.RunID
+	if runID == "" {
+		// Run state written by an older agent: the process is the same one,
+		// it just never had an id.
+		runID = newRunID()
+	}
 	inst.mu.Lock()
 	inst.pid = st.PID
 	inst.pgid = pgid
 	inst.stdin = stdin
 	inst.startedAt = st.StartedAt
+	inst.runID = runID
 	inst.mu.Unlock()
 
 	// Seed recent console history from the log tail and infer status from it
@@ -883,16 +918,23 @@ func (inst *Instance) watchExit() {
 // to drain and close the broadcast). Runs at most once.
 func (inst *Instance) finalize() {
 	inst.finalizeOnce.Do(func() {
-		inst.mu.Lock()
-		prev := inst.status
-		switch {
-		case prev == StatusStartupFailure:
-			// keep the diagnostic status so the panel can surface a fix
-		case prev == StatusStopping:
-			inst.status = StatusOffline
-		default:
-			inst.status = StatusCrashed
+		code := inst.collectExitCode()
+		inst.mu.RLock()
+		prev, requested := inst.status, inst.stopRequested
+		inst.mu.RUnlock()
+		// Only read the log when the cause is otherwise unknown; it is the
+		// slowest part.
+		var tail []string
+		if prev != StatusStartupFailure && prev != StatusStopping && !requested {
+			tail = readTail(inst.logPath, exitLogTailBytes)
 		}
+		status, cause := classifyExit(prev, requested, code, tail)
+
+		inst.mu.Lock()
+		inst.status = status
+		inst.exitCause = cause
+		inst.exitCode = code
+		inst.exitedAt = time.Now()
 		inst.pid = 0
 		stdin := inst.stdin
 		inst.mu.Unlock()
@@ -947,6 +989,7 @@ func (inst *Instance) stop(graceful bool, timeout time.Duration) error {
 
 	inst.mu.Lock()
 	inst.status = StatusStopping
+	inst.stopRequested = true
 	inst.mu.Unlock()
 
 	if graceful {
@@ -958,6 +1001,15 @@ func (inst *Instance) stop(graceful bool, timeout time.Duration) error {
 			}
 		}
 	}
+	return inst.kill()
+}
+
+// requestKill kills the process on request (the panel's Kill), so the exit is
+// recorded as requested rather than as a crash.
+func (inst *Instance) requestKill() error {
+	inst.mu.Lock()
+	inst.stopRequested = true
+	inst.mu.Unlock()
 	return inst.kill()
 }
 
@@ -1035,6 +1087,13 @@ func (inst *Instance) statusInfo() StatusInfo {
 		Status:    inst.status,
 		PID:       inst.pid,
 		StartedAt: inst.startedAt,
+		RunID:     inst.runID,
+		ExitCause: inst.exitCause,
+		ExitCode:  inst.exitCode,
+	}
+	if !inst.exitedAt.IsZero() {
+		at := inst.exitedAt
+		info.ExitedAt = &at
 	}
 	inst.mu.RUnlock()
 

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -14,6 +16,22 @@ import (
 )
 
 var startTime = time.Now()
+
+// BootID identifies this agent process. It changes on every restart, so the
+// panel can tell when anything it cached about the agent is stale.
+var BootID = func() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}()
+
+// DiskPath is where disk usage is measured: the server root, where worlds and
+// backups live, rather than whatever filesystem holds "/". Set from main.
+var DiskPath = "/"
+
+// Capabilities name the agent features the panel may rely on. The panel checks
+// this list rather than the version, so an older agent degrades gracefully.
+var Capabilities = []string{"batch_status", "exit_cause", "persistent_registry"}
 
 func init() {
 	// Prime the CPU sampler: cpu.Percent(0, ...) reports usage since the
@@ -36,7 +54,7 @@ func Info(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
 
 	vm, _ := mem.VirtualMemory()
-	du, _ := disk.Usage("/")
+	du, _ := disk.Usage(DiskPath)
 	hi, _ := host.Info()
 
 	var uptime uint64
@@ -74,6 +92,8 @@ func Info(w http.ResponseWriter, r *http.Request) {
 		"uptime_seconds":   uptime,
 		"agent_uptime_sec": int(time.Since(startTime).Seconds()),
 		"version":          Version,
+		"boot_id":          BootID,
+		"capabilities":     Capabilities,
 	})
 }
 

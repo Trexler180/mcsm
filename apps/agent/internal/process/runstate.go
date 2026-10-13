@@ -23,6 +23,7 @@ const runtimeDirName = ".mcsm-run"
 // runState is the persisted descriptor for one running server.
 type runState struct {
 	ID        string      `json:"id"`
+	RunID     string      `json:"run_id,omitempty"`
 	PID       int         `json:"pid"`
 	PGID      int         `json:"pgid"`
 	StartedAt time.Time   `json:"started_at"`

@@ -71,9 +71,16 @@ func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv 
 	// keeping cmd nil in `launched`, so watchExit still uses the PID-polling
 	// path (needed for reattach after an agent restart, where the new agent
 	// process isn't the child's parent and can't Wait() on it anyway).
-	go func() { _, _ = cmd.Process.Wait() }()
+	//
+	// The exit status goes to exited, so the instance can tell a clean exit
+	// (status 0) from a crash. A reattached process has no such channel.
+	exited := make(chan *os.ProcessState, 1)
+	go func() {
+		state, _ := cmd.Process.Wait()
+		exited <- state
+	}()
 
-	return &launched{pid: pid, pgid: pid, stdin: stdin, cmd: nil}, nil
+	return &launched{pid: pid, pgid: pid, stdin: stdin, cmd: nil, exited: exited}, nil
 }
 
 // openStdinWriter creates the FIFO if needed and opens it O_RDWR. Opening
