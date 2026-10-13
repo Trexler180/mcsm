@@ -517,8 +517,9 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d *NotificationDelivery) er
 }
 
 // ClaimDueDeliveries returns pending deliveries whose next_attempt_at has passed.
-// A single dispatcher goroutine consumes these, so no row-level locking/claim
-// flag is needed.
+// A single dispatcher consumes these and finishes each batch (in parallel per
+// target) before claiming the next, so no row-level locking/claim flag is
+// needed.
 func (s *Store) ClaimDueDeliveries(ctx context.Context, limit int) ([]*NotificationDelivery, error) {
 	if limit <= 0 {
 		limit = 50

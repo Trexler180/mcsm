@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/mcsm/api/internal/notify/channels"
@@ -18,6 +19,9 @@ const (
 	maxAttempts      = 6
 	backoffBase      = 30 * time.Second
 	backoffCap       = time.Hour
+	// dispatchWorkers bounds how many targets are delivered to at once. One
+	// slow webhook (a 10s timeout) used to hold up every other delivery.
+	dispatchWorkers = 4
 )
 
 // WebhookSecretKey is the app_secrets key under which a channel's HMAC signing
@@ -33,15 +37,19 @@ type Dispatcher struct {
 	webhook *channels.WebhookSender
 	webpush *channels.WebPushSender
 	signal  chan struct{}
+	// send delivers one row; tests replace it.
+	send func(ctx context.Context, del *store.NotificationDelivery)
 }
 
 func NewDispatcher(s *store.Store, webhook *channels.WebhookSender, webpush *channels.WebPushSender) *Dispatcher {
-	return &Dispatcher{
+	d := &Dispatcher{
 		store:   s,
 		webhook: webhook,
 		webpush: webpush,
 		signal:  make(chan struct{}, 1),
 	}
+	d.send = d.deliver
+	return d
 }
 
 // Signal nudges the dispatcher to drain now. Non-blocking and coalescing: a
@@ -78,16 +86,43 @@ func (d *Dispatcher) drain(ctx context.Context) {
 		if len(due) == 0 {
 			return
 		}
-		for _, del := range due {
-			if ctx.Err() != nil {
-				return
-			}
-			d.deliver(ctx, del)
-		}
-		if len(due) < dispatchBatch {
+		d.deliverBatch(ctx, due)
+		if ctx.Err() != nil || len(due) < dispatchBatch {
 			return
 		}
 	}
+}
+
+// deliverBatch delivers a claimed batch with a few workers. Deliveries to one
+// target stay in order, one after another; different targets run in parallel.
+// The batch finishes before the next claim, so no row is ever claimed twice.
+func (d *Dispatcher) deliverBatch(ctx context.Context, due []*store.NotificationDelivery) {
+	var order []string
+	byTarget := map[string][]*store.NotificationDelivery{}
+	for _, del := range due {
+		key := del.TargetKind + ":" + del.TargetID
+		if _, ok := byTarget[key]; !ok {
+			order = append(order, key)
+		}
+		byTarget[key] = append(byTarget[key], del)
+	}
+	sem := make(chan struct{}, dispatchWorkers)
+	var wg sync.WaitGroup
+	for _, key := range order {
+		queue := byTarget[key]
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			for _, del := range queue {
+				if ctx.Err() != nil {
+					return
+				}
+				d.send(ctx, del)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, del *store.NotificationDelivery) {
