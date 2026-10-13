@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/events"
 	"github.com/mcsm/api/internal/mc"
 	"github.com/mcsm/api/internal/mods/curseforge"
 	"github.com/mcsm/api/internal/mods/hangar"
@@ -32,6 +33,8 @@ type ModHandlers struct {
 	mc            *mc.Client
 	updater       *autoupdate.Engine
 	notifier      *notify.Engine
+	bus           *events.Bus
+	rescans       modRescans
 }
 
 func NewModHandlers(s *store.Store, serverRoot string, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {
@@ -91,32 +94,6 @@ func (h *ModHandlers) versionFor(ctx context.Context, source, projectID, version
 	default:
 		return h.modrinth.GetVersion(ctx, versionID)
 	}
-}
-
-func (h *ModHandlers) List(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	// Reconcile the panel's view with what's actually on disk before listing, so
-	// jars added or removed outside the panel (manual copy, SFTP, another tool)
-	// are reflected. Best-effort: a missing dir or unreachable agent just leaves
-	// the DB rows as-is.
-	h.reconcileFromDisk(r.Context(), id)
-	mods, err := h.store.ListMods(r.Context(), id)
-	if err != nil {
-		writeServerError(w, r, "list mods", err)
-		return
-	}
-	if mods == nil {
-		mods = []*store.InstalledMod{}
-	}
-	// Re-read declared dependencies from the installed builds when the set has
-	// changed, so "required by" and the removal guard know about jars the panel
-	// didn't install itself. No-op while nothing changed.
-	h.ensureDependencyGraph(r.Context(), id, mods)
-	if err := h.annotateDependencies(r.Context(), id, mods); err != nil {
-		writeServerError(w, r, "list mods: dependencies", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, mods)
 }
 
 // modReadSummary is the model-facing projection of an installed mod. It omits

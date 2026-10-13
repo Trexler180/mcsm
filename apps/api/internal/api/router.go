@@ -170,7 +170,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine)
+	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine).WithBus(svc.Bus)
 	migrationEngine := migrate.New(s)
 	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
@@ -519,6 +519,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 					// Mods
 					r.With(modsRead).Get("/mods", modH.List)
+					r.With(modsRead).Post("/mods/rescan", modH.Rescan)
 					r.With(modsRead).Get("/mods/sources", modH.Sources)
 					r.With(modsRead).Get("/mods/categories", modH.Categories)
 					r.With(modsRead).Post("/mods/search", modH.Search)

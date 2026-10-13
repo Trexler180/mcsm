@@ -895,8 +895,12 @@ export const api = {
   },
 
   mods: {
+    // The panel's current view of the mods. A stale view is rescanned in the
+    // background; rescan() waits for a fresh look at the disk.
     list: (serverId: string) =>
       get<InstalledMod[]>(`/servers/${serverId}/mods`),
+    rescan: (serverId: string) =>
+      post<InstalledMod[]>(`/servers/${serverId}/mods/rescan`),
     sources: (serverId: string) =>
       get<Record<string, boolean>>(`/servers/${serverId}/mods/sources`),
     categories: (serverId: string, projectType?: string, source?: string) =>

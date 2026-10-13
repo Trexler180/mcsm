@@ -79,13 +79,23 @@ export function ModSearch({
     queryFn: () => api.mods.updates(serverId),
     staleTime: 5 * 60_000,
   });
-  const refreshingContent = refreshingInstalled || refreshingUpdates;
+  const [rescanning, setRescanning] = useState(false);
+  const refreshingContent =
+    rescanning || refreshingInstalled || refreshingUpdates;
 
+  // Refresh looks at the disk again (jars added or removed outside the panel)
+  // rather than re-reading the panel's last view of it.
   const refreshInstalledContent = async () => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["mods", serverId] }),
-      qc.invalidateQueries({ queryKey: ["mod-updates", serverId] }),
-    ]);
+    setRescanning(true);
+    try {
+      const fresh = await api.mods.rescan(serverId);
+      qc.setQueryData(["mods", serverId], fresh);
+    } catch {
+      await qc.invalidateQueries({ queryKey: ["mods", serverId] });
+    } finally {
+      setRescanning(false);
+    }
+    await qc.invalidateQueries({ queryKey: ["mod-updates", serverId] });
   };
 
   // One mutation for both removal modes: confirming the dialog always forces,
