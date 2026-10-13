@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -69,11 +68,7 @@ func (rl *RateLimiter) KeyedMiddleware(key func(*http.Request) string) func(http
 // ClientIPKey buckets by source address alone. It is the right key for public
 // endpoints, where there is no authenticated identity to bucket by yet.
 func ClientIPKey(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return "ip:" + host
+	return "ip:" + ClientIP(r)
 }
 
 func (rl *RateLimiter) allow(key string) bool {
@@ -125,9 +120,5 @@ func rateKey(r *http.Request) string {
 	if c := auth.ClaimsFrom(r.Context()); c != nil && c.UserID != "" {
 		return "u:" + c.UserID
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return "ip:" + host
+	return "ip:" + ClientIP(r)
 }

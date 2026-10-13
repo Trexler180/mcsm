@@ -97,7 +97,7 @@ func queryTokenAllowed(r *http.Request) bool {
 }
 
 // remoteIP is the caller's address for usage metadata. It reads RemoteAddr
-// rather than X-Forwarded-For directly: the router's TrustedProxy + RealIP pair
+// rather than X-Forwarded-For directly: the router's TrustedProxy middleware
 // has already folded a trusted forwarding header into RemoteAddr and stripped
 // spoofed ones, so this cannot be forged by an untrusted peer.
 func remoteIP(r *http.Request) string {

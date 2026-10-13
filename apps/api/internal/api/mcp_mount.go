@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -231,9 +230,5 @@ func envEnabled(name string) bool {
 // canonicalized it. Reading X-Forwarded-For here would let a direct MCP client
 // forge grant-usage and audit attribution.
 func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return apimw.ClientIP(r)
 }

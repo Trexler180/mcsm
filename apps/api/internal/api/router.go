@@ -71,10 +71,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	if statusDomain := strings.ToLower(os.Getenv("PUBLIC_STATUS_DOMAIN")); statusDomain != "" {
 		r.Use(statusH.HostRouter(statusDomain))
 	}
-	// Strip spoofable X-Forwarded-* from untrusted peers before RealIP consumes
-	// them, so client IPs in audit logs and login throttling can't be forged.
+	// Establish the caller's address once: forwarding headers are honored only
+	// from TRUSTED_PROXIES and read from the right, so client IPs in audit logs
+	// and login throttling can't be forged.
 	r.Use(apimw.TrustedProxy(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
-	r.Use(chimw.RealIP)
 	r.Use(apimw.SecurityHeaders)
 	// Cap non-multipart request bodies at 8 MiB; uploads use the multipart path,
 	// which is proxied straight to the agent.

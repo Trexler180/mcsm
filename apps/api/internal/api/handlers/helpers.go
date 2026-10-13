@@ -3,12 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
+	apimw "github.com/mcsm/api/internal/api/middleware"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
 )
@@ -51,16 +50,11 @@ func decode(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// clientIP extracts the best-effort caller IP, honoring X-Forwarded-For.
+// clientIP is the caller's address as established by the router's
+// TrustedProxy middleware. It never reads forwarding headers itself: the
+// leftmost X-Forwarded-For entry is whatever the client chose to send.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return apimw.ClientIP(r)
 }
 
 // currentUserID returns the authenticated user's ID from JWT claims, or "".

@@ -23,7 +23,6 @@ import (
 func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector, serverRoot string, links *link.Registry, linkSink *link.MemorySink, host *handlers.HostHandlers) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
-	r.Use(chimw.RealIP)
 	r.Use(middleware.SecurityHeaders)
 	// Cap non-multipart bodies (file-content writes, JSON) at 32 MiB; large file
 	// transfers use the multipart upload path, which streams to disk.

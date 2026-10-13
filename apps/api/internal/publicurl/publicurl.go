@@ -163,7 +163,7 @@ func NormalizeOrigin(raw string) (string, error) {
 	return u.Scheme + "://" + u.Host, nil
 }
 
-// requestHost prefers the Host header, which chi's RealIP/TrustedProxy chain
+// requestHost prefers the Host header, which the TrustedProxy middleware
 // leaves alone. X-Forwarded-Host is deliberately ignored: it is spoofable, and
 // the only case where the request is trusted at all is loopback, where there is
 // no proxy to have set it.

@@ -71,3 +71,21 @@ func TestPasswordGuessesShareOneBudgetAcrossEndpoints(t *testing.T) {
 		t.Fatalf("step-up while locked: status=%d, want 429", w.Code)
 	}
 }
+
+// The throttle key must come from the address the router established, never
+// from a header the client controls. A rotating fake X-Forwarded-For used to
+// give every login attempt its own bucket.
+func TestPasswordIPKeyIgnoresForwardedFor(t *testing.T) {
+	a := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	a.RemoteAddr = "203.0.113.7:4000"
+	a.Header.Set("X-Forwarded-For", "1.1.1.1")
+	b := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	b.RemoteAddr = "203.0.113.7:4001"
+	b.Header.Set("X-Forwarded-For", "2.2.2.2")
+	if passwordIPKey(a) != passwordIPKey(b) {
+		t.Fatalf("keys differ (%q vs %q): a spoofed header changed the throttle bucket", passwordIPKey(a), passwordIPKey(b))
+	}
+	if passwordIPKey(a) != "ip:203.0.113.7" {
+		t.Fatalf("key = %q, want the peer address", passwordIPKey(a))
+	}
+}
