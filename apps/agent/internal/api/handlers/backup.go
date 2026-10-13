@@ -224,8 +224,17 @@ func queryPort(r *http.Request) (int, error) {
 	return port, nil
 }
 
+// quiesceTimeout bounds how long a backup waits for a running server to
+// confirm its save. A large world on a slow disk can take a while to flush.
+const quiesceTimeout = 2 * time.Minute
+
 // Backup zips the server directory into a sibling backups folder and returns
 // metadata. Skips the backups folder itself and runtime state files.
+//
+// A running server is quiesced first (autosave off, flushed, confirmed) so the
+// copy is consistent, and autosave is restored afterwards. The archive is
+// written under a temporary name and renamed into place only once complete, so
+// a crash mid-backup never leaves a truncated zip that looks like a backup.
 func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := validatePathID(id); err != nil {
@@ -270,18 +279,27 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	zf, err := os.Create(zipPath)
+	quiesced, resume := h.mgr.Quiesce(r.Context(), id, quiesceTimeout)
+	defer resume()
+
+	partPath := zipPath + ".partial"
+	zf, err := os.Create(partPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create zip: "+err.Error())
 		return
 	}
-	defer zf.Close()
+	committed := false
+	defer func() {
+		_ = zf.Close()
+		if !committed {
+			_ = os.Remove(partPath)
+		}
+	}()
 
 	zw := zip.NewWriter(zf)
 
 	root, err := os.OpenRoot(src)
 	if err != nil {
-		os.Remove(zipPath)
 		writeError(w, http.StatusInternalServerError, "open server root: "+err.Error())
 		return
 	}
@@ -335,17 +353,30 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	})
 
 	closeErr := zw.Close()
+	// The copy is done: let the server save again before the slower fsync.
+	resume()
 
 	if walkErr != nil {
-		os.Remove(zipPath)
 		writeError(w, http.StatusInternalServerError, "backup walk: "+walkErr.Error())
 		return
 	}
 	if closeErr != nil {
-		os.Remove(zipPath)
 		writeError(w, http.StatusInternalServerError, "zip close: "+closeErr.Error())
 		return
 	}
+	if err := zf.Sync(); err != nil {
+		writeError(w, http.StatusInternalServerError, "sync zip: "+err.Error())
+		return
+	}
+	if err := zf.Close(); err != nil {
+		writeError(w, http.StatusInternalServerError, "close zip: "+err.Error())
+		return
+	}
+	if err := os.Rename(partPath, zipPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "finalize zip: "+err.Error())
+		return
+	}
+	committed = true
 
 	stat, err := os.Stat(zipPath)
 	if err != nil {
@@ -357,12 +388,22 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 		"backup_id":  backupID,
 		"path":       zipPath,
 		"size_bytes": stat.Size(),
+		// consistent is false only for a running server that never confirmed
+		// its save; such a copy may hold a half-written chunk.
+		"consistent": !quiesced.Running || quiesced.Flushed,
+	}
+	var warnings []string
+	if quiesced.Running && !quiesced.Flushed {
+		warnings = append(warnings, "the server did not confirm saving the world before the copy, so the backup may be inconsistent")
 	}
 	// Report (but don't fail on) a disk that is getting tight after the backup.
 	if du, derr := disk.Usage(backupDir); derr == nil && du != nil {
 		if warning := lowSpaceWarning(int64(du.Free), int64(du.Total)); warning != "" {
-			resp["warning"] = warning
+			warnings = append(warnings, warning)
 		}
+	}
+	if len(warnings) > 0 {
+		resp["warning"] = strings.Join(warnings, "; ")
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

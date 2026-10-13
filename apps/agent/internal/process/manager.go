@@ -43,6 +43,9 @@ type Manager struct {
 	// the agent's main, keeping this package free of any link dependency.
 	linkExec     LinkExecFunc
 	onUnregister func(id string)
+
+	// quiesce counts the backups currently holding each server's autosave off.
+	quiesce quiesceState
 }
 
 // rosterCache memoises the expensive part of AllPlayers (reading every
@@ -230,7 +233,7 @@ func (m *Manager) SendCommand(id, cmd string) error {
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("server not running")
+		return errNotRunning
 	}
 	return inst.sendCommand(cmd)
 }
