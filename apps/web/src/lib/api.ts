@@ -3,6 +3,8 @@ import type {
   AccessKeyCreated,
   AccessKeyRequest,
   AuditEntry,
+  AuditPage,
+  AuditPageQuery,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -1085,6 +1087,16 @@ export const api = {
 
   audit: {
     list: (limit = 100) => get<AuditEntry[]>(`/audit?limit=${limit}`),
+    // The audit log page: newest first, filtered, one page at a time. Pass
+    // next_cursor back as `before` for the next page.
+    page: (q: AuditPageQuery = {}) => {
+      const p = new URLSearchParams();
+      for (const [k, v] of Object.entries(q)) {
+        if (v !== undefined && v !== "") p.set(k, String(v));
+      }
+      const qs = p.toString();
+      return get<AuditPage>(`/audit-log${qs ? `?${qs}` : ""}`);
+    },
     forServer: (serverId: string, limit = 100) =>
       get<AuditEntry[]>(`/servers/${serverId}/audit?limit=${limit}`),
   },

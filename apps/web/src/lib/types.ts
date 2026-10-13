@@ -590,6 +590,24 @@ export interface GameVersion {
   stable: boolean;
 }
 
+export interface AuditPageQuery {
+  server_id?: string;
+  user_id?: string;
+  /** Action prefix, e.g. "server." or "auth.login". */
+  action?: string;
+  /** RFC 3339 bounds. */
+  since?: string;
+  until?: string;
+  /** Cursor from a previous page's next_cursor. */
+  before?: number;
+  limit?: number;
+}
+
+export interface AuditPage {
+  entries: (AuditEntry & { actor_email?: string })[];
+  next_cursor?: number;
+}
+
 export interface AuditEntry {
   id: number;
   user_id: string | null;
