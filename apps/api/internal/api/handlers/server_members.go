@@ -166,10 +166,21 @@ func (h *ServerMemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		UserID      string    `json:"user_id"`
 		Email       string    `json:"email"`
 		Permissions *[]string `json:"permissions"`
+		// Preset grants a named role (see GET /permissions/presets) instead
+		// of an explicit list.
+		Preset string `json:"preset"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
+	}
+	if body.Preset != "" {
+		preset, ok := store.PermissionPresetByID(body.Preset)
+		if !ok {
+			writeFieldError(w, "preset", "unknown permission preset")
+			return
+		}
+		body.Permissions = &preset
 	}
 	perms, err := normalizeMemberPermissions(body.Permissions)
 	if err != nil {
@@ -313,4 +324,13 @@ func (h *ServerMemberHandlers) resolveTargetUser(r *http.Request, userID, email 
 		return h.store.GetUserByID(r.Context(), userID)
 	}
 	return h.store.GetUserByEmailInsensitive(r.Context(), email)
+}
+
+// Presets returns the per-server permission model and its named presets, so
+// the dashboard's access editor and the API share one definition.
+func (h *ServerMemberHandlers) Presets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"groups":  store.PermissionModel(),
+		"presets": store.PermissionPresets(),
+	})
 }

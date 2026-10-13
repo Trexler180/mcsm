@@ -593,6 +593,20 @@ export interface GameVersion {
   stable: boolean;
 }
 
+export interface PermissionGroup {
+  group: string;
+  label: string;
+  detail: string;
+  leaves: { permission: string; label: string }[];
+}
+
+export interface PermissionPreset {
+  id: "administrator" | "operator" | "viewer" | string;
+  label: string;
+  description: string;
+  permissions: string[];
+}
+
 export interface AuditPageQuery {
   server_id?: string;
   user_id?: string;

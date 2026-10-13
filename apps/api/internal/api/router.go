@@ -610,6 +610,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Global audit log (admin only)
 			r.With(requireAdmin(s)).Get("/audit", auditH.List)
+			// The per-server permission vocabulary and its named presets.
+			r.Get("/permissions/presets", memberH.Presets)
 			// The audit log page: filters and a cursor, scoped for non-admins.
 			r.With(requireHuman).Get("/audit-log", auditH.Page)
 		})

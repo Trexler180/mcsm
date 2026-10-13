@@ -5,6 +5,8 @@ import type {
   AuditEntry,
   AuditPage,
   AuditPageQuery,
+  PermissionGroup,
+  PermissionPreset,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -1082,6 +1084,14 @@ export const api = {
     loaders: (platform: string) =>
       get<GameVersion[]>(
         `/minecraft/loaders?platform=${encodeURIComponent(platform)}`,
+      ),
+  },
+
+  // The per-server permission vocabulary and named presets, shared with the API.
+  permissions: {
+    presets: () =>
+      get<{ groups: PermissionGroup[]; presets: PermissionPreset[] }>(
+        "/permissions/presets",
       ),
   },
 
