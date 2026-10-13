@@ -289,6 +289,9 @@ function NodeDialog({
             fqdn: form.fqdn,
             port: Number(form.port),
             location: form.location || null,
+            // Required by the API whenever the address changes; optional
+            // otherwise (a non-empty value replaces the stored token).
+            ...(form.token ? { token: form.token } : {}),
           })
         : api.nodes.create({
             name: form.name,
@@ -386,17 +389,19 @@ function NodeDialog({
             <Input placeholder="Optional" value={form.location} onChange={f('location')} />
           </div>
         </div>
-        {!isEdit && (
-          <div className="space-y-1.5">
-            <Label>Agent Token</Label>
-            <Input
-              type="password"
-              placeholder="Secret token from agent config"
-              value={form.token}
-              onChange={f('token')}
-            />
-          </div>
-        )}
+        <div className="space-y-1.5">
+          <Label>Agent Token</Label>
+          <Input
+            type="password"
+            placeholder={
+              isEdit
+                ? 'Required to change the host or port'
+                : 'Secret token from agent config'
+            }
+            value={form.token}
+            onChange={f('token')}
+          />
+        </div>
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="outline" onClick={onClose}>
             Cancel

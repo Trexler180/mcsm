@@ -158,3 +158,13 @@ func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, hb NodeHeart
 	)
 	return err
 }
+
+// SetNodeToken replaces a node's bearer token, encrypted at rest.
+func (s *Store) SetNodeToken(ctx context.Context, id, token string) error {
+	enc, err := s.EncryptNodeToken(token)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE nodes SET token = ? WHERE id = ?`, enc, id)
+	return err
+}

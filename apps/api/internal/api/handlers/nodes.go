@@ -3,8 +3,11 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,38 +60,70 @@ func (h *NodeHandlers) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (h *NodeHandlers) Create(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name     string  `json:"name"`
-		FQDN     string  `json:"fqdn"`
-		Port     int     `json:"port"`
-		Scheme   string  `json:"scheme"`
-		Token    string  `json:"token"`
-		Location *string `json:"location"`
+// nodeInput is the editable part of a node, shared by create and update.
+type nodeInput struct {
+	Name     *string `json:"name"`
+	FQDN     *string `json:"fqdn"`
+	Port     *int    `json:"port"`
+	Scheme   *string `json:"scheme"`
+	Token    *string `json:"token"`
+	Location *string `json:"location"`
+}
+
+// validateNode checks a node's address and name, writing a field error and
+// returning false when something is wrong.
+func validateNode(w http.ResponseWriter, n *store.Node) bool {
+	n.Name = strings.TrimSpace(n.Name)
+	n.FQDN = strings.TrimSpace(n.FQDN)
+	switch {
+	case n.Name == "" || len(n.Name) > 60:
+		writeFieldError(w, "name", "name is required and must be at most 60 characters")
+	case n.FQDN == "" || strings.ContainsAny(n.FQDN, "/:?#@ ") && net.ParseIP(n.FQDN) == nil:
+		writeFieldError(w, "fqdn", "fqdn must be a bare host name or IP address, with no scheme, port or path")
+	case n.Port < 1 || n.Port > 65535:
+		writeFieldError(w, "port", "port must be between 1 and 65535")
+	case n.Scheme != "http" && n.Scheme != "https":
+		writeFieldError(w, "scheme", "scheme must be http or https")
+	default:
+		return true
 	}
-	if err := decode(r, &body); err != nil || body.Name == "" || body.FQDN == "" || body.Token == "" {
-		writeError(w, http.StatusBadRequest, "name, fqdn, and token are required")
+	return false
+}
+
+func (h *NodeHandlers) Create(w http.ResponseWriter, r *http.Request) {
+	var body nodeInput
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.Port == 0 {
-		body.Port = 8090
+	n := &store.Node{Port: 8090, Scheme: "http", Location: body.Location}
+	if body.Name != nil {
+		n.Name = *body.Name
 	}
-	if body.Scheme == "" {
-		body.Scheme = "http"
+	if body.FQDN != nil {
+		n.FQDN = *body.FQDN
 	}
-
-	n := &store.Node{
-		Name:     body.Name,
-		FQDN:     body.FQDN,
-		Port:     body.Port,
-		Scheme:   body.Scheme,
-		Location: body.Location,
+	if body.Port != nil {
+		n.Port = *body.Port
 	}
-	created, err := h.store.CreateNode(r.Context(), n, body.Token)
+	if body.Scheme != nil {
+		n.Scheme = *body.Scheme
+	}
+	if !validateNode(w, n) {
+		return
+	}
+	if body.Token == nil || strings.TrimSpace(*body.Token) == "" {
+		writeFieldError(w, "token", "token is required")
+		return
+	}
+	created, err := h.store.CreateNode(r.Context(), n, strings.TrimSpace(*body.Token))
 	if err != nil {
 		writeServerError(w, r, "create node", err)
 		return
 	}
+	audit(h.store, r, "", "node.create", map[string]any{
+		"node_id": created.ID, "name": created.Name, "address": nodeAddress(created),
+	})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -102,6 +137,11 @@ func (h *NodeHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, n)
 }
 
+// Update edits a node. Changing where the node is — host, port or scheme —
+// requires its token in the same request. The API sends that token with every
+// call to the node, so without this, editing the address would hand the token
+// to whatever host the new address names on the next poll: a hijacked admin
+// session could not read the token, but could have it delivered.
 func (h *NodeHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	existing, err := h.store.GetNode(r.Context(), id)
@@ -109,43 +149,74 @@ func (h *NodeHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "node not found")
 		return
 	}
+	before := *existing
 
-	var body struct {
-		Name     string  `json:"name"`
-		FQDN     string  `json:"fqdn"`
-		Port     int     `json:"port"`
-		Scheme   string  `json:"scheme"`
-		Location *string `json:"location"`
-	}
+	var body nodeInput
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if body.Name != "" {
-		existing.Name = body.Name
+	if body.Name != nil {
+		existing.Name = *body.Name
 	}
-	if body.FQDN != "" {
-		existing.FQDN = body.FQDN
+	if body.FQDN != nil {
+		existing.FQDN = *body.FQDN
 	}
-	if body.Port != 0 {
-		existing.Port = body.Port
+	if body.Port != nil {
+		existing.Port = *body.Port
 	}
-	if body.Scheme != "" {
-		existing.Scheme = body.Scheme
+	if body.Scheme != nil {
+		existing.Scheme = *body.Scheme
 	}
 	if body.Location != nil {
 		existing.Location = body.Location
+	}
+	if !validateNode(w, existing) {
+		return
+	}
+	addressChanged := existing.FQDN != before.FQDN || existing.Port != before.Port || existing.Scheme != before.Scheme
+	token := ""
+	if body.Token != nil {
+		token = strings.TrimSpace(*body.Token)
+	}
+	if addressChanged && token == "" {
+		writeFieldError(w, "token", "enter the node's token to change its address")
+		return
 	}
 
 	if err := h.store.UpdateNode(r.Context(), id, existing); err != nil {
 		writeServerError(w, r, "update node", err)
 		return
 	}
+	if token != "" {
+		if err := h.store.SetNodeToken(r.Context(), id, token); err != nil {
+			writeServerError(w, r, "update node token", err)
+			return
+		}
+	}
+	changes := map[string]any{}
+	if existing.Name != before.Name {
+		changes["name"] = map[string]string{"from": before.Name, "to": existing.Name}
+	}
+	if addressChanged {
+		changes["address"] = map[string]string{"from": nodeAddress(&before), "to": nodeAddress(existing)}
+	}
+	if token != "" {
+		changes["token"] = "replaced"
+	}
+	if len(changes) > 0 {
+		audit(h.store, r, "", "node.update", map[string]any{"node_id": id, "changes": changes})
+	}
 	writeJSON(w, http.StatusOK, existing)
 }
 
 func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	node, err := h.store.GetNode(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
 	if err := h.store.DeleteNode(r.Context(), id); err != nil {
 		if errors.Is(err, store.ErrNodeHasServers) {
 			writeError(w, http.StatusConflict, "node still has servers; delete or move those servers before removing the node")
@@ -154,7 +225,13 @@ func (h *NodeHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "delete node", err)
 		return
 	}
+	audit(h.store, r, "", "node.delete", map[string]any{"node_id": id, "name": node.Name, "address": nodeAddress(node)})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// nodeAddress renders where a node is, for the audit log. Never the token.
+func nodeAddress(n *store.Node) string {
+	return fmt.Sprintf("%s://%s", n.Scheme, net.JoinHostPort(n.FQDN, fmt.Sprint(n.Port)))
 }
 
 type rebootAccepted struct {

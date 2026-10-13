@@ -996,7 +996,7 @@ export const api = {
     list: (signal?: AbortSignal) => get<Node[]>("/nodes", signal),
     create: (data: Partial<Node> & { token: string }) =>
       post<Node>("/nodes", data),
-    update: (id: string, data: Partial<Node>) =>
+    update: (id: string, data: Partial<Node> & { token?: string }) =>
       put<Node>(`/nodes/${id}`, data),
     delete: (id: string) => del(`/nodes/${id}`),
     // Stops every server on the node gracefully, then reboots its host. Needs
