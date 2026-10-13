@@ -14,6 +14,9 @@ type AuditEntry struct {
 	ID       int64   `json:"id"`
 	UserID   *string `json:"user_id"`
 	ServerID *string `json:"server_id"`
+	// ServerName is the server's name when the row was written, so the history
+	// of a deleted server stays readable.
+	ServerName *string `json:"server_name,omitempty"`
 	// APIKeyID names the agent access key that acted, when one did. Nil for an
 	// interactive human action and for background/system work, so every
 	// existing writer and reader stays valid.
@@ -69,8 +72,9 @@ func (s *Store) LogActionWithActor(ctx context.Context, userID, apiKeyID, mcpGra
 		gid = &mcpGrantID
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO audit_log (user_id, api_key_id, mcp_grant_id, server_id, action, detail, ip_address) VALUES (?,?,?,?,?,?,?)`,
-		uid, kid, gid, sid, action, string(d), ip,
+		`INSERT INTO audit_log (user_id, api_key_id, mcp_grant_id, server_id, server_name, action, detail, ip_address)
+		 VALUES (?,?,?,?,(SELECT name FROM servers WHERE id = ?),?,?,?)`,
+		uid, kid, gid, sid, sid, action, string(d), ip,
 	)
 	if err != nil {
 		slog.Error("audit log write failed", "action", action, "server_id", serverID, "user_id", userID, "error", err)
@@ -87,7 +91,7 @@ func (s *Store) ListAudit(ctx context.Context, serverID string, limit int) ([]*A
 	if limit > 500 {
 		limit = 500
 	}
-	q := `SELECT id, user_id, api_key_id, mcp_grant_id, server_id, action, detail, ip_address, created_at FROM audit_log`
+	q := `SELECT id, user_id, api_key_id, mcp_grant_id, server_id, server_name, action, detail, ip_address, created_at FROM audit_log`
 	args := []any{}
 	if serverID != "" {
 		q += ` WHERE server_id = ?`
@@ -104,7 +108,7 @@ func (s *Store) ListAudit(ctx context.Context, serverID string, limit int) ([]*A
 	entries := []*AuditEntry{}
 	for rows.Next() {
 		var e AuditEntry
-		if err := rows.Scan(&e.ID, &e.UserID, &e.APIKeyID, &e.MCPGrantID, &e.ServerID, &e.Action, &e.Detail, &e.IPAddress, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.UserID, &e.APIKeyID, &e.MCPGrantID, &e.ServerID, &e.ServerName, &e.Action, &e.Detail, &e.IPAddress, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		entries = append(entries, &e)
@@ -193,7 +197,7 @@ func (s *Store) ListAuditPage(ctx context.Context, q AuditQuery) ([]*AuditEntry,
 		conds = append(conds, "id < ?")
 		args = append(args, q.Before)
 	}
-	query := `SELECT id, user_id, api_key_id, mcp_grant_id, server_id, action, detail, ip_address, created_at FROM audit_log`
+	query := `SELECT id, user_id, api_key_id, mcp_grant_id, server_id, server_name, action, detail, ip_address, created_at FROM audit_log`
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -210,7 +214,7 @@ func (s *Store) ListAuditPage(ctx context.Context, q AuditQuery) ([]*AuditEntry,
 	entries := []*AuditEntry{}
 	for rows.Next() {
 		var e AuditEntry
-		if err := rows.Scan(&e.ID, &e.UserID, &e.APIKeyID, &e.MCPGrantID, &e.ServerID, &e.Action, &e.Detail, &e.IPAddress, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.UserID, &e.APIKeyID, &e.MCPGrantID, &e.ServerID, &e.ServerName, &e.Action, &e.Detail, &e.IPAddress, &e.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		entries = append(entries, &e)
@@ -237,7 +241,7 @@ func placeholders(n int) string {
 // likePrefix escapes LIKE metacharacters so a user-supplied prefix matches
 // literally.
 func likePrefix(p string) string {
-	r := strings.NewReplacer(`\`, `\`, `%`, `\%`, `_`, `\_`)
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(p) + "%"
 }
 

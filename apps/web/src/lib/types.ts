@@ -597,6 +597,8 @@ export interface AuditEntry {
    *  background actions. */
   api_key_id: string | null;
   server_id: string | null;
+  /** The server's name when the row was written; outlives a deleted server. */
+  server_name?: string;
   action: string;
   detail: string | null;
   ip_address: string | null;

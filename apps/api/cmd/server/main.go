@@ -168,7 +168,11 @@ func main() {
 	//    fsyncs at checkpoint instead of every commit, which is markedly
 	//    faster for writes and cannot corrupt the DB (a crash may at most
 	//    lose the last committed transaction, not integrity).
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)",
+	//  - _txlock=immediate: transactions take the write lock when they begin.
+	//    A deferred BEGIN that reads and then writes fails at once with
+	//    SQLITE_BUSY_SNAPSHOT if another connection committed in between, and
+	//    busy_timeout does not cover that case; an immediate one waits its turn.
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_txlock=immediate",
 		url.PathEscape(dbPath))
 
 	db, err := sql.Open("sqlite", dsn)

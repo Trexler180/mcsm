@@ -450,3 +450,57 @@ func TestSessionsAndEmailsMigrationDedupes(t *testing.T) {
 		t.Fatalf("rollback: %v", err)
 	}
 }
+
+// Migration 034 detaches audit rows from the server they describe. It must
+// carry existing rows across with their server's name, and roll back cleanly.
+func TestAuditKeepsDeletedServersMigration(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	goose.SetBaseFS(FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 33); err != nil {
+		t.Fatal(err)
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(`INSERT INTO nodes (id, name, fqdn, port, scheme, token) VALUES ('n1','n','localhost',8090,'http','x')`)
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u1','a@example.com','h','admin')`)
+	mustExec(`INSERT INTO servers (id, node_id, owner_id, name, platform, mc_version, directory_path, java_binary, port, ram_mb_min, ram_mb_max)
+		VALUES ('s1','n1','u1','survival','paper','1.21.4','servers/s1','java',25565,512,1024)`)
+	mustExec(`INSERT INTO audit_log (user_id, server_id, action) VALUES ('u1','s1','server.start')`)
+	mustExec(`INSERT INTO audit_log (user_id, action) VALUES ('u1','auth.login')`)
+
+	if err := goose.UpTo(db, ".", 34); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := db.QueryRow(`SELECT server_name FROM audit_log WHERE server_id = 's1'`).Scan(&name); err != nil || name != "survival" {
+		t.Fatalf("existing row's server name = %q, %v", name, err)
+	}
+	mustExec(`DELETE FROM servers WHERE id = 's1'`)
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("%d audit rows after deleting the server, want 2 (%v)", n, err)
+	}
+
+	if err := goose.DownTo(db, ".", 33); err != nil {
+		t.Fatal(err)
+	}
+	// The orphaned row cannot satisfy the restored cascade and is dropped; the
+	// panel-wide row stays.
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d audit rows after rollback, want 1 (%v)", n, err)
+	}
+	if err := goose.DownTo(db, ".", 25); err != nil {
+		t.Fatalf("rolling back past 026/027 after 034: %v", err)
+	}
+}
