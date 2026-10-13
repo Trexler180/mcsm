@@ -195,7 +195,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// The approval prompt is delivered on the same live stream as every other
 	// alert, so a pending request is visible from any screen rather than only on
 	// the settings card that lists them.
-	mcpOpts := []mcpserver.Option{mcpserver.WithMigrationStarter(migrationEngine)}
+	mcpOpts := []mcpserver.Option{mcpserver.WithMigrationStarter(migrationEngine), mcpserver.WithPower(svc.Life)}
 	if notifier != nil {
 		mcpOpts = append(mcpOpts, mcpserver.WithNotifier(notifier.Engine))
 	}

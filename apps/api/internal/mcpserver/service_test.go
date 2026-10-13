@@ -15,6 +15,8 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/lifecycle"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 	"github.com/mcsm/api/migrations"
 )
@@ -113,6 +115,33 @@ func (f *fakeNode) RestartServer(context.Context, string, map[string]any) error 
 	return f.fail
 }
 
+// The rest of lifecycle.Agent, so the real lifecycle service can drive the
+// fake: the facade's power actions go through it.
+func (f *fakeNode) RegisterDir(context.Context, string, string) error { return nil }
+func (f *fakeNode) KillServer(context.Context, string) error          { return f.fail }
+func (f *fakeNode) GetStatus(context.Context, string) (map[string]any, error) {
+	return map[string]any{"status": "offline"}, nil
+}
+func (f *fakeNode) Reinstall(context.Context, string, map[string]any) error { return f.fail }
+func (f *fakeNode) PurgeServer(context.Context, string, string, bool, bool) error {
+	return f.fail
+}
+
+// waitCounts polls until want reports true, because start runs as a
+// background operation.
+func (f *fakeNode) waitCounts(t *testing.T, want func(starts, stops, restarts int) bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if want(f.counts()) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s, st, r := f.counts()
+	t.Fatalf("node calls never matched: starts=%d stops=%d restarts=%d", s, st, r)
+}
+
 func (f *fakeNode) counts() (int, int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -172,7 +201,9 @@ func newEnv(t *testing.T) *env {
 
 	fake := &fakeNode{}
 	operator := &fakeOperator{}
-	svc := New(s, WithOperatorBackend(operator))
+	life := lifecycle.New(s, operations.New(s, nil), nil,
+		func(context.Context, *store.Server) (lifecycle.Agent, error) { return fake, nil })
+	svc := New(s, WithOperatorBackend(operator), WithPower(life))
 	// Substitute the node so no test reaches a real agent, and so a test can
 	// count exactly how many lifecycle calls were made.
 	svc.nodes = func(context.Context, *store.Server) (NodeClient, error) { return fake, nil }

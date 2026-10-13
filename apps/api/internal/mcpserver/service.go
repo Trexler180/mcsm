@@ -28,7 +28,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -92,6 +94,16 @@ type MigrationStarter interface {
 	Trigger(ctx context.Context, serverID, targetMC string) (*store.VersionMigration, error)
 }
 
+// PowerBackend is the panel's lifecycle service. Approved start, stop and
+// restart requests go through it so they take the same per-server operation
+// lock, status transitions and audit trail as the dashboard's buttons, rather
+// than a second implementation that could race them.
+type PowerBackend interface {
+	Start(ctx context.Context, srv *store.Server, actor operations.Actor) (*store.Operation, error)
+	Stop(ctx context.Context, srv *store.Server, actor operations.Actor, o lifecycle.StopOptions) error
+	Restart(ctx context.Context, srv *store.Server, actor operations.Actor) error
+}
+
 // ActionNotifier delivers an approval prompt to the one person who can answer
 // it. Narrow on purpose: the facade should be able to raise a prompt without
 // being able to reach the rest of the notification system.
@@ -111,6 +123,12 @@ func WithMigrationStarter(starter MigrationStarter) Option {
 	return func(svc *Service) { svc.migrations = starter }
 }
 
+// WithPower routes approved power actions through the lifecycle service.
+// Without it they are refused.
+func WithPower(p PowerBackend) Option {
+	return func(svc *Service) { svc.power = p }
+}
+
 // WithNotifier wires the approval prompt. Optional: a Service without one still
 // files and executes requests exactly as before, it just does not raise a
 // dashboard alert — the same nil-tolerant shape Engine.Emit already has.
@@ -124,6 +142,7 @@ type Service struct {
 	nodes      NodeResolver
 	operator   OperatorBackend
 	migrations MigrationStarter
+	power      PowerBackend
 	notifier   ActionNotifier
 	// now is injectable so tests can pin expiry boundaries.
 	now func() time.Time

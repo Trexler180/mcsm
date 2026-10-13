@@ -3,15 +3,15 @@ package mcpserver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -375,7 +375,14 @@ func (svc *Service) ExecuteApprovedAction(ctx context.Context, requestID, userID
 		"client":     cleanName(grant.ClientName),
 	})
 
-	if err := svc.runAction(ctx, srv, req.Action); err != nil {
+	actor := operations.Actor{
+		UserID:     grant.UserID,
+		GrantID:    grant.ID,
+		ClientName: cleanName(grant.ClientName),
+		IP:         ip,
+		Trigger:    operations.TriggerManual,
+	}
+	if err := svc.runAction(ctx, srv, req.Action, actor); err != nil {
 		slog.Error("mcp action execution failed", "request_id", req.ID, "server_id", srv.ID, "action", req.Action, "error", err)
 		// The node's error text can name hosts and paths, so the stored reason
 		// is ours, not the transport's.
@@ -429,8 +436,10 @@ func (svc *Service) autoApproveIfPolicyAllows(ctx context.Context, p *Principal,
 }
 
 // runAction performs the one lifecycle call. The switch is exhaustive over the
-// three supported actions and has no default that could reach anything else.
-func (svc *Service) runAction(ctx context.Context, srv *store.Server, action string) error {
+// supported actions and has no default that could reach anything else. The
+// lifecycle service holds the server's operation lock, so an approved action
+// cannot land in the middle of a restore, an update or a migration.
+func (svc *Service) runAction(ctx context.Context, srv *store.Server, action string, actor operations.Actor) error {
 	if target, ok := store.ParseMCPUpgradeAction(action); ok {
 		if svc.migrations == nil {
 			return errors.New("version upgrades unavailable")
@@ -438,43 +447,22 @@ func (svc *Service) runAction(ctx context.Context, srv *store.Server, action str
 		_, err := svc.migrations.Trigger(context.WithoutCancel(ctx), srv.ID, target)
 		return err
 	}
-	client, err := svc.nodes(ctx, srv)
-	if err != nil {
-		return fmt.Errorf("resolve node: %w", err)
+	if svc.power == nil {
+		return errors.New("power actions unavailable")
 	}
+	// Detached from the request context: the approving browser tab closing must
+	// not abort a stop or restart half way.
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+	defer cancel()
 	switch action {
 	case "start":
-		// Detached from the request context: a first start may auto-install a
-		// runtime for minutes, and the approving browser tab closing must not
-		// abort it. Mirrors the HTTP start handler.
-		startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 16*time.Minute)
-		defer cancel()
-		if err := svc.store.UpdateServerStatus(startCtx, srv.ID, "starting"); err != nil {
-			slog.Warn("mcp action: status write failed", "server_id", srv.ID, "error", err)
-		}
-		if err := client.StartServer(startCtx, srv.ID, agent.StartConfigForServer(srv)); err != nil {
-			if serr := svc.store.UpdateServerStatus(startCtx, srv.ID, "offline"); serr != nil {
-				slog.Warn("mcp action: status rollback failed", "server_id", srv.ID, "error", serr)
-			}
-			return err
-		}
-		return nil
+		// Start runs as a background operation; it is accepted once queued.
+		_, err := svc.power.Start(actx, srv, actor)
+		return err
 	case "stop":
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
-		defer cancel()
-		if err := client.StopServer(stopCtx, srv.ID, true, 30); err != nil {
-			return err
-		}
-		if err := svc.store.UpdateServerStatus(stopCtx, srv.ID, "stopping"); err != nil {
-			slog.Warn("mcp action: status write failed", "server_id", srv.ID, "error", err)
-		}
-		return nil
+		return svc.power.Stop(actx, srv, actor, lifecycle.StopOptions{Graceful: true, TimeoutSec: 30})
 	case "restart":
-		restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
-		defer cancel()
-		// Send the current configuration, so a setting changed since the last
-		// start is applied — same reasoning as the HTTP restart handler.
-		return client.RestartServer(restartCtx, srv.ID, agent.StartConfigForServer(srv))
+		return svc.power.Restart(actx, srv, actor)
 	}
 	return errors.New("unsupported action")
 }

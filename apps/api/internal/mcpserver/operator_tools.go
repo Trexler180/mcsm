@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -140,11 +141,19 @@ func (svc *Service) directLifecycle(p *Principal, action string, scope store.MCP
 		if err != nil {
 			return nil, lifecycleOutput{}, err
 		}
-		if err := svc.runAction(ctx, srv, action); err != nil {
+		actor := operations.Actor{
+			UserID: p.UserID, GrantID: p.GrantID, ClientName: cleanName(p.ClientName), IP: p.IP,
+			Trigger: operations.TriggerManual,
+		}
+		// The lifecycle service records the action itself, attributed to the
+		// delegation; only a refusal is recorded here.
+		if err := svc.runAction(ctx, srv, action, actor); err != nil {
 			svc.auditOperator(ctx, p, srv.ID, "server."+action+"_failed", map[string]any{"error": clean(err.Error(), 240)})
+			if busy, ok := store.AsServerBusy(err); ok && busy.Current != nil {
+				return nil, lifecycleOutput{}, toolError("%s refused: the server is busy with a %s operation; try again when it finishes", action, busy.Current.Kind)
+			}
 			return nil, lifecycleOutput{}, toolError("%s failed", action)
 		}
-		svc.auditOperator(ctx, p, srv.ID, "server."+action, nil)
 		return nil, lifecycleOutput{Server: serverRef(srv), Action: action, Status: "accepted", Note: "The node accepted the operation. Poll diagnostics and bounded log events to verify the resulting state."}, nil
 	}
 }

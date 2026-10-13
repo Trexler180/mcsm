@@ -60,9 +60,7 @@ func TestDirectLifecycleExecutesWithoutApproval(t *testing.T) {
 			if out.Action != tc.action || out.Status != "accepted" {
 				t.Fatalf("unexpected output %+v", out)
 			}
-			if got := tc.count(e.node.counts()); got != 1 {
-				t.Fatalf("expected exactly one %s on the node, got %d", tc.action, got)
-			}
+			e.node.waitCounts(t, func(s, st, r int) bool { return tc.count(s, st, r) == 1 })
 
 			// Nothing was filed for a human to approve: this path does not use
 			// the approval queue at all.
@@ -139,9 +137,9 @@ func TestDirectLifecycleDoesNotEscalateAcrossActions(t *testing.T) {
 		ctx, nil, serverIDInput{ServerID: e.serverA}); err != nil {
 		t.Fatalf("the grant's real authority was refused: %v", err)
 	}
-	if starts, stops, restarts := e.node.counts(); starts != 1 || stops != 0 || restarts != 0 {
-		t.Fatalf("node saw starts=%d stops=%d restarts=%d", starts, stops, restarts)
-	}
+	e.node.waitCounts(t, func(starts, stops, restarts int) bool {
+		return starts == 1 && stops == 0 && restarts == 0
+	})
 }
 
 // Direct power scopes must not open the approval-gated tool's own door, and
@@ -519,5 +517,26 @@ func TestOperatorBackendFailureIsBoundedAndNotSilent(t *testing.T) {
 	}
 	if len(err.Error()) > 300 {
 		t.Fatalf("tool error was not bounded: %d chars", len(err.Error()))
+	}
+}
+
+// A delegated power action takes the same per-server lock as the dashboard:
+// it is refused while a restore, update or migration holds the server, rather
+// than landing in the middle of one.
+func TestDirectLifecycleRespectsTheOperationLock(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	if err := e.store.CreateOperation(ctx, &store.Operation{
+		ServerID: e.serverA, Kind: "restore", Exclusive: true, Trigger: "manual",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := e.svc.directLifecycle(principalFor(e.grant), "stop", store.MCPScopePowerStop, store.ServerPermissionPowerStop)(
+		ctx, nil, serverIDInput{ServerID: e.serverA})
+	if err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("stop during a restore: err = %v, want a busy refusal", err)
+	}
+	if starts, stops, restarts := e.node.counts(); starts+stops+restarts != 0 {
+		t.Fatal("the node was called while another operation held the server")
 	}
 }
