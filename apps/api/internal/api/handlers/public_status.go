@@ -398,8 +398,12 @@ func (h *PublicStatusHandlers) serveJSON(w http.ResponseWriter, r *http.Request,
 
 // HostRouter serves status pages on <slug>.<domain> hosts and passes every
 // other request through. domain is PUBLIC_STATUS_DOMAIN, already lowercased.
-func (h *PublicStatusHandlers) HostRouter(domain string) func(http.Handler) http.Handler {
+// guard, when set, wraps the status responses (a rate limit, in production).
+func (h *PublicStatusHandlers) HostRouter(domain string, guard func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	suffix := "." + strings.TrimPrefix(domain, ".")
+	if guard == nil {
+		guard = func(next http.Handler) http.Handler { return next }
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host := strings.ToLower(r.Host)
@@ -411,19 +415,26 @@ func (h *PublicStatusHandlers) HostRouter(domain string) func(http.Handler) http
 				next.ServeHTTP(w, r)
 				return
 			}
-			switch r.URL.Path {
-			case "/", "":
-				h.servePage(w, r, slug, "/og.png")
-			case "/status.json":
-				h.serveJSON(w, r, slug)
-			case "/og.png":
-				h.serveOGImage(w, r, slug)
-			case "/favicon.ico":
-				w.WriteHeader(http.StatusNoContent)
-			default:
-				http.NotFound(w, r)
-			}
+			guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				h.serveHost(w, r, slug)
+			})).ServeHTTP(w, r)
 		})
+	}
+}
+
+// serveHost answers one request on a status subdomain.
+func (h *PublicStatusHandlers) serveHost(w http.ResponseWriter, r *http.Request, slug string) {
+	switch r.URL.Path {
+	case "/", "":
+		h.servePage(w, r, slug, "/og.png")
+	case "/status.json":
+		h.serveJSON(w, r, slug)
+	case "/og.png":
+		h.serveOGImage(w, r, slug)
+	case "/favicon.ico":
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.NotFound(w, r)
 	}
 }
 

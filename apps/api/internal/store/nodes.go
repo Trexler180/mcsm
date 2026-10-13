@@ -25,7 +25,7 @@ func nodeScanDest(n *Node) []any {
 
 func (s *Store) CreateNode(ctx context.Context, n *Node, token string) (*Node, error) {
 	id := uuid.NewString()
-	encToken, err := s.EncryptNodeToken(token)
+	encToken, err := s.EncryptNodeToken(id, token)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (s *Store) EnsureNode(ctx context.Context, name, fqdn string, port int, sch
 	if err != nil {
 		return nil, err
 	}
-	encToken, err := s.EncryptNodeToken(token)
+	encToken, err := s.EncryptNodeToken(id, token)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n.Token, err = s.DecryptNodeToken(n.Token); err != nil {
+	if n.Token, err = s.DecryptNodeToken(n.ID, n.Token); err != nil {
 		return nil, err
 	}
 	return &n, nil
@@ -99,7 +99,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 		if err := rows.Scan(nodeScanDest(&n)...); err != nil {
 			return nil, err
 		}
-		token, err := s.DecryptNodeToken(n.Token)
+		token, err := s.DecryptNodeToken(n.ID, n.Token)
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +161,7 @@ func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, hb NodeHeart
 
 // SetNodeToken replaces a node's bearer token, encrypted at rest.
 func (s *Store) SetNodeToken(ctx context.Context, id, token string) error {
-	enc, err := s.EncryptNodeToken(token)
+	enc, err := s.EncryptNodeToken(id, token)
 	if err != nil {
 		return err
 	}

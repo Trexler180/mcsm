@@ -74,22 +74,29 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	}
 
 	r := chi.NewRouter()
-	r.Use(chimw.Recoverer)
+	// Request ids come first so everything after, including a recovered
+	// panic, is logged with one.
+	r.Use(apimw.RequestID)
+	r.Use(apimw.Recoverer)
 	// Route HEAD as GET (net/http drops the body): link-preview crawlers
 	// probe og:image and status pages with HEAD before fetching.
 	r.Use(chimw.GetHead)
-	statusH := handlers.NewPublicStatusHandlers(s)
-	// Public status pages on their own subdomains: <slug>.<PUBLIC_STATUS_DOMAIN>
-	// is answered directly (before path routing); every other host passes
-	// through. Unset means no host-based routing — the path route still works.
-	if statusDomain := strings.ToLower(os.Getenv("PUBLIC_STATUS_DOMAIN")); statusDomain != "" {
-		r.Use(statusH.HostRouter(statusDomain))
-	}
 	// Establish the caller's address once: forwarding headers are honored only
 	// from TRUSTED_PROXIES and read from the right, so client IPs in audit logs
 	// and login throttling can't be forged.
 	r.Use(apimw.TrustedProxy(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
 	r.Use(apimw.SecurityHeaders)
+	// Unauthenticated routes (sign-in, refresh, public status pages, public
+	// resource packs) get a per-address budget. Login also has its own
+	// failed-guess lockout; this bounds everything else.
+	publicLimiter := apimw.NewRateLimiter(300, 60)
+	statusH := handlers.NewPublicStatusHandlers(s)
+	// Public status pages on their own subdomains: <slug>.<PUBLIC_STATUS_DOMAIN>
+	// is answered directly (before path routing); every other host passes
+	// through. Unset means no host-based routing — the path route still works.
+	if statusDomain := strings.ToLower(os.Getenv("PUBLIC_STATUS_DOMAIN")); statusDomain != "" {
+		r.Use(statusH.HostRouter(statusDomain, publicLimiter.KeyedMiddleware(apimw.ClientIPKey)))
+	}
 	// Cap non-multipart request bodies at 8 MiB; uploads use the multipart path,
 	// which is proxied straight to the agent.
 	r.Use(apimw.MaxBodyBytes(8 << 20))
@@ -98,7 +105,6 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// modpack upload is cut off mid-stream. Must stay ahead of Logger, whose
 	// wrapper the deadline has to be set through.
 	r.Use(apimw.UploadDeadline(handlers.UploadBudget))
-	r.Use(apimw.RequestID)
 	r.Use(apimw.Logger)
 
 	tickets := auth.NewTicketStore()
@@ -189,9 +195,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 		// Public auth routes. Logout is keyed on the refresh cookie, so it works
 		// even when the access token has already expired.
-		r.Post("/auth/login", authH.Login)
-		r.Post("/auth/refresh", authH.Refresh)
-		r.Post("/auth/logout", authH.Logout)
+		r.Group(func(r chi.Router) {
+			r.Use(publicLimiter.KeyedMiddleware(apimw.ClientIPKey))
+			r.Post("/auth/login", authH.Login)
+			r.Post("/auth/refresh", authH.Refresh)
+			r.Post("/auth/logout", authH.Logout)
+		})
 
 		// OAuth authorization server for remote agent connections. Public by
 		// necessity — a client must reach these before it holds anything — so
@@ -204,9 +213,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.With(registerLimiter.KeyedMiddleware(apimw.ClientIPKey)).
 				Post("/oauth/register", mcpOAuthH.Register)
 		})
-		r.Get("/public/servers/{id}/resource-pack/{publicID}", resourcePackH.Download)
-		// Machine-readable public status (page HTML lives at /status/{slug}).
-		r.Get("/public/status/{slug}", statusH.JSON)
+		r.Group(func(r chi.Router) {
+			r.Use(publicLimiter.KeyedMiddleware(apimw.ClientIPKey))
+			r.Get("/public/servers/{id}/resource-pack/{publicID}", resourcePackH.Download)
+			// Machine-readable public status (page HTML lives at /status/{slug}).
+			r.Get("/public/status/{slug}", statusH.JSON)
+		})
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
@@ -284,6 +296,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 			// Panel wall-clock + timezone (scheduled tasks fire on this clock).
 			r.Get("/time", handlers.Time)
+			// Build and clock, for signed-in users only.
+			r.Get("/system", handlers.System)
 
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)
@@ -528,8 +542,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	})
 
 	// Public, unauthenticated status page (opt-in per server; minimal data).
-	r.Get("/status/{slug}", statusH.Page)
-	r.Get("/status/{slug}/og.png", statusH.OGImage) // live link-preview card
+	r.Group(func(r chi.Router) {
+		r.Use(publicLimiter.KeyedMiddleware(apimw.ClientIPKey))
+		r.Get("/status/{slug}", statusH.Page)
+		r.Get("/status/{slug}/og.png", statusH.OGImage) // live link-preview card
+	})
 
 	return r
 }

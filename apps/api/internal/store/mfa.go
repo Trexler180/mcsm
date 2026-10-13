@@ -36,7 +36,7 @@ func (s *Store) GetUserTOTP(ctx context.Context, userID string) (TOTPConfig, err
 	if !enc.Valid || enc.String == "" {
 		return TOTPConfig{Enabled: false}, nil
 	}
-	secret, err := s.decryptAtRest(enc.String)
+	secret, err := s.decryptAtRest(enc.String, totpSecretAAD(userID))
 	if err != nil {
 		return TOTPConfig{}, err
 	}
@@ -46,7 +46,7 @@ func (s *Store) GetUserTOTP(ctx context.Context, userID string) (TOTPConfig, err
 // SetUserTOTPSecret stores a freshly generated (not-yet-verified) secret,
 // encrypted at rest, leaving MFA disabled until the user confirms a code.
 func (s *Store) SetUserTOTPSecret(ctx context.Context, userID, secret string) error {
-	enc, err := s.encryptAtRest(secret)
+	enc, err := s.encryptAtRest(secret, totpSecretAAD(userID))
 	if err != nil {
 		return err
 	}

@@ -28,6 +28,9 @@ type wsMsg struct {
 func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
+	// Origin checking protects browsers from cross-site sockets. Nothing but
+	// the API connects here, it carries the agent token, and it sends no
+	// browser Origin worth checking, so verification is off on purpose.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})

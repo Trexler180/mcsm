@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/mcsm/api/internal/safedial"
@@ -41,6 +42,7 @@ type WebhookPayload struct {
 
 type WebhookSender struct {
 	client *http.Client
+	now    func() time.Time
 }
 
 // NewWebhookSender builds a sender whose HTTP client refuses connections to
@@ -50,7 +52,7 @@ func NewWebhookSender() *WebhookSender {
 }
 
 func newWebhookSender(g safedial.Guard) *WebhookSender {
-	return &WebhookSender{client: safedial.Client(g, 10*time.Second)}
+	return &WebhookSender{client: safedial.Client(g, 10*time.Second), now: time.Now}
 }
 
 // Send delivers payload to the target, formatting the body for Discord/Slack or
@@ -81,7 +83,14 @@ func (s *WebhookSender) Send(ctx context.Context, target WebhookTarget, payload 
 	// Only the generic format carries our signature; Discord/Slack reject unknown
 	// custom headers from some proxies, and the signature is meaningless to them.
 	if target.Format != "discord" && target.Format != "slack" && target.Secret != "" {
+		// The original signature covers only the body, so a captured delivery
+		// can be replayed. The timestamped one covers "<unix>.<body>"; a
+		// receiver that checks it and rejects stale timestamps is safe from
+		// replays. Both are sent so existing receivers keep working.
+		ts := strconv.FormatInt(s.now().Unix(), 10)
 		req.Header.Set("X-MCSM-Signature", "sha256="+sign(target.Secret, body))
+		req.Header.Set("X-MCSM-Timestamp", ts)
+		req.Header.Set("X-MCSM-Signature-256", "t="+ts+",v1="+sign(target.Secret, append([]byte(ts+"."), body...)))
 	}
 
 	resp, err := s.client.Do(req)

@@ -188,6 +188,13 @@ func main() {
 	log.Println("migrations applied")
 
 	s := store.New(db).WithEncryption(resolveMasterKey(dbPath, jwtSecret))
+	// Bind any secret still stored in the older, unbound form to its row. A
+	// value the current key cannot read is reported and left alone.
+	if n, err := s.UpgradeEncryption(ctx); err != nil {
+		log.Printf("encryption upgrade: %v", err)
+	} else if n > 0 {
+		log.Printf("re-encrypted %d stored secret(s) bound to their rows", n)
+	}
 
 	// Seed admin user on first boot
 	if n, _ := s.CountUsers(ctx); n == 0 {

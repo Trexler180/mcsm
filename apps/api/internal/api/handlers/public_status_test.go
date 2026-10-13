@@ -183,7 +183,7 @@ func TestPublicStatusHostRouting(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot) // marks "passed through"
 	})
-	wrapped := h.HostRouter("status.example.com")(inner)
+	wrapped := h.HostRouter("status.example.com", nil)(inner)
 
 	cases := []struct {
 		host, path string

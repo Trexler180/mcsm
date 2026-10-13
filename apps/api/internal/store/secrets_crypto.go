@@ -32,7 +32,10 @@ func deriveKey(master string) []byte {
 
 // encryptSecret seals plaintext with AES-256-GCM under key and returns
 // base64(nonce|ciphertext|tag). A fresh random nonce is prepended on every call.
-func encryptSecret(key []byte, plaintext string) (string, error) {
+// aad binds the ciphertext to where it is stored (e.g. "node_token:<id>"), so a
+// value copied into another row fails to decrypt instead of being accepted as
+// that row's secret. nil aad produces the legacy, unbound form.
+func encryptSecret(key []byte, plaintext string, aad []byte) (string, error) {
 	if len(key) == 0 {
 		return "", errNoEncryptionKey
 	}
@@ -48,13 +51,14 @@ func encryptSecret(key []byte, plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), aad)
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// decryptSecret reverses encryptSecret. A wrong key or tampered ciphertext
-// fails authentication and returns an error rather than garbage.
-func decryptSecret(key []byte, encoded string) (string, error) {
+// decryptSecret reverses encryptSecret. A wrong key, tampered ciphertext, or a
+// ciphertext moved from another row (a different aad) fails authentication and
+// returns an error rather than garbage.
+func decryptSecret(key []byte, encoded string, aad []byte) (string, error) {
 	if len(key) == 0 {
 		return "", errNoEncryptionKey
 	}
@@ -74,7 +78,7 @@ func decryptSecret(key []byte, encoded string) (string, error) {
 		return "", errors.New("stored secret is malformed")
 	}
 	nonce, ct := raw[:gcm.NonceSize()], raw[gcm.NonceSize():]
-	plain, err := gcm.Open(nil, nonce, ct, nil)
+	plain, err := gcm.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return "", fmt.Errorf("decrypt secret: %w", err)
 	}

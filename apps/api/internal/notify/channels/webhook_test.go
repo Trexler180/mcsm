@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mcsm/api/internal/safedial"
 )
@@ -95,5 +96,32 @@ func TestWebhookSSRFBlocksLoopback(t *testing.T) {
 	s := NewWebhookSender()
 	if err := s.Send(context.Background(), WebhookTarget{URL: srv.URL, Format: "generic"}, samplePayload()); err == nil {
 		t.Fatal("expected SSRF guard to block loopback webhook")
+	}
+}
+
+// The timestamped signature covers "<unix>.<body>", so a receiver can reject a
+// captured delivery replayed later.
+func TestWebhookTimestampedSignature(t *testing.T) {
+	var gotTS, gotSig string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTS = r.Header.Get("X-MCSM-Timestamp")
+		gotSig = r.Header.Get("X-MCSM-Signature-256")
+		gotBody, _ = io.ReadAll(r.Body)
+	}))
+	defer srv.Close()
+
+	s := newWebhookSender(safedial.Guard{AllowLoopback: true})
+	s.now = func() time.Time { return time.Unix(1700000000, 0) }
+	err := s.Send(context.Background(), WebhookTarget{URL: srv.URL, Format: "generic", Secret: "k"}, WebhookPayload{Event: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTS != "1700000000" {
+		t.Fatalf("timestamp = %q", gotTS)
+	}
+	want := "t=1700000000,v1=" + sign("k", append([]byte("1700000000."), gotBody...))
+	if gotSig != want {
+		t.Fatalf("signature = %q, want %q", gotSig, want)
 	}
 }
