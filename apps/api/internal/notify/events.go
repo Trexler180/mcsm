@@ -55,6 +55,8 @@ const (
 	EventPlayerJoinDenied   = "player.join_denied"
 	EventMCPActionRequested = "mcp.action_requested"
 	EventMCPActionResolved  = "mcp.action_resolved"
+	EventTaskFailed         = "schedule.failed"
+	EventOperationAborted   = "operation.interrupted"
 )
 
 // EventDef is the static description of an event type, surfaced to the frontend
@@ -78,6 +80,7 @@ var Catalog = []EventDef{
 	{EventServerCrash, "Server crashed", "A running server went offline unexpectedly (no panel-initiated stop).", SeverityCritical, ScopeServer, false},
 	{EventServerOffline, "Server stopped", "A server transitioned to offline.", SeverityWarning, ScopeServer, false},
 	{EventServerOnline, "Server online", "A server came online.", SeverityInfo, ScopeServer, false},
+	{EventServerStartFailed, "Server failed to start", "A server exited while starting, or could not be launched.", SeverityCritical, ScopeServer, true},
 	{EventPlayerJoinDenied, "Player turned away by the whitelist", "Someone who is not on the whitelist tried to join. The alert offers to let them in.", SeverityWarning, ScopeServer, true},
 	{EventMCPActionRequested, "AI agent asked to act on a server", "A connected agent filed a start, stop, restart, or version-upgrade request. The alert offers to approve or deny it.", SeverityWarning, ScopeServer, true},
 	{EventMCPActionResolved, "Agent action request settled", "An agent's request was approved, denied, or ran automatically under your approval policy.", SeverityInfo, ScopeServer, true},
@@ -90,6 +93,8 @@ var Catalog = []EventDef{
 	{EventNodeOffline, "Node offline", "An agent node stopped responding to heartbeats.", SeverityWarning, ScopeNode, false},
 	{EventNodeOnline, "Node online", "An agent node started responding again.", SeverityInfo, ScopeNode, false},
 	{EventNodeDiskLow, "Node disk low", "A backup left the node's disk nearly full.", SeverityWarning, ScopeNode, false},
+	{EventTaskFailed, "Scheduled task failed", "A scheduled task ran and did not succeed, or was skipped because its creator lost the permission it needs.", SeverityWarning, ScopeServer, true},
+	{EventOperationAborted, "Operation interrupted", "A restart of the panel cut off a backup, restore, migration or update that was in progress.", SeverityWarning, ScopeServer, true},
 }
 
 // DefaultOnTypes lists the events a new user is subscribed to automatically.

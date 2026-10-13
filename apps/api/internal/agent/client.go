@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,13 +34,24 @@ func New(scheme, fqdn string, port int, token string) *Client {
 	return &Client{
 		BaseURL: fmt.Sprintf("%s://%s:%d", scheme, fqdn, port),
 		Token:   token,
-		// Generous absolute timeout — per-call deadlines come from the
-		// passed context (StartServer waits through JAR auto-download,
-		// Backup waits through zipping a multi-GB world, etc.).
-		HTTP: &http.Client{
-			Timeout: 10 * time.Minute,
-		},
+		// No client-wide timeout: every call is bounded by its context. A
+		// fixed ceiling here used to override the longer deadlines a backup,
+		// restore or BuildTools install gives itself, failing them in the
+		// panel while the agent carried on.
+		HTTP: &http.Client{},
 	}
+}
+
+// defaultCallTimeout bounds a call whose context carries no deadline, so a
+// forgotten deadline cannot hang a goroutine on an unresponsive agent.
+const defaultCallTimeout = 2 * time.Minute
+
+// bounded returns ctx with defaultCallTimeout when it has no deadline.
+func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultCallTimeout)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
@@ -52,15 +64,35 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		bodyReader = bytes.NewReader(b)
 	}
 
+	ctx, cancel := bounded(ctx)
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, bodyReader)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return c.HTTP.Do(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	// The deadline must outlive this function: the caller reads the body.
+	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 func (c *Client) Health(ctx context.Context) error {
@@ -339,7 +371,16 @@ func (c *Client) SendCommand(ctx context.Context, serverID, command string) erro
 	return checkError(resp)
 }
 
+// RegisterDir tells the agent where a server's directory is. The agent keeps
+// the mapping across restarts, and this process remembers which mappings it
+// has already sent to the agent's current boot, so the call costs a network
+// round trip only the first time — or after the agent restarts (the poller
+// notices the new boot id and calls ForgetRegistrations).
 func (c *Client) RegisterDir(ctx context.Context, serverID, directory string) error {
+	key := c.BaseURL + "|" + serverID
+	if v, ok := registered.Load(key); ok && v.(string) == directory {
+		return nil
+	}
 	resp, err := c.do(ctx, http.MethodPost, "/agent/v1/servers/"+serverID+"/register", map[string]string{
 		"directory": directory,
 	})
@@ -347,7 +388,68 @@ func (c *Client) RegisterDir(ctx context.Context, serverID, directory string) er
 		return err
 	}
 	defer resp.Body.Close()
-	return checkError(resp)
+	if err := checkError(resp); err != nil {
+		return err
+	}
+	registered.Store(key, directory)
+	return nil
+}
+
+// registered caches directory registrations per agent and server.
+var registered sync.Map
+
+// ForgetRegistrations drops cached registrations for an agent, so the next
+// request re-sends them. Called when the agent restarts.
+func ForgetRegistrations(baseURL string) {
+	registered.Range(func(k, _ any) bool {
+		if strings.HasPrefix(k.(string), baseURL+"|") {
+			registered.Delete(k)
+		}
+		return true
+	})
+}
+
+// AgentStatus is one server's status as the agent reports it.
+type AgentStatus struct {
+	ID          string          `json:"id"`
+	Status      string          `json:"status"`
+	PID         int             `json:"pid,omitempty"`
+	StartedAt   time.Time       `json:"started_at,omitempty"`
+	RunID       string          `json:"run_id,omitempty"`
+	ExitCause   string          `json:"exit_cause,omitempty"`
+	ExitCode    *int            `json:"exit_code,omitempty"`
+	ExitedAt    *time.Time      `json:"exited_at,omitempty"`
+	ModConflict json.RawMessage `json:"mod_conflict,omitempty"`
+	JoinDenied  json.RawMessage `json:"join_denied,omitempty"`
+}
+
+// ErrNotSupported means the agent predates an endpoint.
+var ErrNotSupported = errors.New("agent does not support this endpoint")
+
+// AllStatus fetches every server's status from the agent in one call. Servers
+// absent from the map have not run since the agent started.
+func (c *Client) AllStatus(ctx context.Context) (map[string]AgentStatus, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/servers/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return nil, ErrNotSupported
+	}
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Servers map[string]AgentStatus `json:"servers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("agent status: %w", err)
+	}
+	if out.Servers == nil {
+		out.Servers = map[string]AgentStatus{}
+	}
+	return out.Servers, nil
 }
 
 // Setup creates the server directory, writes eula.txt if missing, and seeds

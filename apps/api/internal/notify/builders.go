@@ -219,3 +219,29 @@ func display(name, id string) string {
 	}
 	return id
 }
+
+// TaskFailed reports a scheduled task that failed or was skipped.
+func TaskFailed(serverID, serverName, taskName, reason string) Event {
+	return Event{
+		Type:       EventTaskFailed,
+		ServerID:   serverID,
+		ServerName: serverName,
+		Title:      fmt.Sprintf("Scheduled task %q failed on %s", taskName, display(serverName, serverID)),
+		Body:       reason,
+		Data:       map[string]any{"task": taskName, "reason": reason},
+		DedupeKey:  "task:" + serverID + ":" + taskName,
+	}
+}
+
+// OperationInterrupted reports an operation a restart of the panel cut off.
+func OperationInterrupted(serverID, serverName, kind string) Event {
+	phrase := strings.ReplaceAll(kind, "_", " ")
+	return Event{
+		Type:       EventOperationAborted,
+		ServerID:   serverID,
+		ServerName: serverName,
+		Title:      fmt.Sprintf("A %s on %s was interrupted", phrase, display(serverName, serverID)),
+		Body:       "The panel restarted while it was in progress. Check the server before relying on the result.",
+		Data:       map[string]any{"kind": kind},
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/mcsm/api/internal/mods/hangar"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/mods/spigotmc"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -70,6 +71,8 @@ type Engine struct {
 
 	mu     sync.Mutex
 	active map[string]bool
+	// ops, when set, makes every migration an operation holding its server.
+	ops *operations.Manager
 
 	// Tunables (overridden in tests).
 	pollInterval time.Duration
@@ -159,6 +162,9 @@ type health struct {
 	reason string
 }
 
+// SetOperations makes migrations operations under the shared per-server lock.
+func (e *Engine) SetOperations(ops *operations.Manager) { e.ops = ops }
+
 // ── Public API ───────────────────────────────────────────────────────
 
 // Trigger starts a migration to targetMC for a server and returns the run row
@@ -182,18 +188,44 @@ func (e *Engine) Trigger(ctx context.Context, serverID, targetMC string) (*store
 	e.active[serverID] = true
 	e.mu.Unlock()
 
+	var op *operations.Op
+	if e.ops != nil {
+		op, err = e.ops.Begin(ctx, serverID, operations.KindMigrate, operations.Actor{Trigger: operations.TriggerManual},
+			operations.Options{Timeout: e.runTimeout, Phase: "checking", Msg: "Planning the migration to " + targetMC})
+		if err != nil {
+			e.release(serverID)
+			return nil, err
+		}
+	}
+
 	detail, _ := json.Marshal(migrationDetail{Phase: "checking", FromMC: srv.MCVersion, ToMC: targetMC, Mods: []*modAction{}})
 	run, err := e.store.CreateVersionMigration(ctx, serverID, srv.MCVersion, targetMC, detail)
 	if err != nil {
 		e.release(serverID)
+		if op != nil {
+			op.Done(err, nil)
+		}
 		return nil, err
+	}
+	if op != nil {
+		op.SetRef(run.ID)
 	}
 
 	go func() {
 		defer e.release(serverID)
 		runCtx, cancel := context.WithTimeout(context.Background(), e.runTimeout)
 		defer cancel()
-		e.execute(runCtx, run.ID, srv, node, targetMC)
+		if op != nil {
+			runCtx = op.Context()
+		}
+		status, msg := e.execute(runCtx, run.ID, srv, node, targetMC, op)
+		if op != nil {
+			var err error
+			if status != "success" && status != "partial" {
+				err = fmt.Errorf("%s", msg)
+			}
+			op.Done(err, map[string]string{"migration_id": run.ID, "status": status, "message": msg})
+		}
 	}()
 
 	return run, nil
@@ -207,14 +239,25 @@ func (e *Engine) release(serverID string) {
 
 // ── Run execution ────────────────────────────────────────────────────
 
-func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, node *store.Node, target string) {
+// execute runs one migration and returns its terminal status and message.
+func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, node *store.Node, target string, op *operations.Op) (finalStatus, finalMsg string) {
 	log := slog.With("migration_id", runID, "server_id", srv.ID, "to_mc", target)
 	d := &migrationDetail{Phase: "checking", FromMC: srv.MCVersion, ToMC: target, Mods: []*modAction{}}
 	var backupID *string
+	// Writes use their own short context so a cancelled migration can still
+	// record how it ended.
 	save := func(status string, finished bool) {
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		raw, _ := json.Marshal(d)
-		if err := e.store.UpdateVersionMigration(ctx, runID, status, raw, backupID, finished); err != nil {
+		if err := e.store.UpdateVersionMigration(wctx, runID, status, raw, backupID, finished); err != nil {
 			log.Error("migrate: persist run", "error", err)
+		}
+		if op != nil && !finished {
+			op.Progress(d.Phase, d.Message, nil)
+		}
+		if finished {
+			finalStatus, finalMsg = status, d.Message
 		}
 	}
 	fail := func(msg string) {
@@ -341,6 +384,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		"run_id": runID, "from": prevMC, "to": target,
 		"updated": countAction(d.Mods, actUpdate, stepDone), "disabled": countAction(d.Mods, actDisable, stepDone),
 	})
+	return
 }
 
 // buildPlan classifies every mod against the target version and returns the move
@@ -458,6 +502,15 @@ func (e *Engine) disableMod(ctx context.Context, c agentAPI, serverID string, m 
 // state. Marks the run "reverted" (or "failed" if the restore itself fails).
 func (e *Engine) rollback(ctx context.Context, c agentAPI, srv *store.Server, prevMC string, prevLoader *string, snapshots map[string]store.InstalledMod, backupID string, d *migrationDetail, save func(string, bool), reason string) {
 	log := slog.With("server_id", srv.ID)
+	// A cancelled migration still has to put the server back: leaving it half
+	// migrated is worse than finishing the restore. The rollback gets a fresh
+	// deadline of its own when the run's context is already gone.
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), e.runTimeout)
+		defer cancel()
+		reason = "cancelled (" + reason + ")"
+	}
 	d.Phase = "restoring"
 	d.Message = reason + " — restoring the pre-migration backup"
 	save("running", false)

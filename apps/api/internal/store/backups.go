@@ -15,7 +15,8 @@ import (
 
 func (s *Store) ListBackupTargets(ctx context.Context, serverID string) ([]*BackupTarget, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, server_id, name, type, config, retention, is_default FROM backup_targets WHERE server_id=?`, serverID)
+		`SELECT id, server_id, name, type, config, retention, is_default FROM backup_targets WHERE server_id=?
+		  ORDER BY is_default DESC, name, id`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,4 +148,39 @@ func (s *Store) LatestSuccessfulBackups(ctx context.Context) (map[string]time.Ti
 		out[id] = at
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetBackupTarget(ctx context.Context, id string) (*BackupTarget, error) {
+	var t BackupTarget
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, server_id, name, type, config, retention, is_default FROM backup_targets WHERE id = ?`, id,
+	).Scan(&t.ID, &t.ServerID, &t.Name, &t.Type, (*jsonRaw)(&t.Config), (*jsonRaw)(&t.Retention), &t.IsDefault)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &t, err
+}
+
+func (s *Store) UpdateBackupTarget(ctx context.Context, t *BackupTarget) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE backup_targets SET name = ?, type = ?, config = ?, retention = ?, is_default = ? WHERE id = ?`,
+		t.Name, t.Type, jsonRaw(t.Config), jsonRaw(t.Retention), t.IsDefault, t.ID)
+	return err
+}
+
+// DeleteBackupTarget removes a target. Backups taken under it keep existing;
+// their reference is cleared.
+func (s *Store) DeleteBackupTarget(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE backups SET target_id = NULL WHERE target_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM backup_targets WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

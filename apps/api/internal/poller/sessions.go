@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mcsm/api/internal/agent"
@@ -15,7 +16,8 @@ import (
 // offline (or unreachable) closes everything. Resolution is the sampler
 // cadence (~one minute), which is plenty for playtime accounting.
 type sessionTracker struct {
-	s *store.Store
+	mu sync.Mutex
+	s  *store.Store
 	// open sessions per server: lowercased player name -> session id.
 	open map[string]map[string]string
 	// seeded marks servers whose open sessions were loaded from the DB, so an
@@ -27,9 +29,12 @@ func newSessionTracker(s *store.Store) *sessionTracker {
 	return &sessionTracker{s: s, open: map[string]map[string]string{}, seeded: map[string]bool{}}
 }
 
-// observe processes one sampler snapshot. stats == nil means the server is not
-// online (stopped, crashed, or its agent is unreachable).
-func (t *sessionTracker) observe(ctx context.Context, srv *store.Server, stats *agent.ServerStats) {
+// observe processes one sampler snapshot and reports who joined and left.
+// stats == nil means the server is not online (stopped, crashed, or its agent
+// is unreachable).
+func (t *sessionTracker) observe(ctx context.Context, srv *store.Server, stats *agent.ServerStats) (joined, left []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	now := time.Now()
 
 	if stats == nil {
@@ -38,12 +43,15 @@ func (t *sessionTracker) observe(ctx context.Context, srv *store.Server, stats *
 		if len(t.open[srv.ID]) > 0 || !t.seeded[srv.ID] {
 			if err := t.s.EndAllPlayerSessions(ctx, srv.ID, now); err != nil {
 				log.Printf("sessions: end all %s: %v", srv.ID, err)
-				return
+				return nil, nil
 			}
+		}
+		for name := range t.open[srv.ID] {
+			left = append(left, name)
 		}
 		delete(t.open, srv.ID)
 		t.seeded[srv.ID] = true
-		return
+		return nil, left
 	}
 
 	cur := t.open[srv.ID]
@@ -82,6 +90,7 @@ func (t *sessionTracker) observe(ctx context.Context, srv *store.Server, stats *
 			continue
 		}
 		cur[key] = id
+		joined = append(joined, p.Name)
 	}
 
 	// Leaves: open session, not online anymore.
@@ -94,5 +103,7 @@ func (t *sessionTracker) observe(ctx context.Context, srv *store.Server, stats *
 			continue
 		}
 		delete(cur, key)
+		left = append(left, key)
 	}
+	return joined, left
 }

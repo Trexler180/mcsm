@@ -33,7 +33,14 @@ type runConfig struct {
 	retryDelay         time.Duration
 	statusTimeout      time.Duration
 	startTimeout       time.Duration
+	// starter launches a server once its agent is reachable. Nil starts it on
+	// the agent directly; production passes the lifecycle service, so an
+	// automatic start is a tracked operation that respects the server lock.
+	starter Starter
 }
+
+// Starter launches a server.
+type Starter func(ctx context.Context, srv *store.Server) error
 
 var productionConfig = runConfig{
 	availabilityWindow: 2 * time.Minute,
@@ -44,10 +51,13 @@ var productionConfig = runConfig{
 
 // Run starts all opted-in servers and returns after every startup attempt has
 // either been handed to an agent or exhausted the agent-availability window.
-func Run(ctx context.Context, s *store.Store) {
+// start may be nil to start servers on their agents directly.
+func Run(ctx context.Context, s *store.Store, start Starter) {
+	cfg := productionConfig
+	cfg.starter = start
 	run(ctx, s, func(node *store.Node) agentClient {
 		return agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
-	}, productionConfig)
+	}, cfg)
 }
 
 func run(ctx context.Context, s serverStore, factory clientFactory, cfg runConfig) {
@@ -95,10 +105,15 @@ func startOne(ctx context.Context, s serverStore, factory clientFactory, cfg run
 				return
 			default:
 				startCtx, cancelStart := context.WithTimeout(ctx, cfg.startTimeout)
-				if err := s.UpdateServerStatus(ctx, srv.ID, "starting"); err != nil {
-					slog.Error("auto-start status update failed", "server_id", srv.ID, "error", err)
+				var startErr error
+				if cfg.starter != nil {
+					startErr = cfg.starter(startCtx, srv)
+				} else {
+					if err := s.UpdateServerStatus(ctx, srv.ID, "starting"); err != nil {
+						slog.Error("auto-start status update failed", "server_id", srv.ID, "error", err)
+					}
+					startErr = client.StartServer(startCtx, srv.ID, agent.StartConfigForServer(srv))
 				}
-				startErr := client.StartServer(startCtx, srv.ID, agent.StartConfigForServer(srv))
 				cancelStart()
 				if startErr != nil {
 					_ = s.UpdateServerStatus(ctx, srv.ID, "offline")

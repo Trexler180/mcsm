@@ -20,6 +20,7 @@ import (
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -50,6 +51,10 @@ type Engine struct {
 	modrinth modSource
 	newAgent func(n *store.Node) agentAPI
 	notifier *notify.Engine
+	// ops, when set, makes every run an operation holding its server, so no
+	// stop, migration or second update can land in the middle of a boot
+	// check and be mistaken for a broken update.
+	ops *operations.Manager
 
 	mu     sync.Mutex
 	active map[string]bool // serverID -> run in flight
@@ -79,6 +84,9 @@ func New(s *store.Store) *Engine {
 // SetNotifier wires in the notification engine so completed/failed auto-update
 // runs raise alerts. Optional; a nil engine makes Emit a no-op.
 func (e *Engine) SetNotifier(n *notify.Engine) { e.notifier = n }
+
+// SetOperations makes runs operations under the shared per-server lock.
+func (e *Engine) SetOperations(ops *operations.Manager) { e.ops = ops }
 
 // ── Run progress document (stored as mod_update_runs.detail) ─────────
 
@@ -146,11 +154,32 @@ func (e *Engine) Trigger(ctx context.Context, serverID, trigger string) (*store.
 	e.active[serverID] = true
 	e.mu.Unlock()
 
+	var op *operations.Op
+	if e.ops != nil {
+		actor := operations.Actor{Trigger: operations.TriggerManual}
+		if trigger == "scheduled" {
+			actor.Trigger = operations.TriggerScheduled
+		}
+		op, err = e.ops.Begin(ctx, serverID, operations.KindAutoUpdate, actor, operations.Options{
+			Timeout: e.runTimeout, Phase: "checking", Msg: "Checking for updates",
+		})
+		if err != nil {
+			e.release(serverID)
+			return nil, err
+		}
+	}
+
 	detail, _ := json.Marshal(runDetail{Phase: "checking", Mods: []*modStep{}})
 	run, err := e.store.CreateModUpdateRun(ctx, serverID, trigger, detail)
 	if err != nil {
 		e.release(serverID)
+		if op != nil {
+			op.Done(err, nil)
+		}
 		return nil, err
+	}
+	if op != nil {
+		op.SetRef(run.ID)
 	}
 
 	go func() {
@@ -159,7 +188,17 @@ func (e *Engine) Trigger(ctx context.Context, serverID, trigger string) (*store.
 		// that may be mid-revert.
 		runCtx, cancel := context.WithTimeout(context.Background(), e.runTimeout)
 		defer cancel()
-		e.execute(runCtx, run.ID, srv, node)
+		if op != nil {
+			runCtx = op.Context()
+		}
+		status, msg := e.execute(runCtx, run.ID, srv, node, op)
+		if op != nil {
+			var err error
+			if status == "failed" || status == "cancelled" {
+				err = fmt.Errorf("%s", msg)
+			}
+			op.Done(err, map[string]string{"run_id": run.ID, "status": status, "message": msg})
+		}
 	}()
 
 	return run, nil
@@ -192,22 +231,50 @@ func PickUpdate(versions []modrinth.Version, currentVersionID string, skipped ma
 
 // ── Run execution ────────────────────────────────────────────────────
 
-func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, node *store.Node) {
+// execute runs one update and returns its terminal status and message.
+func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, node *store.Node, op *operations.Op) (finalStatus, finalMsg string) {
 	log := slog.With("run_id", runID, "server_id", srv.ID)
 	d := &runDetail{Phase: "checking", Mods: []*modStep{}}
+	// Writes use their own short context so a cancelled run can still record
+	// how it ended.
 	save := func(status string, finished bool) {
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		raw, _ := json.Marshal(d)
-		if err := e.store.UpdateModUpdateRun(ctx, runID, status, raw, finished); err != nil {
+		if err := e.store.UpdateModUpdateRun(wctx, runID, status, raw, finished); err != nil {
 			log.Error("autoupdate: persist run", "error", err)
+		}
+		if op != nil && !finished {
+			op.Progress(d.Phase, d.Message, nil)
+		}
+		if finished {
+			finalStatus, finalMsg = status, d.Message
 		}
 	}
 	fail := func(msg string) {
+		if ctx.Err() != nil {
+			// Cancelled (a forced kill, the API shutting down): whatever the
+			// boot check saw was caused by that, not by an update, so nothing
+			// is reverted on its evidence and nothing is blocklisted.
+			d.Phase = "done"
+			d.Message = "cancelled before the run finished; nothing was blocklisted"
+			save("cancelled", true)
+			e.audit(srv.ID, "mod.autoupdate_cancelled", map[string]any{"run_id": runID})
+			return
+		}
 		d.Phase = "done"
 		d.Message = msg
 		save("failed", true)
 		log.Error("autoupdate: run failed", "message", msg)
 		e.audit(srv.ID, "mod.autoupdate_failed", map[string]any{"run_id": runID, "message": msg})
 		e.notifier.Emit(notify.ModUpdateFailed(srv.ID, srv.Name, msg))
+	}
+	cancelled := func() bool {
+		if ctx.Err() == nil {
+			return false
+		}
+		fail("cancelled")
+		return true
 	}
 
 	c := e.newAgent(node)
@@ -285,6 +352,9 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		return
 	}
 
+	if cancelled() {
+		return
+	}
 	// Boot is broken. Revert and (when several mods updated) isolate the culprit.
 	log.Warn("autoupdate: boot unhealthy after updates", "reason", h.reason)
 
@@ -323,6 +393,9 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		}
 	}
 	if base := e.startAndWatch(ctx, c, srv, nil); !base.ok {
+		if cancelled() {
+			return
+		}
 		fail(fmt.Sprintf("server is unhealthy even with all updates reverted (%s) — the failure is not caused by these updates; nothing was blocklisted", base.reason))
 		return
 	}
@@ -348,6 +421,9 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 			cand.step.Status = stepUpdated
 			continue
 		}
+		if cancelled() {
+			return
+		}
 
 		// This update breaks the boot: take it back out and blocklist it.
 		log.Warn("autoupdate: isolated culprit", "mod", cand.mod.Name, "version", cand.target.VersionNumber, "reason", ih.reason)
@@ -367,6 +443,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 
 	e.finishHealthy(ctx, c, srv, d, save)
 	e.audit(srv.ID, "mod.autoupdate_isolated", map[string]any{"run_id": runID, "skipped": countStatus(d.Mods, stepRevertedSkipped), "updated": countStatus(d.Mods, stepUpdated)})
+	return
 }
 
 // finishHealthy restores the original power state (the server is online here),

@@ -43,7 +43,7 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 	).Scan(&srv.ID, &srv.NodeID, &srv.OwnerID, &srv.Name, &srv.Description, &srv.Platform, &srv.MCVersion, &srv.LoaderVersion,
 		&srv.DirectoryPath, &srv.JavaBinary, (*strArray)(&srv.JVMArgs), &srv.Port, &srv.RAMMbMin, &srv.RAMMbMax,
 		&srv.Status, &srv.AutoStart, (*strArray)(&srv.Tags), (*jsonRaw)(&srv.Settings),
-			&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
+		&srv.FolderID, &srv.PublicStatus, &srv.PublicSlug, &srv.CreatedAt, &srv.UpdatedAt, &srv.OnlineSince)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("server not found")
 	}
@@ -420,4 +420,59 @@ func (s *Store) updateServerStatus(ctx context.Context, id, status, endReason st
 func (s *Store) DeleteServer(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
 	return err
+}
+
+// UpdateServerStatusUnreachable records that a server's node stopped answering.
+// The status becomes "unknown" and an open uptime segment is closed as
+// "unreachable" rather than as a stop or crash: the panel cannot see the
+// server, which is not the same as the server being down.
+func (s *Store) UpdateServerStatusUnreachable(ctx context.Context, id string) error {
+	return s.updateServerStatus(ctx, id, "unknown", "unreachable")
+}
+
+// ResumeUptime handles a node coming back after an outage. When the server's
+// process started before the outage ended, it ran straight through it, so the
+// uptime segment closed as "unreachable" is reopened as if the outage never
+// interrupted it, and the status is set to online. It reports whether it did;
+// when it did not, the caller records a fresh transition.
+func (s *Store) ResumeUptime(ctx context.Context, id string, processStartedAt time.Time) (bool, error) {
+	if processStartedAt.IsZero() {
+		return false, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var segID, endedAt int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, ended_at FROM server_uptime
+		  WHERE server_id = ? AND end_reason = 'unreachable' AND ended_at IS NOT NULL
+		  ORDER BY started_at DESC LIMIT 1`, id).Scan(&segID, &endedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if processStartedAt.Unix() > endedAt {
+		return false, nil // a new process: the old one really stopped
+	}
+	var open int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM server_uptime WHERE server_id = ? AND ended_at IS NULL`, id).Scan(&open); err != nil {
+		return false, err
+	}
+	if open > 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE server_uptime SET ended_at = NULL, end_reason = '' WHERE id = ?`, segID); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE servers SET status = 'online', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }

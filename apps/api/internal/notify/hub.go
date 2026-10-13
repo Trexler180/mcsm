@@ -12,6 +12,16 @@ import (
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[string]map[chan []byte]struct{}
+	// mirror, when set, also receives every push — the panel's unified event
+	// stream carries notifications alongside everything else.
+	mirror func(userID string, payload []byte)
+}
+
+// SetMirror forwards every push to fn as well. Set once at startup.
+func (h *Hub) SetMirror(fn func(userID string, payload []byte)) {
+	h.mu.Lock()
+	h.mirror = fn
+	h.mu.Unlock()
 }
 
 func NewHub() *Hub {
@@ -56,6 +66,9 @@ func (h *Hub) Push(userID string, payload any) {
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	if h.mirror != nil {
+		h.mirror(userID, data)
+	}
 	for ch := range h.clients[userID] {
 		select {
 		case ch <- data:

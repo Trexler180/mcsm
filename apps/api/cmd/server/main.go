@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -27,9 +28,13 @@ import (
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autostart"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/backups"
+	"github.com/mcsm/api/internal/events"
 	"github.com/mcsm/api/internal/hardening"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/mcpjanitor"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/poller"
 	"github.com/mcsm/api/internal/scheduler"
 	"github.com/mcsm/api/internal/store"
@@ -278,7 +283,28 @@ func main() {
 	updater.SetNotifier(notifier.Engine)
 	go notifier.Run(bgCtx)
 
-	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier)
+	// The live event bus, the per-server operation lock, and the services built
+	// on them are shared by the router, scheduler, poller and engines, so there
+	// is one lock and one stream.
+	bus := events.New()
+	notifier.Hub.SetMirror(func(userID string, payload []byte) {
+		bus.Publish(events.Event{Type: events.Notification, UserID: userID, Data: json.RawMessage(payload)})
+	})
+	ops := operations.New(s, bus)
+	// Close out work a previous process left running before anything starts
+	// new work: those records would otherwise hold their servers forever.
+	for _, op := range ops.Sweep(ctx) {
+		if srv, err := s.GetServer(ctx, op.ServerID); err == nil {
+			notifier.Engine.Emit(notify.OperationInterrupted(srv.ID, srv.Name, op.Kind))
+		}
+	}
+	life := lifecycle.New(s, ops, bus, nil)
+	backupSvc := backups.NewService(s, ops, bus, notifier.Engine, nil)
+	updater.SetOperations(ops)
+
+	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier, panelapi.WithServices(panelapi.Services{
+		Bus: bus, Ops: ops, Life: life, Backups: backupSvc,
+	}))
 
 	srv := &http.Server{
 		Addr:        fmt.Sprintf("%s:%s", host, port),
@@ -293,11 +319,14 @@ func main() {
 
 	// Background workers: cron-driven scheduled tasks + status synchronization.
 	// bgCtx/bgCancel are created above (the dispatcher already runs on bgCtx).
-	sched := scheduler.New(s, updater, notifier.Engine)
+	sched := scheduler.New(s, updater, notifier.Engine, life, backupSvc, bus)
 	sched.Start(bgCtx)
 
-	go poller.Run(bgCtx, s, notifier.Engine)
-	go autostart.Run(bgCtx, s)
+	go poller.Run(bgCtx, s, notifier.Engine, bus)
+	go autostart.Run(bgCtx, s, func(ctx context.Context, srv *store.Server) error {
+		_, err := life.Start(ctx, srv, operations.Actor{Trigger: operations.TriggerAutomatic})
+		return err
+	})
 	// Retention for the MCP tables. The OAuth registration and authorization
 	// endpoints are unauthenticated by necessity, so the rows they write need
 	// something that eventually removes them; nothing else does.

@@ -14,9 +14,13 @@ import (
 	"github.com/mcsm/api/internal/api/ws"
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/autoupdate"
+	"github.com/mcsm/api/internal/backups"
+	"github.com/mcsm/api/internal/events"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/mcpserver"
 	"github.com/mcsm/api/internal/migrate"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/publicurl"
 	"github.com/mcsm/api/internal/store"
 )
@@ -65,7 +69,52 @@ func sessionCheck(s *store.Store) auth.SessionCheck {
 	}
 }
 
-func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine, notifier *notify.Service) http.Handler {
+// Services are the long-lived pieces the router shares with the scheduler,
+// poller and engines: the event bus, the operation lock, and the lifecycle and
+// backup services built on them.
+type Services struct {
+	Bus     *events.Bus
+	Ops     *operations.Manager
+	Life    *lifecycle.Service
+	Backups *backups.Service
+}
+
+// RouterOption configures NewRouter.
+type RouterOption func(*Services)
+
+// WithServices shares services built by the caller (main) instead of private
+// ones.
+func WithServices(svc Services) RouterOption {
+	return func(dst *Services) { *dst = svc }
+}
+
+// defaults fills in any service the caller did not provide.
+func (svc *Services) defaults(s *store.Store, notifier *notify.Service) {
+	if svc.Bus == nil {
+		svc.Bus = events.New()
+	}
+	if svc.Ops == nil {
+		svc.Ops = operations.New(s, svc.Bus)
+	}
+	if svc.Life == nil {
+		svc.Life = lifecycle.New(s, svc.Ops, svc.Bus, nil)
+	}
+	if svc.Backups == nil {
+		var engine *notify.Engine
+		if notifier != nil {
+			engine = notifier.Engine
+		}
+		svc.Backups = backups.NewService(s, svc.Ops, svc.Bus, engine, nil)
+	}
+}
+
+func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine, notifier *notify.Service, opts ...RouterOption) http.Handler {
+	var svc Services
+	for _, opt := range opts {
+		opt(&svc)
+	}
+	svc.defaults(s, notifier)
+
 	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
 	// top of the single-use ticket auth). APP_ORIGIN unset => any origin, which
 	// keeps local dev working; production sets it to the panel's URL.
@@ -114,15 +163,18 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets, passwordThrottles)
 	apiKeyH := handlers.NewAPIKeyHandlers(s, passwordThrottles)
 	nodeH := handlers.NewNodeHandlers(s, passwordThrottles)
-	serverH := handlers.NewServerHandlers(s, serverRoot)
+	serverH := handlers.NewServerHandlers(s, serverRoot).WithLifecycle(svc.Life)
+	opH := handlers.NewOperationHandlers(s, svc.Ops)
+	eventH := handlers.NewEventHandlers(s, svc.Bus)
 	folderH := handlers.NewFolderHandlers(s)
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine)
 	migrationEngine := migrate.New(s)
+	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
-	backupH := handlers.NewBackupHandlers(s, notifier.Engine)
+	backupH := handlers.NewBackupHandlers(s, notifier.Engine).WithService(svc.Backups)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
 	consoleH := handlers.NewConsoleHandlers(s)
@@ -298,6 +350,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.Get("/time", handlers.Time)
 			// Build and clock, for signed-in users only.
 			r.Get("/system", handlers.System)
+
+			// The live event stream (WebSocket; a ticket bound to this path).
+			r.Get("/events", eventH.Stream)
 
 			// Minecraft version metadata (global, cached upstream lookups)
 			r.Get("/minecraft/versions", mcH.Versions)
@@ -497,14 +552,27 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// Restoring stops the server to swap its directory.
 					r.With(backupsRestore, stopAccess).Post("/backups/{backupId}/restore", backupH.RestoreBackup)
 					r.With(backupsDelete).Delete("/backups/{backupId}", backupH.DeleteBackup)
+					// A plain download: header or a ticket bound to this path. An
+					// archive holds every file the server has, so it needs file
+					// access as well as backup access.
+					r.With(backupsRead, filesRead).Get("/backups/{backupId}/download", backupH.DownloadBackup)
 					r.With(backupsRead).Get("/backup-targets", backupH.ListTargets)
 					r.With(backupsCreate, backupsDelete).Post("/backup-targets", backupH.CreateTarget)
+					r.With(backupsCreate, backupsDelete).Put("/backup-targets/{targetId}", backupH.UpdateTarget)
+					r.With(backupsCreate, backupsDelete).Delete("/backup-targets/{targetId}", backupH.DeleteTarget)
+
+					// Operations: follow, list and cancel long-running work.
+					r.With(viewAccess).Get("/operations", opH.List)
+					r.With(viewAccess).Get("/operations/{opId}", opH.Get)
+					r.With(killAccess).Post("/operations/{opId}/cancel", opH.Cancel)
 
 					// Scheduled tasks
 					r.With(taskAccess).Get("/tasks", taskH.List)
 					r.With(taskAccess, requireHuman).Post("/tasks", taskH.Create)
 					r.With(taskAccess, requireHuman).Put("/tasks/{taskId}", taskH.Update)
 					r.With(taskAccess).Delete("/tasks/{taskId}", taskH.Delete)
+					r.With(taskAccess).Get("/tasks/{taskId}/runs", taskH.Runs)
+					r.With(taskAccess).Get("/task-runs", taskH.Runs)
 
 					// Per-server audit trail + indexed log warnings
 					r.With(viewAccess).Get("/audit", auditH.ListForServer)

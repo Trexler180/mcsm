@@ -31,6 +31,10 @@ func SetAllowedOrigins(origins []string) {
 	allowedOrigins = append([]string(nil), origins...)
 }
 
+// AcceptOptions is acceptOptions for handlers outside this package that
+// upgrade their own connections.
+func AcceptOptions() *websocket.AcceptOptions { return acceptOptions() }
+
 // acceptOptions builds AcceptOptions honoring the configured allowlist. With no
 // allowlist it skips Origin verification (ticket-only auth); with one it enforces
 // the patterns instead of blanket-skipping.

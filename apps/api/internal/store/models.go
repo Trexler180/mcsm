@@ -396,6 +396,8 @@ func RequiredTaskPermission(action string) (ServerPermission, bool) {
 	switch action {
 	case "command":
 		return ServerPermissionConsole, true
+	case "start":
+		return ServerPermissionPowerStart, true
 	case "restart":
 		return ServerPermissionPowerRestart, true
 	case "stop":

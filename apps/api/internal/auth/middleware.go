@@ -138,7 +138,8 @@ func queryTokenAllowed(r *http.Request) bool {
 // a ticket may open: console and metrics WebSockets, the notification stream,
 // and file and backup downloads.
 func TicketPathAllowed(path string) bool {
-	return strings.HasSuffix(path, "/console") ||
+	return path == "/api/v1/events" ||
+		strings.HasSuffix(path, "/console") ||
 		strings.HasSuffix(path, "/metrics") ||
 		strings.HasSuffix(path, "/notifications/stream") ||
 		strings.HasSuffix(path, "/files/download") ||

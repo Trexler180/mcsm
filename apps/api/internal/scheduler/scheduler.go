@@ -6,7 +6,9 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +16,10 @@ import (
 
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/backups"
+	"github.com/mcsm/api/internal/events"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -24,11 +29,39 @@ type ModUpdater interface {
 	Trigger(ctx context.Context, serverID, trigger string) (*store.ModUpdateRun, error)
 }
 
+// Parser is the cron dialect tasks use: standard five fields plus the
+// @hourly/@daily/@every descriptors. Handlers validate with it so a stored
+// expression is always one the scheduler can run.
+var Parser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+// MinInterval is the shortest gap a task may fire at. Anything faster is a
+// mistake or abuse (a command every second floods the console).
+const MinInterval = time.Minute
+
+// ValidateCron checks an expression parses and does not fire more often than
+// MinInterval.
+func ValidateCron(expr string) error {
+	sched, err := Parser.Parse(expr)
+	if err != nil {
+		return fmt.Errorf("invalid schedule: %v", err)
+	}
+	now := time.Now()
+	first := sched.Next(now)
+	second := sched.Next(first)
+	if !first.IsZero() && second.Sub(first) < MinInterval {
+		return fmt.Errorf("a task may not run more often than once a minute")
+	}
+	return nil
+}
+
 type Scheduler struct {
 	cron       *cron.Cron
 	store      *store.Store
+	life       *lifecycle.Service
+	backups    *backups.Service
 	updater    ModUpdater
 	engine     *notify.Engine
+	bus        *events.Bus
 	refreshInt time.Duration
 
 	mu      sync.Mutex
@@ -36,18 +69,35 @@ type Scheduler struct {
 }
 
 type registration struct {
-	entryID  cron.EntryID
-	cronExpr string
-	action   string
+	entryID cron.EntryID
+	// fingerprint covers everything that decides what the task does, so an
+	// edit to its command text or its owner re-registers it — not only a
+	// change of schedule or action.
+	fingerprint string
 }
 
-func New(s *store.Store, updater ModUpdater, engine *notify.Engine) *Scheduler {
+// New builds a scheduler. life and backups may be nil to build private ones
+// (tests); production shares the router's so the operation lock is one lock.
+func New(s *store.Store, updater ModUpdater, engine *notify.Engine, life *lifecycle.Service, bk *backups.Service, bus *events.Bus) *Scheduler {
+	if life == nil || bk == nil {
+		ops := operations.New(s, bus)
+		if life == nil {
+			life = lifecycle.New(s, ops, bus, nil)
+		}
+		if bk == nil {
+			bk = backups.NewService(s, ops, bus, engine, nil)
+		}
+	}
 	return &Scheduler{
-		// SecondField off; we use 5-field cron expressions like "0 4 * * *".
-		cron:       cron.New(),
+		// A task still running when its next firing comes round is skipped
+		// rather than run twice at once (a backup that outlasts its interval).
+		cron:       cron.New(cron.WithParser(Parser), cron.WithChain(cron.SkipIfStillRunning(cron.DiscardLogger))),
 		store:      s,
+		life:       life,
+		backups:    bk,
 		updater:    updater,
 		engine:     engine,
+		bus:        bus,
 		refreshInt: 30 * time.Second,
 		entries:    map[string]registration{},
 	}
@@ -55,6 +105,9 @@ func New(s *store.Store, updater ModUpdater, engine *notify.Engine) *Scheduler {
 
 // Start begins running tasks. It returns immediately.
 func (s *Scheduler) Start(ctx context.Context) {
+	if err := s.store.InterruptRunningTaskRuns(ctx); err != nil {
+		log.Printf("scheduler: close interrupted runs: %v", err)
+	}
 	s.cron.Start()
 	s.refresh(ctx)
 	go s.refreshLoop(ctx)
@@ -78,6 +131,14 @@ func (s *Scheduler) refreshLoop(ctx context.Context) {
 	}
 }
 
+func fingerprint(t *store.ScheduledTask) string {
+	creator := ""
+	if t.CreatedBy != nil {
+		creator = *t.CreatedBy
+	}
+	return strings.Join([]string{t.CronExpr, t.Action, string(t.Payload), creator, t.Name}, "\x00")
+}
+
 func (s *Scheduler) refresh(ctx context.Context) {
 	tasks, err := s.store.ListAllEnabledTasks(ctx)
 	if err != nil {
@@ -91,26 +152,26 @@ func (s *Scheduler) refresh(ctx context.Context) {
 	seen := map[string]bool{}
 	for _, t := range tasks {
 		seen[t.ID] = true
+		fp := fingerprint(t)
 
-		// If the cron expr or action changed, re-register.
 		if reg, ok := s.entries[t.ID]; ok {
-			if reg.cronExpr == t.CronExpr && reg.action == t.Action {
+			if reg.fingerprint == fp {
 				continue
 			}
 			s.cron.Remove(reg.entryID)
 			delete(s.entries, t.ID)
 		}
 
-		task := t // capture
-		entryID, err := s.cron.AddFunc(task.CronExpr, func() {
-			s.runTask(task)
+		taskID := t.ID
+		entryID, err := s.cron.AddFunc(t.CronExpr, func() {
+			s.fire(taskID)
 		})
 		if err != nil {
-			log.Printf("scheduler: add %s (%s): %v", task.Name, task.CronExpr, err)
+			log.Printf("scheduler: add %s (%s): %v", t.Name, t.CronExpr, err)
 			continue
 		}
-		s.entries[task.ID] = registration{entryID: entryID, cronExpr: task.CronExpr, action: task.Action}
-		log.Printf("scheduler: registered %q [%s] %s", task.Name, task.CronExpr, task.Action)
+		s.entries[t.ID] = registration{entryID: entryID, fingerprint: fp}
+		log.Printf("scheduler: registered %q [%s] %s", t.Name, t.CronExpr, t.Action)
 	}
 
 	// Drop entries that are no longer enabled / present.
@@ -127,12 +188,13 @@ func (s *Scheduler) refresh(ctx context.Context) {
 	// past time — rendered in the UI as "in now".
 	now := time.Now()
 	for _, t := range tasks {
-		next := store.NextRunForCron(t.CronExpr, now)
-		if next == nil {
+		sched, err := Parser.Parse(t.CronExpr)
+		if err != nil {
 			continue
 		}
-		if t.NextRun == nil || !t.NextRun.Equal(*next) {
-			if err := s.store.SetTaskNextRun(ctx, t.ID, next); err != nil {
+		next := sched.Next(now)
+		if t.NextRun == nil || !t.NextRun.Equal(next) {
+			if err := s.store.SetTaskNextRun(ctx, t.ID, &next); err != nil {
 				log.Printf("scheduler: set next_run for %s: %v", t.ID, err)
 			}
 		}
@@ -162,24 +224,27 @@ func (s *Scheduler) creatorAuthorized(ctx context.Context, task *store.Scheduled
 	return err == nil && allowed
 }
 
-func (s *Scheduler) runTask(task *store.ScheduledTask) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+// fire runs a task by id. It re-reads the task, so it always runs the task as
+// it is now, not as it was when it was registered.
+func (s *Scheduler) fire(taskID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Hour)
 	defer cancel()
+	task, err := s.store.GetTask(ctx, taskID)
+	if err != nil || !task.Enabled {
+		return
+	}
+	s.runTask(ctx, task)
+}
 
+func (s *Scheduler) runTask(ctx context.Context, task *store.ScheduledTask) {
 	now := time.Now()
 	defer func() {
-		// Compute next_run from the cron entry, if still registered.
-		s.mu.Lock()
-		reg, ok := s.entries[task.ID]
-		s.mu.Unlock()
 		var next *time.Time
-		if ok {
-			if e := s.cron.Entry(reg.entryID); e.Valid() {
-				n := e.Next
-				next = &n
-			}
+		if sched, err := Parser.Parse(task.CronExpr); err == nil {
+			n := sched.Next(time.Now())
+			next = &n
 		}
-		_ = s.store.UpdateTaskLastRun(ctx, task.ID, now, next)
+		_ = s.store.UpdateTaskLastRun(context.Background(), task.ID, now, next)
 	}()
 
 	srv, err := s.store.GetServer(ctx, task.ServerID)
@@ -187,101 +252,118 @@ func (s *Scheduler) runTask(task *store.ScheduledTask) {
 		log.Printf("scheduler: task %s server lookup: %v", task.ID, err)
 		return
 	}
+	run, err := s.store.StartTaskRun(ctx, task.ID, srv.ID, task.Action)
+	if err != nil {
+		log.Printf("scheduler: record run of %s: %v", task.ID, err)
+		return
+	}
+	s.publish(srv.ID, task, run.ID, "running", "")
+
+	finish := func(status, message, operationID string) {
+		_ = s.store.FinishTaskRun(context.Background(), run.ID, status, message, operationID)
+		s.publish(srv.ID, task, run.ID, status, message)
+		if status == "failed" || status == "skipped" {
+			log.Printf("scheduler: task %q %s: %s", task.Name, status, message)
+			s.engine.Emit(notify.TaskFailed(srv.ID, srv.Name, task.Name, message))
+		}
+	}
 
 	// Re-authorize at fire time: a task must never outlive its creator's ability
 	// to perform its action. If the creator was deleted or lost the permission the
 	// action requires, the task is skipped (not run with the server's authority).
 	if !s.creatorAuthorized(ctx, task, srv.ID) {
-		log.Printf("scheduler: task %q skipped — creator no longer authorized for %q", task.Name, task.Action)
+		finish("skipped", "the task's creator no longer has the permission this action needs", "")
 		return
 	}
 
-	// mod_update runs through the auto-update engine (which manages its own
-	// agent connection and run lifecycle), not the per-task agent client.
-	if task.Action == "mod_update" {
-		if s.updater == nil {
-			log.Printf("scheduler: task %s skipped (no auto-update engine)", task.Name)
-			return
-		}
-		run, err := s.updater.Trigger(ctx, srv.ID, "scheduled")
-		if err != nil {
-			log.Printf("scheduler: task %s auto-update: %v", task.Name, err)
-			return
-		}
-		log.Printf("scheduler: task %q started auto-update run %s", task.Name, run.ID)
-		return
-	}
-
-	node, err := s.store.GetNode(ctx, srv.NodeID)
-	if err != nil {
-		log.Printf("scheduler: task %s node lookup: %v", task.ID, err)
-		return
-	}
-
-	c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
-	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
-		log.Printf("scheduler: task %s register dir: %v", task.ID, err)
-		return
+	actor := operations.Actor{Trigger: operations.TriggerScheduled}
+	if task.CreatedBy != nil {
+		actor.UserID = *task.CreatedBy
 	}
 
 	switch task.Action {
+	case "mod_update":
+		if s.updater == nil {
+			finish("failed", "safe updates are unavailable", "")
+			return
+		}
+		r, err := s.updater.Trigger(ctx, srv.ID, "scheduled")
+		if err != nil {
+			finish("failed", err.Error(), "")
+			return
+		}
+		finish("succeeded", "started safe update run "+r.ID, "")
+
 	case "command":
 		var p struct {
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(task.Payload, &p)
-		if p.Command == "" {
-			log.Printf("scheduler: task %s skipped (empty command)", task.Name)
+		if strings.TrimSpace(p.Command) == "" {
+			finish("failed", "the task has no command", "")
 			return
 		}
-		if err := c.SendCommand(ctx, srv.ID, p.Command); err != nil {
-			log.Printf("scheduler: task %s command: %v", task.Name, err)
+		node, err := s.store.GetNode(ctx, srv.NodeID)
+		if err != nil {
+			finish("failed", "node not found", "")
+			return
 		}
+		c := agent.New(node.Scheme, node.FQDN, node.Port, node.Token)
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err = c.SendCommand(cctx, srv.ID, p.Command)
+		cancel()
+		if err != nil {
+			finish("failed", err.Error(), "")
+			return
+		}
+		actor.Audit(ctx, s.store, srv.ID, "console.command", map[string]any{"command": p.Command, "task": task.Name})
+		finish("succeeded", "", "")
+
+	case "start":
+		op, err := s.life.Start(ctx, srv, actor)
+		if err != nil {
+			finish("failed", err.Error(), "")
+			return
+		}
+		finish("succeeded", "", op.ID)
 
 	case "restart":
-		// nil config: a scheduled restart deliberately reuses whatever the server
-		// is already running with, rather than re-deriving configuration on a
-		// timer when nobody is watching.
-		if err := c.RestartServer(ctx, srv.ID, nil); err != nil {
-			log.Printf("scheduler: task %s restart: %v", task.Name, err)
+		if err := s.life.Restart(ctx, srv, actor); err != nil {
+			finish("failed", err.Error(), "")
+			return
 		}
+		finish("succeeded", "", "")
 
 	case "stop":
-		if err := c.StopServer(ctx, srv.ID, true, 30); err != nil {
-			log.Printf("scheduler: task %s stop: %v", task.Name, err)
+		if err := s.life.Stop(ctx, srv, actor, lifecycle.StopOptions{Graceful: true, TimeoutSec: 30}); err != nil {
+			finish("failed", err.Error(), "")
+			return
 		}
+		finish("succeeded", "", "")
 
 	case "backup":
-		b := &store.Backup{
-			ServerID: srv.ID,
-			Trigger:  "scheduled",
-			Status:   "running",
+		_, op, err := s.backups.CreateAndWait(ctx, srv, actor, "scheduled")
+		opID := ""
+		if op != nil {
+			opID = op.ID
 		}
-		created, err := s.store.CreateBackup(ctx, b)
 		if err != nil {
-			log.Printf("scheduler: task %s create backup row: %v", task.Name, err)
+			finish("failed", err.Error(), opID)
 			return
 		}
-		result, berr := c.Backup(ctx, srv.ID, created.ID)
-		if berr != nil {
-			_ = s.store.UpdateBackupResult(ctx, created.ID, "failed", nil, berr.Error())
-			log.Printf("scheduler: task %s backup: %v", task.Name, berr)
-			s.engine.Emit(notify.BackupFailed(srv.ID, srv.Name, berr.Error()))
-			return
-		}
-		_ = s.store.UpdateBackupResult(ctx, created.ID, "success", &result.SizeBytes, "")
-		backups.Enforce(ctx, s.store, srv.ID)
-		s.engine.Emit(notify.BackupSuccess(srv.ID, srv.Name))
-		if result.Warning != "" {
-			_ = s.store.InsertLogEvent(ctx, srv.ID, "warning", result.Warning, "backup")
-			nodeName := ""
-			if node, nerr := s.store.GetNode(ctx, srv.NodeID); nerr == nil {
-				nodeName = node.Name
-			}
-			s.engine.Emit(notify.NodeDiskLow(srv.NodeID, nodeName, result.Warning))
-		}
+		finish("succeeded", "", opID)
 
 	default:
-		log.Printf("scheduler: task %s unknown action %q", task.Name, task.Action)
+		finish("failed", fmt.Sprintf("unknown action %q", task.Action), "")
 	}
+}
+
+func (s *Scheduler) publish(serverID string, task *store.ScheduledTask, runID, status, message string) {
+	if s.bus == nil {
+		return
+	}
+	s.bus.Publish(events.Event{Type: events.TaskRun, ServerID: serverID, Data: map[string]any{
+		"task_id": task.ID, "task_name": task.Name, "run_id": runID, "action": task.Action,
+		"status": status, "message": message,
+	}})
 }

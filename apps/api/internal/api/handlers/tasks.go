@@ -3,9 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/scheduler"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -72,6 +75,36 @@ func (h *TaskHandlers) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
+const maxTaskNameLength = 80
+
+// validateTask checks what a task will do before it is stored, so the
+// scheduler never holds a task it cannot run.
+func validateTask(t *store.ScheduledTask) error {
+	t.Name = strings.TrimSpace(t.Name)
+	if t.Name == "" || len(t.Name) > maxTaskNameLength {
+		return badField("name", "name is required and must be at most %d characters", maxTaskNameLength)
+	}
+	t.CronExpr = strings.TrimSpace(t.CronExpr)
+	if err := scheduler.ValidateCron(t.CronExpr); err != nil {
+		return badField("cron_expr", "%s", err.Error())
+	}
+	if _, ok := store.RequiredTaskPermission(t.Action); !ok {
+		return badField("action", "action must be one of command, start, restart, stop, backup or mod_update")
+	}
+	if t.Action == "command" {
+		var p struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(t.Payload, &p); err != nil || strings.TrimSpace(p.Command) == "" {
+			return badField("payload", "a command task needs a command")
+		}
+		if strings.ContainsAny(p.Command, "\r\n") || len(p.Command) > maxConsoleCommandLength {
+			return badField("payload", "a command is one line of at most 1000 characters")
+		}
+	}
+	return nil
+}
+
 func (h *TaskHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 
@@ -82,15 +115,10 @@ func (h *TaskHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		Payload  json.RawMessage `json:"payload"`
 		Enabled  bool            `json:"enabled"`
 	}
-	if err := decode(r, &body); err != nil || body.Name == "" || body.CronExpr == "" || body.Action == "" {
-		writeError(w, http.StatusBadRequest, "name, cron_expr, and action required")
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if status, msg := h.authorizeAction(r, serverID, body.Action); status != 0 {
-		writeError(w, status, msg)
-		return
-	}
-
 	creator := currentUserID(r)
 	t := &store.ScheduledTask{
 		ServerID:  serverID,
@@ -101,12 +129,23 @@ func (h *TaskHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		Enabled:   body.Enabled,
 		CreatedBy: &creator,
 	}
+	if err := validateTask(t); err != nil {
+		respondInvalid(w, err)
+		return
+	}
+	if status, msg := h.authorizeAction(r, serverID, t.Action); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
 
 	created, err := h.store.CreateTask(r.Context(), t)
 	if err != nil {
 		writeServerError(w, r, "create task", err)
 		return
 	}
+	audit(h.store, r, serverID, "task.create", map[string]any{
+		"task_id": created.ID, "name": created.Name, "action": created.Action, "cron": created.CronExpr,
+	})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -115,14 +154,11 @@ func (h *TaskHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	existing, err := h.store.GetTask(r.Context(), taskID)
-	if err != nil {
+	if err != nil || existing.ServerID != serverID {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
-	if existing.ServerID != serverID {
-		writeError(w, http.StatusNotFound, "task not found")
-		return
-	}
+	before := *existing
 
 	var body struct {
 		Name     *string         `json:"name"`
@@ -151,6 +187,10 @@ func (h *TaskHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	if body.Enabled != nil {
 		existing.Enabled = *body.Enabled
 	}
+	if err := validateTask(existing); err != nil {
+		respondInvalid(w, err)
+		return
+	}
 
 	// Changing what the task does (its action or payload) re-runs the permission
 	// check against the resulting action, and re-attributes the task to the editor
@@ -168,6 +208,25 @@ func (h *TaskHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "update task", err)
 		return
 	}
+	changes := map[string]any{}
+	if before.Name != existing.Name {
+		changes["name"] = existing.Name
+	}
+	if before.CronExpr != existing.CronExpr {
+		changes["cron"] = map[string]string{"from": before.CronExpr, "to": existing.CronExpr}
+	}
+	if before.Action != existing.Action {
+		changes["action"] = map[string]string{"from": before.Action, "to": existing.Action}
+	}
+	if string(before.Payload) != string(existing.Payload) {
+		changes["payload"] = "changed"
+	}
+	if before.Enabled != existing.Enabled {
+		changes["enabled"] = existing.Enabled
+	}
+	if len(changes) > 0 {
+		audit(h.store, r, serverID, "task.update", map[string]any{"task_id": taskID, "changes": changes})
+	}
 	writeJSON(w, http.StatusOK, existing)
 }
 
@@ -183,5 +242,27 @@ func (h *TaskHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "delete task", err)
 		return
 	}
+	audit(h.store, r, serverID, "task.delete", map[string]any{"task_id": taskID, "name": existing.Name, "action": existing.Action})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Runs returns the run history: one task's when the route names a task, every
+// task's on the server otherwise. ?limit caps the page.
+func (h *TaskHandlers) Runs(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	taskID := chi.URLParam(r, "taskId")
+	if taskID != "" {
+		t, err := h.store.GetTask(r.Context(), taskID)
+		if err != nil || t.ServerID != serverID {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	runs, err := h.store.ListTaskRuns(r.Context(), serverID, taskID, limit)
+	if err != nil {
+		writeServerError(w, r, "list task runs", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
 }

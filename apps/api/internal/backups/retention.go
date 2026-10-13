@@ -49,8 +49,11 @@ func Enforce(ctx context.Context, s *store.Store, serverID string) {
 	}
 	if policy.MaxAgeDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -policy.MaxAgeDays)
-		for _, b := range keep {
-			if b.StartedAt.Before(cutoff) {
+		// The newest successful backup is never aged out. If backups stopped
+		// for longer than the window, the age rule would otherwise delete every
+		// one of them, leaving the server with nothing to restore.
+		for i, b := range keep {
+			if i > 0 && b.StartedAt.Before(cutoff) {
 				toDelete = append(toDelete, b)
 			}
 		}

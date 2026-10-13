@@ -98,3 +98,15 @@ func (t *denialTracker) reap(live map[string]struct{}) {
 		}
 	}
 }
+
+// observeRaw is observe for the typed status the batch endpoint returns.
+func (t *denialTracker) observeRaw(srv *store.Server, raw json.RawMessage, engine *notify.Engine) {
+	status := map[string]any{}
+	if len(raw) > 0 && string(raw) != "null" {
+		var v any
+		if json.Unmarshal(raw, &v) == nil {
+			status["join_denied"] = v
+		}
+	}
+	t.observe(srv, status, engine)
+}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -13,16 +14,32 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/auth"
+	"github.com/mcsm/api/internal/lifecycle"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
 type ServerHandlers struct {
 	store      *store.Store
 	serverRoot string
+	life       *lifecycle.Service
 }
 
+// NewServerHandlers builds the server handlers with a private lifecycle
+// service; the router shares one with the scheduler and MCP via WithLifecycle.
 func NewServerHandlers(s *store.Store, serverRoot string) *ServerHandlers {
-	return &ServerHandlers{store: s, serverRoot: serverRoot}
+	return &ServerHandlers{
+		store:      s,
+		serverRoot: serverRoot,
+		life:       lifecycle.New(s, operations.New(s, nil), nil, nil),
+	}
+}
+
+// WithLifecycle shares a lifecycle service (and with it the operation lock and
+// event bus) with the rest of the panel.
+func (h *ServerHandlers) WithLifecycle(life *lifecycle.Service) *ServerHandlers {
+	h.life = life
+	return h
 }
 
 // withImportSettings merges import metadata (the detected jar + a no-install
@@ -41,72 +58,11 @@ func withImportSettings(settings json.RawMessage, jarFile string) json.RawMessag
 	return out
 }
 
-// withoutImportSettings converts a successfully reinstalled imported server
-// into a managed runtime while preserving every unrelated settings key.
+// withoutImportSettings drops the import marker once a reinstall has replaced
+// an imported runtime with a managed one, reporting whether it changed.
 func withoutImportSettings(settings json.RawMessage) (json.RawMessage, bool) {
-	if len(settings) == 0 {
-		return settings, false
-	}
-	m := map[string]any{}
-	if err := json.Unmarshal(settings, &m); err != nil {
-		return settings, false
-	}
-	if _, ok := m["import"]; !ok {
-		return settings, false
-	}
-	delete(m, "import")
-	out, err := json.Marshal(m)
-	if err != nil {
-		return settings, false
-	}
-	return out, true
-}
-
-// processDead reports whether an agent status means the JVM has exited.
-// crashed and startup_failure are terminal: the agent keeps them (instead of
-// offline) so the panel can surface diagnostics, and nothing resets them until
-// the next start — so waiting for "offline" on such a server would never end.
-func processDead(status any) bool {
-	switch status {
-	case "offline", "crashed", "startup_failure":
-		return true
-	}
-	return false
-}
-
-func stopForRuntimeChange(ctx context.Context, c *agent.Client, serverID string) error {
-	info, err := c.GetStatus(ctx, serverID)
-	if err != nil {
-		return fmt.Errorf("check server status: %w", err)
-	}
-	if processDead(info["status"]) {
-		return nil
-	}
-	if err := c.StopServer(ctx, serverID, true, 30); err != nil {
-		// The process may have exited between the status check and stop request.
-		info, statusErr := c.GetStatus(ctx, serverID)
-		if statusErr == nil && processDead(info["status"]) {
-			return nil
-		}
-		return fmt.Errorf("stop server: %w", err)
-	}
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for server to stop: %w", ctx.Err())
-		case <-ticker.C:
-			info, err := c.GetStatus(ctx, serverID)
-			if err != nil {
-				return fmt.Errorf("check stopped server status: %w", err)
-			}
-			if processDead(info["status"]) {
-				return nil
-			}
-		}
-	}
+	out := lifecycle.WithoutImportSettings(settings)
+	return out, string(out) != string(settings)
 }
 
 // setHelperModSetting records an explicit on/off choice in a server's settings,
@@ -810,99 +766,45 @@ func deref(p *string) string {
 
 func (h *ServerHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-
-	deleteFiles := r.URL.Query().Get("files") == "true"
-	deleteBackups := r.URL.Query().Get("backups") == "true"
-
-	// When the operator opts into disk deletion, purge on the agent *before*
-	// dropping the DB row. If the agent is unreachable or the wipe fails we abort
-	// and keep the panel record, so the server is never orphaned on disk with no
-	// way to find it again. (The backups DB rows cascade-delete with the server.)
-	if deleteFiles || deleteBackups {
-		srv, err := h.store.GetServer(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "server not found")
-			return
-		}
-		c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "node not found")
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-		defer cancel()
-		if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
-			writeError(w, http.StatusBadGateway, "node unreachable; server not deleted: "+err.Error())
-			return
-		}
-		if err := c.PurgeServer(ctx, srv.ID, srv.DirectoryPath, deleteFiles, deleteBackups); err != nil {
-			writeError(w, http.StatusBadGateway, "file deletion failed; server not deleted: "+err.Error())
-			return
-		}
-	}
-
-	if err := h.store.DeleteServer(r.Context(), id); err != nil {
-		writeServerError(w, r, "delete server", err)
-		return
-	}
-	audit(h.store, r, "", "server.delete", map[string]any{
-		"server_id":       id,
-		"deleted_files":   deleteFiles,
-		"deleted_backups": deleteBackups,
-	})
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-
-	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
+	q := r.URL.Query()
+	err = h.life.Delete(r.Context(), srv, h.actor(r), lifecycle.DeleteOptions{
+		Files:   q.Get("files") == "true",
+		Backups: q.Get("backups") == "true",
+		Force:   q.Get("force") == "true",
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+		writeLifecycleError(w, r, err)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
-	// One builder for every start path: it carries the imported server's jar and
-	// no-install flag, and the helper-mod decision, so none of them can be
-	// dropped by forgetting a line here.
-	cfg := agent.StartConfigForServer(srv)
+// actor attributes a lifecycle action to the caller.
+func (h *ServerHandlers) actor(r *http.Request) operations.Actor {
+	return operations.ActorFromRequest(r, clientIP(r))
+}
 
-	// Long deadline because the agent may auto-install the server runtime on
-	// first start. Most platforms are fast (~10–60s), Spigot BuildTools can
-	// take 10+ minutes since it compiles from source.
-	//
-	// This is intentionally detached from r.Context(): refreshing or closing the
-	// browser tab should not cancel a server start that is already installing or
-	// booting on the agent.
-	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
-	defer cancel()
-	setStatus := func(status string) {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer statusCancel()
-		_ = h.store.UpdateServerStatus(statusCtx, id, status)
-	}
-
-	// Persist the intent before the long agent call. First-time starts can spend
-	// minutes auto-installing a runtime before the agent process exists, and a
-	// page refresh should still show the server as starting.
-	setStatus("starting")
-	if err := c.StartServer(ctx, id, cfg); err != nil {
-		setStatus("offline")
-		// Surface the failed start as a cockpit signal, not just an HTTP error.
-		audit(h.store, r, id, "server.start_failed", map[string]any{"error": err.Error()})
-		_ = h.store.InsertLogEvent(r.Context(), id, "error", "Server failed to start: "+err.Error(), "api")
-		writeError(w, http.StatusBadGateway, err.Error())
+// Start launches the server as an operation and answers at once with it:
+// installing a runtime first can take many minutes, and the start must not
+// depend on the browser staying on the page. Follow the operation (or the
+// server's status) for the outcome.
+func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
+	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-	setStatus("starting")
-	audit(h.store, r, id, "server.start", nil)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
+	op, err := h.life.Start(r.Context(), srv, h.actor(r))
+	if err != nil {
+		writeLifecycleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "starting", "operation": op})
 }
 
 // JavaInstallations proxies the server's node agent for the Java runtimes
@@ -917,20 +819,20 @@ func (h *ServerHandlers) JavaInstallations(w http.ResponseWriter, r *http.Reques
 	}
 	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+		writeCodedError(w, http.StatusBadGateway, "node_unreachable", "node not found")
 		return
 	}
 	info, err := c.JavaInstallations(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeCodedError(w, http.StatusBadGateway, "node_unreachable", "the node could not be reached")
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
 }
 
-// Reinstall stops the server, installs the requested runtime, and only then
-// commits its version metadata. A successful reinstall also converts an
-// imported launcher to managed server.jar semantics.
+// Reinstall installs the requested runtime as an operation and answers at once
+// with it. A successful reinstall also converts an imported launcher to
+// managed server.jar semantics.
 func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
@@ -959,14 +861,13 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 	// A version change must name the complete target runtime; rejecting partial
 	// targets beats silently reinstalling the old version.
 	if platform == "" && (mcVersion != "" || loaderVersion != "") {
-		writeError(w, http.StatusBadRequest, "platform required when specifying a target version")
+		writeFieldError(w, "platform", "platform required when specifying a target version")
 		return
 	}
-
-	target := *srv
+	target := lifecycle.ReinstallTarget{}
 	if platform != "" {
 		if mcVersion == "" {
-			writeError(w, http.StatusBadRequest, "mc_version required")
+			writeFieldError(w, "mc_version", "mc_version required")
 			return
 		}
 		for _, check := range []error{validatePlatform(platform), validateVersion("mc_version", mcVersion)} {
@@ -984,151 +885,66 @@ func (h *ServerHandlers) Reinstall(w http.ResponseWriter, r *http.Request) {
 		// Only fabric and quilt runtimes take a pinned loader version; accepting
 		// one for other platforms would store metadata the install never honors.
 		if loaderVersion != "" && platform != "fabric" && platform != "quilt" {
-			writeError(w, http.StatusBadRequest, "loader_version is only supported for fabric and quilt")
+			writeFieldError(w, "loader_version", "loader_version is only supported for fabric and quilt")
 			return
 		}
-		target.Platform = platform
-		target.MCVersion = mcVersion
-		target.LoaderVersion = nil
+		target.Platform, target.MCVersion = platform, mcVersion
 		if loaderVersion != "" {
 			target.LoaderVersion = &loaderVersion
 		}
 	}
 
-	c, err := h.agentClient(r.Context(), h.store, target.NodeID)
+	op, err := h.life.Reinstall(r.Context(), srv, target, h.actor(r))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+		writeLifecycleError(w, r, err)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 16*time.Minute)
-	defer cancel()
-
-	if err := c.RegisterDir(ctx, id, srv.DirectoryPath); err != nil {
-		writeError(w, http.StatusBadGateway, "failed to register server directory")
-		return
-	}
-	// Confirm the JVM has exited before swapping any runtime artifacts.
-	stopCtx, stopCancel := context.WithTimeout(ctx, 45*time.Second)
-	if err := stopForRuntimeChange(stopCtx, c, id); err != nil {
-		stopCancel()
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	stopCancel()
-
-	cfg := map[string]any{
-		"directory":   target.DirectoryPath,
-		"platform":    target.Platform,
-		"mc_version":  target.MCVersion,
-		"java_binary": target.JavaBinary,
-	}
-	if target.LoaderVersion != nil {
-		cfg["loader_version"] = *target.LoaderVersion
-	}
-	if err := c.Reinstall(ctx, id, cfg); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	target.Settings, _ = withoutImportSettings(target.Settings)
-	if err := h.store.UpdateServer(r.Context(), id, &target); err != nil {
-		writeError(w, http.StatusInternalServerError, "runtime installed but server metadata could not be updated")
-		return
-	}
-	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
-	audit(h.store, r, id, "server.reinstall", map[string]any{
-		"platform": target.Platform, "mc_version": target.MCVersion, "loader_version": target.LoaderVersion,
-	})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "reinstalled"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "reinstalling", "operation": op})
 }
 
 func (h *ServerHandlers) Stop(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), id)
+	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-
-	var body struct {
+	body := struct {
 		Graceful   bool `json:"graceful"`
 		TimeoutSec int  `json:"timeout_sec"`
-	}
-	body.Graceful = true
-	body.TimeoutSec = 30
+	}{Graceful: true, TimeoutSec: 30}
 	_ = decode(r, &body)
-
-	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+	if err := h.life.Stop(r.Context(), srv, h.actor(r), lifecycle.StopOptions{Graceful: body.Graceful, TimeoutSec: body.TimeoutSec}); err != nil {
+		writeLifecycleError(w, r, err)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(body.TimeoutSec+5)*time.Second)
-	defer cancel()
-
-	if err := c.StopServer(ctx, id, body.Graceful, body.TimeoutSec); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	_ = h.store.UpdateServerStatus(r.Context(), id, "stopping")
-	audit(h.store, r, id, "server.stop", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
 }
 
 func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), id)
+	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-
-	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+	if err := h.life.Restart(r.Context(), srv, h.actor(r)); err != nil {
+		writeLifecycleError(w, r, err)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-
-	// Send the current configuration rather than letting the agent reuse what it
-	// was given at the last start, so a setting changed in the panel since then
-	// (the helper mod toggle, for one) is actually applied by this restart.
-	cfg := agent.StartConfigForServer(srv)
-
-	if err := c.RestartServer(ctx, id, cfg); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	audit(h.store, r, id, "server.restart", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarting"})
 }
 
+// Kill ends the process at once. ?force=true also cancels an operation that
+// holds the server; without it, a held server refuses.
 func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), id)
+	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-
-	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+	if err := h.life.Kill(r.Context(), srv, h.actor(r), r.URL.Query().Get("force") == "true"); err != nil {
+		writeLifecycleError(w, r, err)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	if err := c.KillServer(ctx, id); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	_ = h.store.UpdateServerStatus(r.Context(), id, "offline")
-	audit(h.store, r, id, "server.kill", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "offline"})
 }
 
@@ -1146,6 +962,9 @@ func (h *ServerHandlers) LogEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
+// Status reports the server's live state from its node. When the node cannot
+// be reached the answer says so — "unknown", with node_reachable false —
+// rather than claiming the server is offline.
 func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	srv, err := h.store.GetServer(r.Context(), id)
@@ -1153,23 +972,29 @@ func (h *ServerHandlers) Status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-
+	unknown := map[string]any{"id": id, "status": "unknown", "node_reachable": false, "last_known_status": srv.Status}
 	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+		writeJSON(w, http.StatusOK, unknown)
 		return
 	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-
 	status, err := c.GetStatus(ctx, id)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "offline"})
+		writeJSON(w, http.StatusOK, unknown)
 		return
+	}
+	status["node_reachable"] = true
+	if op, err := h.store.RunningOperation(r.Context(), id); err == nil && op != nil {
+		status["operation"] = op
 	}
 	writeJSON(w, http.StatusOK, status)
 }
+
+// maxConsoleCommandLength bounds a console command, which also bounds what the
+// audit log stores of it.
+const maxConsoleCommandLength = 1000
 
 func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -1182,14 +1007,20 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Command string `json:"command"`
 	}
-	if err := decode(r, &body); err != nil || body.Command == "" {
+	if err := decode(r, &body); err != nil || strings.TrimSpace(body.Command) == "" {
 		writeError(w, http.StatusBadRequest, "command required")
+		return
+	}
+	// One command per request: a newline would smuggle a second one past
+	// whatever reads the audit log.
+	if strings.ContainsAny(body.Command, "\r\n") || len(body.Command) > maxConsoleCommandLength {
+		writeFieldError(w, "command", "a command is one line of at most 1000 characters")
 		return
 	}
 
 	c, err := h.agentClient(r.Context(), h.store, srv.NodeID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "node not found")
+		writeCodedError(w, http.StatusBadGateway, "node_unreachable", "node not found")
 		return
 	}
 
@@ -1197,8 +1028,33 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := c.SendCommand(ctx, id, body.Command); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeCodedError(w, http.StatusBadGateway, "agent_error", err.Error())
 		return
 	}
+	audit(h.store, r, id, "console.command", map[string]any{"command": body.Command})
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// writeLifecycleError maps a lifecycle failure to a response: a held server is
+// a 409 naming the operation, an unreachable node a 502, anything else the
+// node's own refusal.
+func writeLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
+	if busy, ok := store.AsServerBusy(err); ok {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     busy.Error(),
+			"code":      "server_busy",
+			"operation": busy.Current,
+			"retryable": true,
+		})
+		return
+	}
+	if errors.Is(err, lifecycle.ErrNodeUnreachable) {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "code": "node_unreachable", "retryable": true})
+		return
+	}
+	if err.Error() == "node not found" {
+		writeCodedError(w, http.StatusBadGateway, "node_unreachable", "the server's node is not registered")
+		return
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "code": "agent_error"})
 }
