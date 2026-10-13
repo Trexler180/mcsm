@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -14,9 +15,45 @@ const (
 	machineKey
 )
 
+// SessionCheck reports whether the session an access token belongs to is still
+// live. It returns ErrSessionRevoked (or any error) to refuse the request.
+type SessionCheck func(ctx context.Context, userID, sessionID string) error
+
+// ErrSessionRevoked means the token's session was ended: logout, revocation, a
+// password reset, or the account's deletion.
+var ErrSessionRevoked = errors.New("session revoked")
+
+// Option configures Middleware.
+type Option func(*options)
+
+type options struct {
+	sessions SessionCheck
+}
+
+// WithSessionCheck makes every access token (and every ticket minted from one)
+// prove its session is still live on each request. With it, a token minted
+// without a session is refused outright.
+func WithSessionCheck(fn SessionCheck) Option {
+	return func(o *options) { o.sessions = fn }
+}
+
 // Middleware authenticates a request. keys may be nil, which disables machine
 // access-key authentication entirely (every mcsm_pat_ bearer then 401s).
-func Middleware(secret string, tickets *TicketStore, keys KeyLookup) func(http.Handler) http.Handler {
+func Middleware(secret string, tickets *TicketStore, keys KeyLookup, opts ...Option) func(http.Handler) http.Handler {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	// human admits claims from a JWT or a ticket once their session checks out.
+	human := func(w http.ResponseWriter, r *http.Request, next http.Handler, claims *Claims) {
+		if o.sessions != nil {
+			if claims.SessionID == "" || o.sessions(r.Context(), claims.UserID, claims.SessionID) != nil {
+				writeUnauth(w, "session_revoked")
+				return
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsKey, claims)))
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Normal API calls carry the JWT in the Authorization header.
@@ -29,7 +66,7 @@ func Middleware(secret string, tickets *TicketStore, keys KeyLookup) func(http.H
 						// One uniform 401 for every invalid-key state — unknown,
 						// expired, revoked, orphaned, malformed, or a store
 						// failure — so probing can't distinguish them.
-						writeUnauth(w)
+						writeUnauth(w, "unauthorized")
 						return
 					}
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -37,10 +74,15 @@ func Middleware(secret string, tickets *TicketStore, keys KeyLookup) func(http.H
 				}
 				claims, err := ParseAccessToken(secret, token)
 				if err != nil {
-					writeUnauth(w)
+					code := "unauthorized"
+					if errors.Is(err, ErrExpiredToken) {
+						// The client should refresh and retry, not sign in.
+						code = "token_expired"
+					}
+					writeUnauth(w, code)
 					return
 				}
-				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsKey, claims)))
+				human(w, r, next, claims)
 				return
 			}
 
@@ -51,12 +93,12 @@ func Middleware(secret string, tickets *TicketStore, keys KeyLookup) func(http.H
 			// The same rule is stricter for machine keys: they are long-lived,
 			// so they are header-only and no ticket is ever minted from one.
 			if queryTokenAllowed(r) {
-				if claims, ok := tickets.Consume(r.URL.Query().Get("ticket")); ok {
-					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), claimsKey, claims)))
+				if claims, ok := tickets.Consume(r.URL.Query().Get("ticket"), r.URL.Path); ok {
+					human(w, r, next, claims)
 					return
 				}
 			}
-			writeUnauth(w)
+			writeUnauth(w, "unauthorized")
 		})
 	}
 }
@@ -89,11 +131,18 @@ func authenticateKey(ctx context.Context, keys KeyLookup, token, ip string) (con
 }
 
 func queryTokenAllowed(r *http.Request) bool {
-	path := r.URL.Path
+	return TicketPathAllowed(r.URL.Path)
+}
+
+// TicketPathAllowed reports whether a path is one of the header-less endpoints
+// a ticket may open: console and metrics WebSockets, the notification stream,
+// and file and backup downloads.
+func TicketPathAllowed(path string) bool {
 	return strings.HasSuffix(path, "/console") ||
 		strings.HasSuffix(path, "/metrics") ||
 		strings.HasSuffix(path, "/notifications/stream") ||
-		strings.HasSuffix(path, "/files/download")
+		strings.HasSuffix(path, "/files/download") ||
+		strings.HasSuffix(path, "/download") && strings.Contains(path, "/backups/")
 }
 
 // remoteIP is the caller's address for usage metadata. It reads RemoteAddr
@@ -138,10 +187,12 @@ func ClaimsFrom(ctx context.Context) *Claims {
 	return c
 }
 
-func writeUnauth(w http.ResponseWriter) {
+// writeUnauth refuses a request. code tells a client what to do about it:
+// token_expired means refresh and retry, session_revoked means sign in again.
+func writeUnauth(w http.ResponseWriter, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	w.Write([]byte(`{"error":"unauthorized"}`))
+	_, _ = w.Write([]byte(`{"error":"unauthorized","code":"` + code + `"}`))
 }
 
 // WithClaims attaches user claims to a context. It authenticates nothing: it is

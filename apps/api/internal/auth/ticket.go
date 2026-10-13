@@ -24,6 +24,7 @@ type TicketStore struct {
 
 type ticketEntry struct {
 	claims  *Claims
+	path    string
 	expires time.Time
 }
 
@@ -32,9 +33,11 @@ func NewTicketStore() *TicketStore {
 }
 
 // Issue stores the claims under a fresh random ID valid for ttl and returns the
-// ID. Expired entries are swept opportunistically so no background goroutine is
-// needed — ticket volume in this app is low.
-func (s *TicketStore) Issue(claims *Claims, ttl time.Duration) (string, error) {
+// ID. The ticket works only for a request to exactly path, so one minted for a
+// file download cannot open the console. Expired entries are swept
+// opportunistically so no background goroutine is needed — ticket volume in
+// this app is low.
+func (s *TicketStore) Issue(claims *Claims, path string, ttl time.Duration) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -49,13 +52,14 @@ func (s *TicketStore) Issue(claims *Claims, ttl time.Duration) (string, error) {
 			delete(s.entries, k)
 		}
 	}
-	s.entries[id] = ticketEntry{claims: claims, expires: now.Add(ttl)}
+	s.entries[id] = ticketEntry{claims: claims, path: path, expires: now.Add(ttl)}
 	return id, nil
 }
 
 // Consume returns the claims for id and removes it, so each ticket works once.
-// A missing or expired ticket returns ok=false.
-func (s *TicketStore) Consume(id string) (*Claims, bool) {
+// A missing or expired ticket, or one presented for a path other than the one
+// it was issued for, returns ok=false — and is still spent.
+func (s *TicketStore) Consume(id, path string) (*Claims, bool) {
 	if id == "" {
 		return nil, false
 	}
@@ -66,7 +70,7 @@ func (s *TicketStore) Consume(id string) (*Claims, bool) {
 		return nil, false
 	}
 	delete(s.entries, id)
-	if time.Now().After(e.expires) {
+	if time.Now().After(e.expires) || e.path != path {
 		return nil, false
 	}
 	return e.claims, true

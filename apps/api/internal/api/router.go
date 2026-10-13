@@ -51,6 +51,20 @@ func machineKeyLookup(s *store.Store) auth.KeyLookup {
 	}
 }
 
+// sessionCheck adapts the store's session lookup to the auth middleware.
+func sessionCheck(s *store.Store) auth.SessionCheck {
+	return func(ctx context.Context, userID, sessionID string) error {
+		ok, err := s.SessionActive(ctx, sessionID, userID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return auth.ErrSessionRevoked
+		}
+		return nil
+	}
+}
+
 func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate.Engine, notifier *notify.Service) http.Handler {
 	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
 	// top of the single-use ticket auth). APP_ORIGIN unset => any origin, which
@@ -111,7 +125,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	mcH := handlers.NewMinecraftHandlers()
 	settingsH := handlers.NewSettingsHandlers(s)
 	overviewH := handlers.NewOverviewHandlers(s)
-	mfaH := handlers.NewMFAHandlers(s)
+	mfaH := handlers.NewMFAHandlers(s, passwordThrottles)
 	sessionH := handlers.NewSessionHandlers(s)
 	notifyH := handlers.NewNotificationHandlers(s, notifier)
 
@@ -173,9 +187,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", handlers.Health)
 
-		// Public auth routes
+		// Public auth routes. Logout is keyed on the refresh cookie, so it works
+		// even when the access token has already expired.
 		r.Post("/auth/login", authH.Login)
 		r.Post("/auth/refresh", authH.Refresh)
+		r.Post("/auth/logout", authH.Logout)
 
 		// OAuth authorization server for remote agent connections. Public by
 		// necessity — a client must reach these before it holds anything — so
@@ -194,7 +210,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 		// Authenticated routes
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(jwtSecret, tickets, machineKeyLookup(s)))
+			// Every access token proves its session is still live, so logout,
+			// session revocation and password resets take effect at once.
+			r.Use(auth.Middleware(jwtSecret, tickets, machineKeyLookup(s), auth.WithSessionCheck(sessionCheck(s))))
 			r.Use(rateLimiter.Middleware)
 			// Confine machine principals to the server API family before any
 			// route runs, so anything mounted elsewhere is closed to access
@@ -202,16 +220,17 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			// routes it may not use still spends its own budget.
 			r.Use(machineBoundary)
 
-			r.Post("/auth/logout", authH.Logout)
 			r.Get("/auth/me", authH.Me)
+			r.With(requireHuman).Post("/auth/password", authH.ChangePassword)
 			// Mint a short-lived ticket for header-less requests (downloads, WS).
 			r.Post("/auth/ticket", authH.Ticket)
 
 			// Multi-factor auth (self-service TOTP enrollment).
 			r.Get("/auth/mfa", mfaH.Status)
-			r.Post("/auth/mfa/setup", mfaH.Setup)
-			r.Post("/auth/mfa/enable", mfaH.Enable)
-			r.Post("/auth/mfa/disable", mfaH.Disable)
+			r.With(requireHuman).Post("/auth/mfa/setup", mfaH.Setup)
+			r.With(requireHuman).Post("/auth/mfa/enable", mfaH.Enable)
+			r.With(requireHuman).Post("/auth/mfa/disable", mfaH.Disable)
+			r.With(requireHuman).Post("/auth/mfa/recovery-codes", mfaH.RegenerateRecoveryCodes)
 
 			// Active sessions: review and revoke.
 			r.Get("/auth/sessions", sessionH.List)

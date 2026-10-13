@@ -2,11 +2,23 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
 var ErrRefreshTokenAlreadyRotated = errors.New("refresh token already rotated")
+
+// ErrRefreshTokenReused means a refresh token was presented after it had been
+// rotated away, outside the grace window. Only a copy of the token can do
+// that, so the caller ends the session.
+var ErrRefreshTokenReused = errors.New("refresh token reused after rotation")
+
+// RefreshReuseGrace is how long a just-rotated refresh token still earns an
+// access token. Tabs share one cookie jar, so two of them refreshing together
+// present the same token; the one that loses the race is a retry, not theft.
+const RefreshReuseGrace = 30 * time.Second
 
 // Session is one active refresh-token session, surfaced to the user so they can
 // review where they're logged in and revoke individual ones. The token itself is
@@ -56,9 +68,10 @@ func (s *Store) ListSessions(ctx context.Context, userID string) ([]*Session, er
 func (s *Store) RotateRefreshToken(ctx context.Context, id, currentHash, newHash, ip, userAgent string, expiresAt time.Time) error {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE refresh_tokens
-		    SET token_hash = ?, ip = ?, user_agent = ?, last_used_at = CURRENT_TIMESTAMP, expires_at = ?
+		    SET token_hash = ?, previous_hash = token_hash, rotated_at_unix = ?,
+		        ip = ?, user_agent = ?, last_used_at = CURRENT_TIMESTAMP, expires_at = ?
 		  WHERE id = ? AND token_hash = ?`,
-		newHash, nullIfEmpty(ip), nullIfEmpty(userAgent), expiresAt, id, currentHash)
+		newHash, time.Now().Unix(), nullIfEmpty(ip), nullIfEmpty(userAgent), expiresAt, id, currentHash)
 	if err != nil {
 		return err
 	}
@@ -99,4 +112,51 @@ func (s *Store) DeleteSessionsForUserExcept(ctx context.Context, userID, keepID 
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM refresh_tokens WHERE user_id = ? AND id <> ?`, userID, keepID)
 	return err
+}
+
+// LookupRefreshToken resolves a presented refresh token. grace is true when the
+// token was rotated away within RefreshReuseGrace: the caller may issue an
+// access token for the session but must not rotate it again. A token rotated
+// away earlier than that returns the session with ErrRefreshTokenReused.
+func (s *Store) LookupRefreshToken(ctx context.Context, tokenHash string) (*RefreshToken, bool, error) {
+	if rt, err := s.GetRefreshToken(ctx, tokenHash); err == nil {
+		return rt, false, nil
+	}
+	var rt RefreshToken
+	var rotatedAt sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, token_hash, expires_at, rotated_at_unix FROM refresh_tokens WHERE previous_hash = ?`,
+		tokenHash,
+	).Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ExpiresAt, &rotatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, fmt.Errorf("refresh token not found or expired")
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !rt.ExpiresAt.After(time.Now()) {
+		return nil, false, fmt.Errorf("refresh token not found or expired")
+	}
+	if rotatedAt.Valid && time.Since(time.Unix(rotatedAt.Int64, 0)) <= RefreshReuseGrace {
+		return &rt, true, nil
+	}
+	return &rt, false, ErrRefreshTokenReused
+}
+
+// SessionActive reports whether a session (a refresh-token row) still exists
+// for the user and has not expired. Access tokens are bound to a session, and
+// the auth middleware asks this on every request, so ending a session — or
+// deleting the user, which cascades — ends its access tokens immediately.
+func (s *Store) SessionActive(ctx context.Context, sessionID, userID string) (bool, error) {
+	var expires time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT expires_at FROM refresh_tokens WHERE id = ? AND user_id = ?`, sessionID, userID,
+	).Scan(&expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return expires.After(time.Now()), nil
 }

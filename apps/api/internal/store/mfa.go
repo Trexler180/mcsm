@@ -133,3 +133,20 @@ func hashRecoveryCode(code string) string {
 
 // HashRecoveryCode is the exported form used when generating fresh codes.
 func HashRecoveryCode(code string) string { return hashRecoveryCode(code) }
+
+// ReplaceRecoveryCodes swaps a user's recovery codes for a new set of hashes.
+func (s *Store) ReplaceRecoveryCodes(ctx context.Context, userID string, hashes []string) error {
+	blob, err := json.Marshal(hashes)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET totp_recovery = ? WHERE id = ? AND totp_enabled = 1`, string(blob), userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("MFA is not enabled")
+	}
+	return nil
+}

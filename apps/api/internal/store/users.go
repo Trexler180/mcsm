@@ -17,8 +17,11 @@ func (s *Store) CreateUser(ctx context.Context, email, passwordHash, role string
 	id := uuid.NewString()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO users (id, email, password_hash, role) VALUES (?, ?, ?, ?)`,
-		id, email, passwordHash, role,
+		id, NormalizeEmail(email), passwordHash, role,
 	)
+	if isUniqueEmailViolation(err) {
+		return nil, ErrEmailTaken
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +37,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, string
 	// the address.
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, email, password_hash, display_name, role, created_at, last_login FROM users WHERE lower(email) = ?`,
-		strings.ToLower(strings.TrimSpace(email)),
+		NormalizeEmail(email),
 	).Scan(&u.ID, &u.Email, &hash, &u.DisplayName, &u.Role, &u.CreatedAt, &u.LastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", fmt.Errorf("user not found")
@@ -196,4 +199,106 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
 	return n, err
+}
+
+// NormalizeEmail is the stored form of an address: trimmed and lowercased.
+// Addresses are matched case-insensitively and the column has a unique index
+// on lower(email), so every write goes through here.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// ErrEmailTaken is returned when an address is already in use.
+var ErrEmailTaken = errors.New("a user with that email already exists")
+
+// ErrLastAdmin refuses a change that would leave the panel with no
+// administrator.
+var ErrLastAdmin = errors.New("this is the last administrator")
+
+// UserAdminUpdate is an administrator's edit of another account. Nil fields are
+// left alone.
+type UserAdminUpdate struct {
+	DisplayName  *string // "" clears it
+	Role         *string
+	PasswordHash *string
+	ResetMFA     bool
+}
+
+// UpdateUserAdmin applies an administrator's edit in one transaction, so a
+// request either lands whole or not at all. Changing the password, the role,
+// or the second factor ends every session the account has: those are the
+// changes made when an account is thought compromised, and a demotion should
+// not linger in an open tab.
+func (s *Store) UpdateUserAdmin(ctx context.Context, id string, u UserAdminUpdate) (endedSessions bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var role string
+	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ?`, id).Scan(&role); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("user not found")
+		}
+		return false, err
+	}
+	if u.DisplayName != nil {
+		var v any
+		if *u.DisplayName != "" {
+			v = *u.DisplayName
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET display_name = ? WHERE id = ?`, v, id); err != nil {
+			return false, err
+		}
+	}
+	roleChanged := u.Role != nil && *u.Role != role
+	if roleChanged {
+		if role == "admin" {
+			var admins int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&admins); err != nil {
+				return false, err
+			}
+			if admins <= 1 {
+				return false, ErrLastAdmin
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, *u.Role, id); err != nil {
+			return false, err
+		}
+	}
+	if u.PasswordHash != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, *u.PasswordHash, id); err != nil {
+			return false, err
+		}
+	}
+	if u.ResetMFA {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_recovery = NULL WHERE id = ?`, id); err != nil {
+			return false, err
+		}
+	}
+	if roleChanged || u.PasswordHash != nil || u.ResetMFA {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE user_id = ?`, id); err != nil {
+			return false, err
+		}
+		endedSessions = true
+	}
+	return endedSessions, tx.Commit()
+}
+
+// CountAdmins returns how many accounts hold the global admin role.
+func (s *Store) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&n)
+	return n, err
+}
+
+// isUniqueEmailViolation recognizes the users email unique index failing.
+func isUniqueEmailViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE") && strings.Contains(msg, "users")
 }

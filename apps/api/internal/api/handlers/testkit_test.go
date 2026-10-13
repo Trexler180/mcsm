@@ -21,6 +21,14 @@ import (
 // applied.
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
+	s, _ := newTestStoreDB(t)
+	return s
+}
+
+// newTestStoreDB is newTestStore that also returns the raw handle, for tests
+// that need to arrange state the API never writes (a backdated timestamp).
+func newTestStoreDB(t *testing.T) (*store.Store, *sql.DB) {
+	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	db, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
 	if err != nil {
@@ -34,23 +42,24 @@ func newTestStore(t *testing.T) *store.Store {
 	if err := goose.Up(db, "."); err != nil {
 		t.Fatal(err)
 	}
-	return store.New(db).WithEncryption("test-master-key")
+	return store.New(db).WithEncryption("test-master-key"), db
 }
 
 type fixture struct {
 	t     *testing.T
 	store *store.Store
+	db    *sql.DB
 	node  *store.Node
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	s := newTestStore(t)
+	s, db := newTestStoreDB(t)
 	node, err := s.CreateNode(context.Background(), &store.Node{Name: "local", FQDN: "127.0.0.1", Port: 1, Scheme: "http"}, "node-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{t: t, store: s, node: node}
+	return &fixture{t: t, store: s, db: db, node: node}
 }
 
 func (f *fixture) user(email, role string) *store.User {

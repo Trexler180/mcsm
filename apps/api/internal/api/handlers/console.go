@@ -50,6 +50,13 @@ func (h *ConsoleHandlers) permissionCheck(r *http.Request, serverID string, perm
 		if machine != nil && !h.store.AccessKeyStillValid(ctx, machine.KeyID, machine.TokenHash) {
 			return false
 		}
+		// A socket outlives the request that opened it; ending the session it
+		// was opened under (logout, revocation, a password reset) closes it.
+		if machine == nil && claims.SessionID != "" {
+			if ok, err := h.store.SessionActive(ctx, claims.SessionID, claims.UserID); err != nil || !ok {
+				return false
+			}
+		}
 		user, err := h.store.GetUserByID(ctx, claims.UserID)
 		if err != nil {
 			return false

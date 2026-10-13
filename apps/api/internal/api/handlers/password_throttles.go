@@ -53,6 +53,13 @@ func stepUpAccountKey(userID string) string { return "user:" + userID }
 // spends from the shared budget. label names the caller in server logs only.
 // Returns false when it has already written a response.
 func verifyStepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, acct *auth.LoginThrottle, userID, password, totpCode, label string) bool {
+	return stepUp(w, r, s, ip, acct, userID, password, totpCode, "", label)
+}
+
+// stepUp is verifyStepUp with an optional recovery code standing in for the
+// TOTP code. Only turning MFA off accepts one: losing the authenticator is
+// exactly when someone needs to.
+func stepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, acct *auth.LoginThrottle, userID, password, totpCode, recoveryCode, label string) bool {
 	ipKey := passwordIPKey(r)
 	acctKey := stepUpAccountKey(userID)
 	if ok, retry := ip.Allowed(ipKey); !ok {
@@ -66,7 +73,7 @@ func verifyStepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, ac
 	fail := func() {
 		ip.Fail(ipKey)
 		acct.Fail(acctKey)
-		writeError(w, http.StatusUnauthorized, "reauthentication failed")
+		writeCodedError(w, http.StatusUnauthorized, "reauthentication_failed", "reauthentication failed")
 	}
 
 	if password == "" {
@@ -76,7 +83,7 @@ func verifyStepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, ac
 	}
 	hash, err := s.GetUserPasswordHash(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "reauthentication failed")
+		writeCodedError(w, http.StatusUnauthorized, "reauthentication_failed", "reauthentication failed")
 		return false
 	}
 	if !auth.CheckPassword(hash, password) {
@@ -88,9 +95,27 @@ func verifyStepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, ac
 		writeServerError(w, r, label+": totp lookup", err)
 		return false
 	}
-	if cfg.Enabled && !auth.ValidateTOTP(cfg.Secret, totpCode, time.Now()) {
-		fail()
-		return false
+	if cfg.Enabled {
+		switch {
+		case totpCode != "":
+			if !auth.ValidateTOTP(cfg.Secret, totpCode, time.Now()) {
+				fail()
+				return false
+			}
+		case recoveryCode != "":
+			ok, err := s.ConsumeRecoveryCode(r.Context(), userID, auth.NormalizeRecoveryCode(recoveryCode))
+			if err != nil {
+				writeServerError(w, r, label+": recovery code", err)
+				return false
+			}
+			if !ok {
+				fail()
+				return false
+			}
+		default:
+			fail()
+			return false
+		}
 	}
 
 	ip.Reset(ipKey)

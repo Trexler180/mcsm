@@ -148,19 +148,21 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// startSession mints an access token, creates a new refresh-token session row
-// recording the caller's device, and sets the refresh cookie.
+// startSession creates a refresh-token session row recording the caller's
+// device, sets the refresh cookie, and mints an access token bound to that
+// session.
 func (h *AuthHandlers) startSession(w http.ResponseWriter, r *http.Request, user *store.User) (string, error) {
-	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
-	if err != nil {
-		return "", err
-	}
 	refreshToken, tokenHash, err := generateRefreshToken()
 	if err != nil {
 		return "", err
 	}
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	if _, err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, userAgent(r), clientIP(r), expiresAt); err != nil {
+	sessionID, err := h.store.CreateRefreshToken(r.Context(), user.ID, tokenHash, userAgent(r), clientIP(r), expiresAt)
+	if err != nil {
+		return "", err
+	}
+	accessToken, err := auth.IssueSessionToken(h.jwtSecret, user.ID, user.Email, user.Role, sessionID)
+	if err != nil {
 		return "", err
 	}
 	setRefreshCookie(w, r, refreshToken, expiresAt)
@@ -174,29 +176,45 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rt, err := h.store.GetRefreshToken(r.Context(), hashToken(refreshToken))
+	rt, grace, err := h.store.LookupRefreshToken(r.Context(), hashToken(refreshToken))
+	if errors.Is(err, store.ErrRefreshTokenReused) {
+		// A token rotated away long ago is being replayed: only a copy can do
+		// that. End the session so neither holder keeps it.
+		_ = h.store.DeleteRefreshTokenByID(r.Context(), rt.ID)
+		_ = h.store.LogAction(r.Context(), rt.UserID, "", "auth.refresh_reuse_detected", clientIP(r), map[string]any{"session_id": rt.ID})
+		clearRefreshCookie(w, r)
+		writeCodedError(w, http.StatusUnauthorized, "session_revoked", "this session was ended because its refresh token was reused")
+		return
+	}
 	if err != nil {
 		clearRefreshCookie(w, r)
-		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		writeCodedError(w, http.StatusUnauthorized, "session_revoked", "invalid or expired refresh token")
 		return
 	}
 
 	user, err := h.store.GetUserByID(r.Context(), rt.UserID)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "user not found")
+		writeCodedError(w, http.StatusUnauthorized, "session_revoked", "user not found")
 		return
 	}
 
-	accessToken, err := auth.IssueAccessToken(h.jwtSecret, user.ID, user.Email, user.Role)
+	accessToken, err := auth.IssueSessionToken(h.jwtSecret, user.ID, user.Email, user.Role, rt.ID)
 	if err != nil {
 		writeServerError(w, r, "refresh: token", err)
 		return
 	}
 
+	if grace {
+		// Another tab rotated this token a moment ago and the browser already
+		// holds the new cookie. Answer with an access token and leave the
+		// cookie alone; rotating again would log the other tab out.
+		writeJSON(w, http.StatusOK, map[string]string{"access_token": accessToken})
+		return
+	}
+
 	// Rotate the token in place: the session keeps its identity (and original
 	// created_at) across refreshes, so the sessions list shows one row per login
-	// rather than churning a new one every 15 minutes. A stolen-and-rotated token
-	// invalidates the victim's copy, which surfaces as a forced re-login.
+	// rather than churning a new one every 15 minutes.
 	newToken, newHash, err := generateRefreshToken()
 	if err != nil {
 		writeServerError(w, r, "refresh: rotate", err)
@@ -205,8 +223,10 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(refreshTokenTTL)
 	if err := h.store.RotateRefreshToken(r.Context(), rt.ID, rt.TokenHash, newHash, clientIP(r), userAgent(r), expiresAt); err != nil {
 		if errors.Is(err, store.ErrRefreshTokenAlreadyRotated) {
-			clearRefreshCookie(w, r)
-			writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			// Lost a race with a concurrent refresh of the same token: that
+			// request rotated it and set the new cookie, so this one is a
+			// retry inside the grace window.
+			writeJSON(w, http.StatusOK, map[string]string{"access_token": accessToken})
 			return
 		}
 		writeServerError(w, r, "refresh: store", err)
@@ -219,12 +239,61 @@ func (h *AuthHandlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Logout ends the session named by the refresh cookie. It is a public route:
+// an expired access token must not stop someone signing out, and the cookie is
+// what identifies the session anyway.
 func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
-	refreshToken := refreshTokenFromRequest(r)
-	if refreshToken != "" {
-		_ = h.store.DeleteRefreshToken(r.Context(), hashToken(refreshToken))
+	if refreshToken := refreshTokenFromRequest(r); refreshToken != "" {
+		rt, _, err := h.store.LookupRefreshToken(r.Context(), hashToken(refreshToken))
+		if rt != nil && (err == nil || errors.Is(err, store.ErrRefreshTokenReused)) {
+			_ = h.store.DeleteRefreshTokenByID(r.Context(), rt.ID)
+			_ = h.store.LogAction(r.Context(), rt.UserID, "", "auth.logout", clientIP(r), map[string]any{"session_id": rt.ID})
+		}
 	}
 	clearRefreshCookie(w, r)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// ChangePassword lets a signed-in user set a new password. It needs the current
+// password and, when MFA is on, a current code — the same step-up, from the
+// same guess budget, as every other sensitive action — and it ends every other
+// session the account has, since a password change is what someone does when
+// they think the old one leaked.
+func (h *AuthHandlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	uid := humanCaller(w, r)
+	if uid == "" {
+		return
+	}
+	var body struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+		TOTPCode        string `json:"totp_code"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if msg, ok := validatePassword(body.NewPassword); !ok {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if !verifyStepUp(w, r, h.store, h.ipThrottle, h.acctThrottle, uid, body.CurrentPassword, body.TOTPCode, "password change") {
+		return
+	}
+	hash, err := auth.HashPassword(body.NewPassword)
+	if err != nil {
+		writeServerError(w, r, "password change: hash", err)
+		return
+	}
+	if err := h.store.UpdateUserPassword(r.Context(), uid, hash); err != nil {
+		writeServerError(w, r, "password change: store", err)
+		return
+	}
+	if err := h.store.DeleteSessionsForUserExcept(r.Context(), uid, currentSessionID(r)); err != nil {
+		writeServerError(w, r, "password change: end sessions", err)
+		return
+	}
+	audit(h.store, r, "", "auth.password_changed", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
@@ -259,7 +328,15 @@ func (h *AuthHandlers) Ticket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "access keys cannot mint tickets; send the key in the Authorization header")
 		return
 	}
-	ticket, err := h.tickets.Issue(claims, downloadTicketTTL)
+	var body struct {
+		// Path is the exact request path the ticket will be presented on.
+		Path string `json:"path"`
+	}
+	if err := decode(r, &body); err != nil || !auth.TicketPathAllowed(body.Path) {
+		writeError(w, http.StatusBadRequest, "path must name a console, metrics, notification stream, or download endpoint")
+		return
+	}
+	ticket, err := h.tickets.Issue(claims, body.Path, downloadTicketTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ticket error")
 		return

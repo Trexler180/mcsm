@@ -5,8 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestTicketOnlyAllowedForStreamingEndpoints(t *testing.T) {
@@ -21,7 +24,7 @@ func TestTicketOnlyAllowedForStreamingEndpoints(t *testing.T) {
 	}))
 
 	// A valid ticket authenticates a streaming endpoint.
-	ticket, err := tickets.Issue(claims, time.Minute)
+	ticket, err := tickets.Issue(claims, "/api/v1/servers/srv/console", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +57,7 @@ func TestTicketOnlyAllowedForStreamingEndpoints(t *testing.T) {
 	}
 
 	// Tickets are not honored on ordinary endpoints.
-	ticket2, _ := tickets.Issue(claims, time.Minute)
+	ticket2, _ := tickets.Issue(claims, "/api/v1/auth/me", time.Minute)
 	called = false
 	denied := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me?ticket="+ticket2, nil)
 	rr = httptest.NewRecorder()
@@ -188,5 +191,91 @@ func TestAdminOnlyRefusesMachinePrincipals(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status=%d want 403", rr.Code)
+	}
+}
+
+// A ticket opens only the endpoint it was minted for. One issued for a file
+// download must not open the console, and presenting it there spends it.
+func TestTicketBoundToItsPath(t *testing.T) {
+	tickets := NewTicketStore()
+	claims := &Claims{UserID: "user-1", Role: "user"}
+	var called bool
+	handler := Middleware("secret", tickets, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+
+	ticket, _ := tickets.Issue(claims, "/api/v1/servers/srv/files/download", time.Minute)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/servers/srv/console?ticket="+ticket, nil))
+	if called || rr.Code != http.StatusUnauthorized {
+		t.Fatalf("a download ticket opened the console (status %d)", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/servers/srv/files/download?ticket="+ticket, nil))
+	if called {
+		t.Fatal("a ticket presented on the wrong path must be spent, not kept for later")
+	}
+}
+
+// With a session check configured, a token proves its session on every
+// request: ending the session ends the token at once.
+func TestSessionCheckEndsTokens(t *testing.T) {
+	live := map[string]bool{"sess-1": true}
+	check := func(_ context.Context, userID, sid string) error {
+		if !live[sid] {
+			return ErrSessionRevoked
+		}
+		return nil
+	}
+	handler := Middleware("secret", NewTicketStore(), nil, WithSessionCheck(check))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	call := func(tok string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	tok, _ := IssueSessionToken("secret", "user-1", "u@example.com", "user", "sess-1")
+	if rr := call(tok); rr.Code != http.StatusNoContent {
+		t.Fatalf("live session status %d", rr.Code)
+	}
+	live["sess-1"] = false
+	rr := call(tok)
+	if rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "session_revoked") {
+		t.Fatalf("revoked session status %d body %s", rr.Code, rr.Body.String())
+	}
+
+	sessionless, _ := IssueAccessToken("secret", "user-1", "u@example.com", "user")
+	if rr := call(sessionless); rr.Code != http.StatusUnauthorized {
+		t.Fatal("a session-less token must be refused once sessions are checked")
+	}
+}
+
+// Tokens carry an issuer, audience and type; a token signed with the same key
+// but shaped differently is not an access token.
+func TestParseAccessTokenRequiresAccessShape(t *testing.T) {
+	forged := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID: "user-1", Role: "admin", Type: "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: tokenIssuer, Audience: jwt.ClaimStrings{tokenAudience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
+		},
+	})
+	s, _ := forged.SignedString([]byte("secret"))
+	if _, err := ParseAccessToken("secret", s); err == nil {
+		t.Fatal("a token of another type was accepted as an access token")
+	}
+	expired, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID: "user-1", Type: tokenTypeAccess,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: tokenIssuer, Audience: jwt.ClaimStrings{tokenAudience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Minute)),
+		},
+	}).SignedString([]byte("secret"))
+	if _, err := ParseAccessToken("secret", expired); !errors.Is(err, ErrExpiredToken) {
+		t.Fatalf("expired token error = %v, want ErrExpiredToken", err)
 	}
 }

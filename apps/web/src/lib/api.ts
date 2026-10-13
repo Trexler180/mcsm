@@ -348,17 +348,35 @@ export const api = {
       }
     },
     logout: () => post("/auth/logout"),
+    // Every MFA change re-proves the password.
     mfa: {
       status: () => get<MfaStatus>("/auth/mfa"),
-      setup: () => post<MfaSetup>("/auth/mfa/setup"),
+      setup: (password: string) =>
+        post<MfaSetup>("/auth/mfa/setup", { password }),
       enable: (code: string) =>
         post<MfaEnableResponse>("/auth/mfa/enable", { code }),
-      disable: (opts: { code?: string; recoveryCode?: string }) =>
+      disable: (opts: {
+        password: string;
+        code?: string;
+        recoveryCode?: string;
+      }) =>
         post<MfaStatus>("/auth/mfa/disable", {
+          password: opts.password,
           code: opts.code,
           recovery_code: opts.recoveryCode,
         }),
+      regenerateRecoveryCodes: (password: string, code: string) =>
+        post<{ recovery_codes: string[] }>("/auth/mfa/recovery-codes", {
+          password,
+          code,
+        }),
     },
+    // Change the signed-in user's password. Ends every other session.
+    changePassword: (body: {
+      current_password: string;
+      new_password: string;
+      totp_code?: string;
+    }) => post<{ ok: string }>("/auth/password", body),
     sessions: {
       list: () => get<Session[]>("/auth/sessions"),
       revoke: (id: string) => del(`/auth/sessions/${id}`),
@@ -386,7 +404,10 @@ export const api = {
     // Authorization header: file downloads (plain <a> navigations) and the
     // console/metrics WebSocket handshakes. Replaces putting the raw JWT in the
     // query string.
-    ticket: () => post<{ ticket: string; expires_in: number }>("/auth/ticket"),
+    // The ticket is bound to the exact path it will open, so pass the full
+    // request path (no query string), e.g. "/api/v1/servers/<id>/console".
+    ticket: (path: string) =>
+      post<{ ticket: string; expires_in: number }>("/auth/ticket", { path }),
     me: () => get<User>("/auth/me"),
   },
 
@@ -636,9 +657,10 @@ export const api = {
     // a synthetic link. The ticket is consumed by the request and expires in
     // seconds, so the URL is inert if it leaks into history/logs.
     download: async (serverId: string, path: string) => {
-      const { ticket } = await api.auth.ticket();
+      const endpoint = `${BASE}/servers/${serverId}/files/download`;
+      const { ticket } = await api.auth.ticket(endpoint);
       const params = new URLSearchParams({ path, ticket });
-      const url = `${BASE}/servers/${serverId}/files/download?${params.toString()}`;
+      const url = `${endpoint}?${params.toString()}`;
       const a = document.createElement("a");
       a.href = url;
       a.download = path.split("/").pop() ?? "download";

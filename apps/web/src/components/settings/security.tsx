@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { AccessKeysCard } from '@/components/settings/access-keys'
 import { RemoteAgentsCard } from '@/components/settings/remote-agents'
+import { StepUpFields } from '@/components/settings/step-up-fields'
 import { useNotifications } from '@/store/notifications'
 import type { MfaSetup, Session } from '@/lib/types'
 
@@ -30,12 +31,17 @@ function MfaCard() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null)
   const [disabling, setDisabling] = useState(false)
   const [disableCode, setDisableCode] = useState('')
+  // Starting enrollment and turning MFA off both re-prove the password.
+  const [starting, setStarting] = useState(false)
+  const [password, setPassword] = useState('')
 
   const begin = useMutation({
-    mutationFn: api.auth.mfa.setup,
+    mutationFn: () => api.auth.mfa.setup(password),
     onSuccess: (s) => {
       setSetup(s)
       setRecoveryCodes(null)
+      setStarting(false)
+      setPassword('')
     },
     onError: (e: Error) => error('Could not start MFA setup', e.message),
   })
@@ -53,10 +59,12 @@ function MfaCard() {
   })
 
   const disable = useMutation({
-    mutationFn: () => api.auth.mfa.disable({ code: disableCode.trim() }),
+    mutationFn: () =>
+      api.auth.mfa.disable({ password, code: disableCode.trim() }),
     onSuccess: () => {
       setDisabling(false)
       setDisableCode('')
+      setPassword('')
       qc.invalidateQueries({ queryKey: ['mfa-status'] })
       success('Two-factor authentication disabled')
     },
@@ -123,10 +131,42 @@ function MfaCard() {
       )}
 
       {/* Enroll flow. */}
-      {!enabled && !setup && (
-        <Button onClick={() => begin.mutate()} loading={begin.isPending}>
+      {!enabled && !setup && !starting && (
+        <Button onClick={() => setStarting(true)}>
           Enable two-factor auth
         </Button>
+      )}
+
+      {!enabled && !setup && starting && (
+        <div className="space-y-3">
+          <StepUpFields
+            idPrefix="mfa-setup"
+            password={password}
+            totp=""
+            onPassword={setPassword}
+            onTotp={() => {}}
+            mfaEnabled={false}
+            onSubmit={() => password && begin.mutate()}
+          />
+          <div className="flex gap-2">
+            <Button
+              onClick={() => begin.mutate()}
+              loading={begin.isPending}
+              disabled={!password}
+            >
+              Continue
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setStarting(false)
+                setPassword('')
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
       )}
 
       {!enabled && setup && (
@@ -182,26 +222,33 @@ function MfaCard() {
       {/* Disable flow. */}
       {enabled &&
         (disabling ? (
-          <div className="space-y-2">
-            <Label htmlFor="mfa-disable">
-              Enter a current authentication code to confirm
-            </Label>
+          <div className="space-y-3">
+            <StepUpFields
+              idPrefix="mfa-disable"
+              password={password}
+              totp={disableCode}
+              onPassword={setPassword}
+              onTotp={setDisableCode}
+              mfaEnabled
+            />
             <div className="flex gap-2">
-              <Input
-                id="mfa-disable"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="123456"
-                value={disableCode}
-                onChange={(e) => setDisableCode(e.target.value)}
-              />
               <Button
                 variant="outline"
                 onClick={() => disable.mutate()}
                 loading={disable.isPending}
-                disabled={disableCode.trim().length < 6}
+                disabled={!password || disableCode.trim().length < 6}
               >
                 Disable
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDisabling(false)
+                  setPassword('')
+                  setDisableCode('')
+                }}
+              >
+                Cancel
               </Button>
             </div>
           </div>

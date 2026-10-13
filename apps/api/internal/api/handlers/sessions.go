@@ -15,10 +15,13 @@ func NewSessionHandlers(s *store.Store) *SessionHandlers {
 	return &SessionHandlers{store: s}
 }
 
-// currentSessionID resolves the caller's own session row from the refresh cookie
-// (sent on /api/v1/auth/* paths), so the list can flag it and "log out others"
-// can spare it. Returns "" when no/invalid cookie is present.
+// currentSessionID resolves the caller's own session, so the list can flag it
+// and "log out others" can spare it. The access token names it; the refresh
+// cookie (sent on /api/v1/auth/* paths) is the fallback for older tokens.
 func (h *SessionHandlers) currentSessionID(r *http.Request) string {
+	if sid := currentSessionID(r); sid != "" {
+		return sid
+	}
 	tok := refreshTokenFromRequest(r)
 	if tok == "" {
 		return ""

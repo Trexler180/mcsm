@@ -207,7 +207,7 @@ func TestPlayerActionPermissionIsEnforced(t *testing.T) {
 	s, serverID, _, otherID, _ := accessTestStore(t)
 	secret := "secret"
 	r := NewRouter(s, secret, "", nil, testNotifier(s))
-	token, err := auth.IssueAccessToken(secret, otherID, "other@example.com", "user")
+	token, err := sessionToken(t, s, secret, otherID, "other@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestServerMembersFlowAndStaleUpdate(t *testing.T) {
 	s, serverID, ownerID, otherID, _ := accessTestStore(t)
 	secret := "secret"
 	r := NewRouter(s, secret, "", nil, testNotifier(s))
-	ownerToken, err := auth.IssueAccessToken(secret, ownerID, "owner@example.com", "user")
+	ownerToken, err := sessionToken(t, s, secret, ownerID, "owner@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestServerMembersFlowAndStaleUpdate(t *testing.T) {
 		t.Fatalf("update status=%d body=%s", update.Code, update.Body.String())
 	}
 
-	otherToken, err := auth.IssueAccessToken(secret, otherID, "other@example.com", "user")
+	otherToken, err := sessionToken(t, s, secret, otherID, "other@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestServerMemberSecurityEdges(t *testing.T) {
 	s, serverID, ownerID, _, _ := accessTestStore(t)
 	secret := "secret"
 	r := NewRouter(s, secret, "", nil, testNotifier(s))
-	ownerToken, err := auth.IssueAccessToken(secret, ownerID, "owner@example.com", "user")
+	ownerToken, err := sessionToken(t, s, secret, ownerID, "owner@example.com", "user")
 	if err != nil {
 		t.Fatal(err)
 	}

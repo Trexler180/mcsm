@@ -59,8 +59,9 @@ class NotificationStream {
 
   private async connect() {
     if (this.closed) return;
+    const streamPath = "/api/v1/notifications/stream";
     const ticket = await api.auth
-      .ticket()
+      .ticket(streamPath)
       .then((t) => t.ticket)
       .catch(() => null);
     if (this.closed || !ticket) {
@@ -68,7 +69,7 @@ class NotificationStream {
       return;
     }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/api/v1/notifications/stream?ticket=${encodeURIComponent(ticket)}`;
+    const url = `${protocol}//${window.location.host}${streamPath}?ticket=${encodeURIComponent(ticket)}`;
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {

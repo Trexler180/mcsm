@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/api/ws"
+	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/safedial"
 	"github.com/mcsm/api/internal/store"
@@ -311,7 +313,14 @@ func (h *NotificationHandlers) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch, unsub := h.service.Hub.Subscribe(userID)
-	ws.ServeStream(w, r, ch, unsub)
+	claims := auth.ClaimsFrom(r.Context())
+	ws.ServeStream(w, r, ch, unsub, func(ctx context.Context) bool {
+		if claims == nil || claims.SessionID == "" {
+			return true
+		}
+		ok, err := h.store.SessionActive(ctx, claims.SessionID, claims.UserID)
+		return err == nil && ok
+	})
 }
 
 // ── helpers ──────────────────────────────────────────────────────

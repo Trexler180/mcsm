@@ -87,7 +87,7 @@ func newKeyEnv(t testing.TB) *keyEnv {
 		otherID: otherID,
 		adminID: adminID,
 		jwtToken: func(userID, role string) string {
-			tok, err := auth.IssueAccessToken(secret, userID, "u@example.com", role)
+			tok, err := sessionToken(t, s, secret, userID, "u@example.com", role)
 			if err != nil {
 				t.Fatal(err)
 			}

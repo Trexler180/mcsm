@@ -400,3 +400,53 @@ func TestModProjectUniqueMigrationDedupes(t *testing.T) {
 		t.Fatalf("custom row insert should not be constrained: %v", err)
 	}
 }
+
+// Migration 031 makes email unique case-insensitively. Accounts that differed
+// only by case must survive, with the newer one parked under an address an
+// administrator can see and fix, and the retired operator role folds to user.
+func TestSessionsAndEmailsMigrationDedupes(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	goose.SetBaseFS(FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 30); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, password_hash, role, created_at) VALUES ('aaaaaaaa-1', 'Alice@Example.com', 'h', 'admin', '2026-01-01 00:00:00')`,
+		`INSERT INTO users (id, email, password_hash, role, created_at) VALUES ('bbbbbbbb-2', 'alice@example.com ', 'h', 'operator', '2026-02-01 00:00:00')`,
+		`INSERT INTO users (id, email, password_hash, role, created_at) VALUES ('cccccccc-3', 'Bob@Example.com', 'h', 'user', '2026-03-01 00:00:00')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]string{
+		"aaaaaaaa-1": {"alice@example.com", "admin"},
+		"bbbbbbbb-2": {"alice@example.com.duplicate-bbbbbbbb", "user"},
+		"cccccccc-3": {"bob@example.com", "user"},
+	}
+	for id, w := range want {
+		var email, role string
+		if err := db.QueryRow(`SELECT email, role FROM users WHERE id = ?`, id).Scan(&email, &role); err != nil {
+			t.Fatal(err)
+		}
+		if email != w[0] || role != w[1] {
+			t.Errorf("%s = (%q, %q), want (%q, %q)", id, email, role, w[0], w[1])
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO users (id, email, password_hash, role) VALUES ('d', 'BOB@example.com', 'h', 'user')`); err == nil {
+		t.Fatal("a case-only duplicate was accepted after the migration")
+	}
+	if err := goose.Down(db, "."); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+}

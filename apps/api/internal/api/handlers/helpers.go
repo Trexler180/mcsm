@@ -105,3 +105,28 @@ func callerIsAdmin(r *http.Request, s *store.Store) (bool, error) {
 	}
 	return u.Role == "admin", nil
 }
+
+// writeCodedError writes an error with a stable machine-readable code next to
+// the human message, so a client can decide what to do without parsing prose.
+func writeCodedError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
+// currentSessionID is the session the caller's access token belongs to, or ""
+// for a machine principal or a session-less token.
+func currentSessionID(r *http.Request) string {
+	if c := auth.ClaimsFrom(r.Context()); c != nil {
+		return c.SessionID
+	}
+	return ""
+}
+
+// writeFieldError rejects a request because of one input field, naming it so a
+// form can mark the field rather than show a banner.
+func writeFieldError(w http.ResponseWriter, field, msg string) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": msg,
+		"code":  "validation",
+		"field": field,
+	})
+}

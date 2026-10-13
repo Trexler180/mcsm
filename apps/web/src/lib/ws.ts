@@ -32,11 +32,12 @@ export class ServerConsole {
     // Browsers can't set Authorization on a WebSocket handshake, so mint a
     // single-use ticket and pass that in the query string. A fresh ticket is
     // fetched on every (re)connect, so single-use on the server is fine.
-    const ticket = (await api.auth.ticket().then((t) => t.ticket).catch(() => null))
+    const consolePath = `/api/v1/servers/${this.serverId}/console`
+    const ticket = (await api.auth.ticket(consolePath).then((t) => t.ticket).catch(() => null))
     if (this.closed || !ticket) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const url = `${protocol}//${host}/api/v1/servers/${this.serverId}/console?ticket=${encodeURIComponent(ticket)}`
+    const url = `${protocol}//${host}${consolePath}?ticket=${encodeURIComponent(ticket)}`
 
     this.ws = new WebSocket(url)
 
@@ -102,10 +103,11 @@ export class ServerMetrics {
   async connect() {
     if (this.closed) return
     // See ServerConsole.connect: ticket-based auth for the header-less handshake.
-    const ticket = (await api.auth.ticket().then((t) => t.ticket).catch(() => null))
+    const metricsPath = `/api/v1/servers/${this.serverId}/metrics`
+    const ticket = (await api.auth.ticket(metricsPath).then((t) => t.ticket).catch(() => null))
     if (this.closed || !ticket) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/api/v1/servers/${this.serverId}/metrics?ticket=${encodeURIComponent(ticket)}`
+    const url = `${protocol}//${window.location.host}${metricsPath}?ticket=${encodeURIComponent(ticket)}`
     this.ws = new WebSocket(url)
 
     this.ws.onmessage = (event) => {
