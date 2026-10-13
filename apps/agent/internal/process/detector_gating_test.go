@@ -39,10 +39,10 @@ func TestStartupDetectorsStillWorkWhileStarting(t *testing.T) {
 
 func TestIsChatLine(t *testing.T) {
 	for line, want := range map[string]bool{
-		"[12:00:00] [Server thread/INFO]: <Steve> hi":                       true,
+		"[12:00:00] [Server thread/INFO]: <Steve> hi":                      true,
 		"[12:00:00] [Async Chat Thread - #0/INFO]: [Not Secure] <Alex> yo": true,
-		"[12:00:00] [Server thread/INFO]: Steve joined the game":            false,
-		"[12:00:00] [main/ERROR]: Mixin apply for mod foo failed":           false,
+		"[12:00:00] [Server thread/INFO]: Steve joined the game":           false,
+		"[12:00:00] [main/ERROR]: Mixin apply for mod foo failed":          false,
 	} {
 		if got := isChatLine(line); got != want {
 			t.Errorf("isChatLine(%q) = %v, want %v", line, got, want)

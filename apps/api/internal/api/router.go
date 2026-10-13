@@ -397,8 +397,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// Live TPS/MSPT/heap from the helper mod; served from agent
 					// memory, so polling it is free for the Minecraft server.
 					r.With(viewAccess).Get("/vitals", serverH.Vitals)
-					r.With(settingsAccess).Post("/reinstall", serverH.Reinstall)
-					r.With(settingsAccess).Post("/migrate", migrateH.Migrate)
+					// Operations that stop, start, back up or restore a server on
+					// the way to their goal need every permission they exercise, so
+					// "settings" cannot be used to borrow power or restore rights.
+					r.With(settingsAccess, stopAccess).Post("/reinstall", serverH.Reinstall)
+					r.With(settingsAccess, stopAccess, startAccess, modsUpdate, backupsCreate, backupsRestore).Post("/migrate", migrateH.Migrate)
 					r.With(viewAccess).Get("/migrations", migrateH.List)
 					r.With(viewAccess).Get("/migrations/{runId}", migrateH.Get)
 					r.With(stopAccess).Post("/stop", serverH.Stop)
@@ -462,7 +465,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(modsInstall).Post("/mods/install-modpack", modH.InstallModpack)
 					r.With(modsRead).Get("/mods/updates", modH.Updates)
 					r.With(modsRead).Get("/mods/version-check", modH.VersionCheck)
-					r.With(modsUpdate).Post("/mods/auto-update", modH.AutoUpdate)
+					// A safe update restarts the server to verify the boot.
+					r.With(modsUpdate, restartAccess).Post("/mods/auto-update", modH.AutoUpdate)
 					r.With(modsRead).Get("/mods/update-runs", modH.ListUpdateRuns)
 					r.With(modsRead).Get("/mods/update-runs/{runId}", modH.GetUpdateRun)
 					r.With(modsRead).Get("/mods/skipped-versions", modH.ListSkippedVersions)
@@ -476,7 +480,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// Backups
 					r.With(backupsRead).Get("/backups", backupH.ListBackups)
 					r.With(backupsCreate).Post("/backups", backupH.CreateBackup)
-					r.With(backupsRestore).Post("/backups/{backupId}/restore", backupH.RestoreBackup)
+					// Restoring stops the server to swap its directory.
+					r.With(backupsRestore, stopAccess).Post("/backups/{backupId}/restore", backupH.RestoreBackup)
 					r.With(backupsDelete).Delete("/backups/{backupId}", backupH.DeleteBackup)
 					r.With(backupsRead).Get("/backup-targets", backupH.ListTargets)
 					r.With(backupsCreate, backupsDelete).Post("/backup-targets", backupH.CreateTarget)
