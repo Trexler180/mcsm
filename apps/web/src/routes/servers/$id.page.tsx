@@ -13,7 +13,7 @@ import { StatusBadge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ModConflictDialog } from "@/components/mods/conflict-dialog";
 import { ResourceChart } from "@/components/charts/resource-chart";
-import { api } from "@/lib/api";
+import { api, describeBusy } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { ServerStatus } from "@/lib/types";
 import {
@@ -235,22 +235,22 @@ export function ServerDetailPage() {
   const start = useMutation({
     mutationFn: () => api.servers.start(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["server", id] }),
-    onError: (e: Error) => error("Start failed", e.message),
+    onError: (e: Error) => error("Start failed", describeBusy(e) ?? e.message),
   });
   const stop = useMutation({
     mutationFn: () => api.servers.stop(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["server", id] }),
-    onError: (e: Error) => error("Stop failed", e.message),
+    onError: (e: Error) => error("Stop failed", describeBusy(e) ?? e.message),
   });
   const restart = useMutation({
     mutationFn: () => api.servers.restart(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["server", id] }),
-    onError: (e: Error) => error("Restart failed", e.message),
+    onError: (e: Error) => error("Restart failed", describeBusy(e) ?? e.message),
   });
   const kill = useMutation({
     mutationFn: () => api.servers.kill(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["server", id] }),
-    onError: (e: Error) => error("Kill failed", e.message),
+    onError: (e: Error) => error("Kill failed", describeBusy(e) ?? e.message),
   });
 
   if (isLoading) {

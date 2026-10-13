@@ -5,7 +5,7 @@ import { PermissionButton } from "@/components/ui/permission";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+import { api, describeBusy } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { Backup } from "@/lib/types";
 
@@ -27,17 +27,20 @@ export function BackupsTab({ serverId }: { serverId: string }) {
       qc.invalidateQueries({ queryKey: ["backups", serverId] });
       success("Backup started");
     },
-    onError: (e: Error) => error("Backup failed", e.message),
+    onError: (e: Error) => error("Backup failed", describeBusy(e) ?? e.message),
   });
 
   const restoreMutation = useMutation({
-    mutationFn: (backupId: string) => api.backups.restore(serverId, backupId),
+    mutationFn: async (backupId: string) => {
+      const accepted = await api.backups.restore(serverId, backupId);
+      await api.operations.wait(serverId, accepted?.operation);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["backups", serverId] });
       success("Backup restored", "Server stopped — start it to apply.");
       setRestoreTarget(null);
     },
-    onError: (e: Error) => error("Restore failed", e.message),
+    onError: (e: Error) => error("Restore failed", describeBusy(e) ?? e.message),
   });
 
   const deleteMutation = useMutation({

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test, api } from "./api";
+import { __test, api, ApiError, describeBusy } from "./api";
 
 const { tokenExpiresSoon, request } = __test;
 
@@ -182,5 +182,94 @@ describe("server runtime repair", () => {
       mc_version: "26.1.2",
       loader_version: "0.19.3",
     });
+  });
+});
+
+describe("operations", () => {
+  const op = (status: string, extra: Record<string, unknown> = {}) => ({
+    id: "op-1",
+    server_id: "server-1",
+    kind: "reinstall",
+    status,
+    exclusive: true,
+    trigger: "manual",
+    actor_user_id: null,
+    phase: "",
+    message: "",
+    progress: null,
+    started_at: "",
+    updated_at: "",
+    finished_at: null,
+    ...extra,
+  });
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  beforeEach(() => {
+    localStorage.setItem("access_token", makeToken({ exp: nowSec() + 3600 }));
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("waits for a running operation and resolves when it succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(op("running", { phase: "installing" })))
+      .mockResolvedValueOnce(json(op("succeeded")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const done = api.operations.wait("server-1", op("running") as never);
+    await vi.runAllTimersAsync();
+    await expect(done).resolves.toMatchObject({ status: "succeeded" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(
+      /\/servers\/server-1\/operations\/op-1$/,
+    );
+  });
+
+  it("rejects with the operation's error when it fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json(op("failed", { error: "jar download failed" }))),
+    );
+    const done = api.operations.wait("server-1", op("running") as never);
+    const caught = done.catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const e = await caught;
+    expect(e).toBeInstanceOf(ApiError);
+    expect((e as ApiError).message).toBe("jar download failed");
+  });
+
+  it("resolves immediately when there is no operation to wait for", async () => {
+    await expect(api.operations.wait("server-1", null)).resolves.toBeNull();
+  });
+
+  it("explains a busy server using the operation that holds it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            error: "server is busy",
+            code: "server_busy",
+            operation: op("running", { kind: "restore", message: "Copying files" }),
+          },
+          409,
+        ),
+      ),
+    );
+    const e = await api.servers.start("server-1").catch((err: unknown) => err);
+    expect(e).toBeInstanceOf(ApiError);
+    expect((e as ApiError).code).toBe("server_busy");
+    expect(describeBusy(e)).toBe(
+      "The server is busy restoring a backup (Copying files). Try again when it finishes.",
+    );
+    expect(describeBusy(new Error("other"))).toBeNull();
   });
 });

@@ -95,7 +95,10 @@ export type ServerStatus =
   | "stopping"
   | "crashed"
   | "startup_failure"
-  | "error";
+  | "error"
+  // The server's node has not answered for a while, so its real state is not
+  // known. Never a crash: the server may well still be running.
+  | "unknown";
 
 export interface ConflictSuggestion {
   action: string; // "replace" | "remove" | "install"
@@ -157,6 +160,51 @@ export interface AgentStatus {
   status: string;
   pid?: number;
   mod_conflict?: ModConflict;
+  // false when the node could not be reached; status is then "unknown" and
+  // last_known_status carries what the panel last saw.
+  node_reachable?: boolean;
+  last_known_status?: string;
+  // Why the last run ended: "requested" | "exited" | "crashed" |
+  // "startup_failure". Older agents omit it.
+  exit_cause?: string;
+  exit_code?: number | null;
+  run_id?: string;
+  // The operation holding the server (start, reinstall, restore, …), if any.
+  operation?: Operation | null;
+}
+
+export type OperationStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+// A long-running action on a server. At most one exclusive operation runs per
+// server at a time; anything else is refused with code "server_busy".
+export interface Operation {
+  id: string;
+  server_id: string;
+  kind: string;
+  status: OperationStatus;
+  exclusive: boolean;
+  trigger: string;
+  actor_user_id: string | null;
+  phase: string;
+  message: string;
+  progress: number | null;
+  error?: string;
+  result?: unknown;
+  ref_id?: string;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+// The answer to an action that continues in the background.
+export interface OperationAccepted {
+  status: string;
+  operation: Operation | null;
 }
 
 // One bucket-averaged resource sample from the panel's history sampler.
@@ -732,6 +780,10 @@ export interface Backup {
   snapshot_id: string | null;
   started_at: string;
   completed_at: string | null;
+}
+
+export interface BackupCreated extends Backup {
+  operation: Operation | null;
 }
 
 export interface BackupTarget {

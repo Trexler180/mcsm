@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
+import { api, describeBusy } from "@/lib/api";
 import { useNotifications } from "@/store/notifications";
 import type { Server } from "@/lib/types";
 import { Panel } from "../shared";
@@ -154,11 +154,12 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
   const reinstallMutation = useMutation({
     mutationFn: async () => {
       if (settingsChanged) await saveSettings();
-      await api.servers.reinstall(server.id, {
+      const accepted = await api.servers.reinstall(server.id, {
         platform: form.platform,
         mc_version: form.mc_version,
         loader_version: loaderPin || null,
       });
+      await api.operations.wait(server.id, accepted?.operation);
     },
     onSuccess: () => {
       setConfirmOpen(false);
@@ -173,7 +174,7 @@ export function SoftwareOptionsPanel({ server }: { server: Server }) {
       setConfirmOpen(false);
       qc.invalidateQueries({ queryKey: ["server", server.id] });
       qc.invalidateQueries({ queryKey: ["servers"] });
-      error("Reinstall failed", e.message);
+      error("Reinstall failed", describeBusy(e) ?? e.message);
     },
   });
 

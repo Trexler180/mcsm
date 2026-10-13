@@ -4,6 +4,7 @@ import type {
   AccessKeyRequest,
   AuditEntry,
   Backup,
+  BackupCreated,
   BackupTarget,
   FileListing,
   FileTree,
@@ -67,8 +68,52 @@ import type {
   NotificationChannel,
   NotificationItem,
   NotificationSeverity,
+  Operation,
+  OperationAccepted,
   WorldUploadResult,
 } from "./types";
+
+// An error answered by the API. message is the server's human-readable error,
+// so existing `e.message` checks keep working; code and operation carry the
+// machine-readable detail (for example "server_busy" with the operation that
+// holds the server).
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly operation?: Operation;
+  readonly retryable: boolean;
+
+  constructor(
+    status: number,
+    message: string,
+    body?: { code?: string; operation?: Operation; retryable?: boolean },
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = body?.code;
+    this.operation = body?.operation;
+    this.retryable = body?.retryable ?? false;
+  }
+}
+
+const OPERATION_KIND_LABELS: Record<string, string> = {
+  start: "starting",
+  reinstall: "reinstalling",
+  restore: "restoring a backup",
+  backup: "taking a backup",
+  migrate: "changing version",
+  auto_update: "updating mods",
+};
+
+// Describes the operation that is holding a busy server, for error toasts.
+export function describeBusy(e: unknown): string | null {
+  if (!(e instanceof ApiError) || e.code !== "server_busy") return null;
+  const op = e.operation;
+  if (!op) return "Another action is already running on this server.";
+  const what = OPERATION_KIND_LABELS[op.kind] ?? op.kind;
+  return `The server is busy ${what}${op.message ? ` (${op.message})` : ""}. Try again when it finishes.`;
+}
 
 const BASE = "/api/v1";
 
@@ -257,15 +302,53 @@ async function request<T>(
 
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let body: { code?: string; operation?: Operation; retryable?: boolean } = {};
     try {
       const err = await res.json();
       msg = err.error || msg;
+      body = err;
     } catch {}
-    throw new Error(msg);
+    throw new ApiError(res.status, msg, body);
   }
 
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+const OPERATION_POLL_MS = 1_500;
+
+// Polls an operation until it finishes. Resolves with the finished operation
+// when it succeeded and rejects with its error otherwise, so callers can await
+// a background action the way they used to await the synchronous endpoint.
+async function waitForOperation(
+  serverId: string,
+  op: Operation | null | undefined,
+  opts?: { signal?: AbortSignal; onProgress?: (op: Operation) => void },
+): Promise<Operation | null> {
+  if (!op) return null;
+  let current = op;
+  while (current.status === "running") {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, OPERATION_POLL_MS);
+      opts?.signal?.addEventListener("abort", () => {
+        clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      });
+    });
+    current = await get<Operation>(
+      `/servers/${serverId}/operations/${current.id}`,
+      opts?.signal,
+    );
+    opts?.onProgress?.(current);
+  }
+  if (current.status !== "succeeded") {
+    throw new ApiError(
+      409,
+      current.error || `${current.kind} ${current.status}`,
+      { code: `operation_${current.status}`, operation: current },
+    );
+  }
+  return current;
 }
 
 async function requestText(
@@ -524,14 +607,21 @@ export const api = {
       ),
     update: (id: string, data: Partial<Server>) =>
       put<Server>(`/servers/${id}`, data),
-    delete: (id: string, opts?: { files?: boolean; backups?: boolean }) => {
+    // Stops the server first; force skips waiting for a clean shutdown.
+    delete: (
+      id: string,
+      opts?: { files?: boolean; backups?: boolean; force?: boolean },
+    ) => {
       const q = new URLSearchParams();
       if (opts?.files) q.set("files", "true");
       if (opts?.backups) q.set("backups", "true");
+      if (opts?.force) q.set("force", "true");
       const qs = q.toString();
       return del(`/servers/${id}${qs ? `?${qs}` : ""}`);
     },
-    start: (id: string) => post(`/servers/${id}/start`),
+    // Starts in the background (installing the runtime first when needed); the
+    // answer carries the operation, and the server's status follows it.
+    start: (id: string) => post<OperationAccepted>(`/servers/${id}/start`),
     stop: (id: string, graceful = true) =>
       post(`/servers/${id}/stop`, { graceful, timeout_sec: 30 }),
     restart: (id: string) => post(`/servers/${id}/restart`),
@@ -542,7 +632,7 @@ export const api = {
         mc_version: string;
         loader_version: string | null;
       },
-    ) => post(`/servers/${id}/reinstall`, target),
+    ) => post<OperationAccepted>(`/servers/${id}/reinstall`, target),
     // Change the server's Minecraft version (upgrade or downgrade), moving mods
     // and disabling incompatible ones behind a backup. Async; poll migration().
     migrate: (id: string, mcVersion: string) =>
@@ -571,7 +661,10 @@ export const api = {
     // counts). Served from agent memory, so polling costs the server nothing;
     // servers without the mod report linked: false and no snapshot fields.
     vitals: (id: string) => get<ServerVitals>(`/servers/${id}/vitals`),
-    kill: (id: string) => post(`/servers/${id}/kill`),
+    // force also cancels whatever operation holds the server (a stuck start
+    // or update) before killing the process.
+    kill: (id: string, opts?: { force?: boolean }) =>
+      post(`/servers/${id}/kill${opts?.force ? "?force=true" : ""}`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),
     command: (id: string, command: string) =>
@@ -1007,11 +1100,32 @@ export const api = {
       post<{ status: string; requested_at: string }>(`/nodes/${id}/reboot`, auth),
   },
 
+  operations: {
+    list: (serverId: string, opts?: { status?: string; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (opts?.status) q.set("status", opts.status);
+      if (opts?.limit) q.set("limit", String(opts.limit));
+      const qs = q.toString();
+      return get<Operation[]>(
+        `/servers/${serverId}/operations${qs ? `?${qs}` : ""}`,
+      );
+    },
+    get: (serverId: string, opId: string) =>
+      get<Operation>(`/servers/${serverId}/operations/${opId}`),
+    cancel: (serverId: string, opId: string) =>
+      post<Operation>(`/servers/${serverId}/operations/${opId}/cancel`),
+    wait: waitForOperation,
+  },
+
   backups: {
     list: (serverId: string) => get<Backup[]>(`/servers/${serverId}/backups`),
-    create: (serverId: string) => post<Backup>(`/servers/${serverId}/backups`),
+    create: (serverId: string) =>
+      post<BackupCreated>(`/servers/${serverId}/backups`),
+    // Restores in the background behind a safety backup of the current state.
     restore: (serverId: string, backupId: string) =>
-      post(`/servers/${serverId}/backups/${backupId}/restore`),
+      post<OperationAccepted>(
+        `/servers/${serverId}/backups/${backupId}/restore`,
+      ),
     delete: (serverId: string, backupId: string) =>
       del(`/servers/${serverId}/backups/${backupId}`),
     targets: {

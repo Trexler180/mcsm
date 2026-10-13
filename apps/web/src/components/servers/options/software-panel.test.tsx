@@ -51,7 +51,7 @@ describe("SoftwareOptionsPanel runtime repair", () => {
       { version: "0.19.2", stable: false },
     ]);
     vi.spyOn(api.servers, "update").mockResolvedValue(server);
-    vi.spyOn(api.servers, "reinstall").mockResolvedValue({ status: "reinstalled" });
+    vi.spyOn(api.servers, "reinstall").mockResolvedValue({ status: "reinstalling", operation: null });
   });
 
   afterEach(() => {

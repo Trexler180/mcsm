@@ -38,6 +38,7 @@ const statusVariant: Record<ServerStatus, Variant> = {
   crashed: 'error',
   startup_failure: 'warning',
   error: 'error',
+  unknown: 'muted',
 }
 
 const statusDot: Record<ServerStatus, string> = {
@@ -48,12 +49,16 @@ const statusDot: Record<ServerStatus, string> = {
   crashed: 'bg-red-400',
   startup_failure: 'bg-orange-400',
   error: 'bg-red-400',
+  unknown: 'bg-gray-400 animate-pulse',
 }
 
 export function StatusBadge({ status }: { status: ServerStatus }) {
   return (
-    <Badge variant={statusVariant[status]}>
-      <span className={clsx('w-1.5 h-1.5 rounded-full', statusDot[status])} />
+    <Badge
+      variant={statusVariant[status] ?? 'muted'}
+      title={status === 'unknown' ? 'The node is not responding, so the current state is unknown' : undefined}
+    >
+      <span className={clsx('w-1.5 h-1.5 rounded-full', statusDot[status] ?? 'bg-gray-500')} />
       {status}
     </Badge>
   )

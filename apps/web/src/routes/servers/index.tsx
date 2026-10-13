@@ -36,7 +36,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/api";
+import { api, describeBusy } from "@/lib/api";
 import { groupServersByFolder, folderAccent } from "@/lib/folders";
 import {
   FolderSelect,
@@ -379,17 +379,17 @@ function ServerActions({ server }: { server: ServerType }) {
   const start = useMutation({
     mutationFn: () => api.servers.start(server.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
-    onError: (e: Error) => error("Start failed", e.message),
+    onError: (e: Error) => error("Start failed", describeBusy(e) ?? e.message),
   });
   const stop = useMutation({
     mutationFn: () => api.servers.stop(server.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
-    onError: (e: Error) => error("Stop failed", e.message),
+    onError: (e: Error) => error("Stop failed", describeBusy(e) ?? e.message),
   });
   const restart = useMutation({
     mutationFn: () => api.servers.restart(server.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
-    onError: (e: Error) => error("Restart failed", e.message),
+    onError: (e: Error) => error("Restart failed", describeBusy(e) ?? e.message),
   });
 
   const isOnline = server.status === "online" || server.status === "starting";
