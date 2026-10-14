@@ -128,12 +128,12 @@ func TestValidPlayerName(t *testing.T) {
 	}
 
 	invalid := []string{
-		"",                 // empty
-		"bad name",         // space (injection risk)
-		"evil\nop someone", // newline
+		"",                    // empty
+		"bad name",            // space (injection risk)
+		"evil\nop someone",    // newline
 		"toolongplayername_x", // >16 java chars
-		".;rm",             // prefix + non-name core
-		"@bad",             // unknown prefix char
+		".;rm",                // prefix + non-name core
+		"@bad",                // unknown prefix char
 	}
 	for _, n := range invalid {
 		if validPlayerName(dir, n) {

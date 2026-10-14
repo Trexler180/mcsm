@@ -83,6 +83,6 @@ func (d *javaVersionDetector) feed(line string) *ModConflict {
 		Suggestions:  []ConflictSuggestion{},
 		RequiredJava: requiredJava,
 		Raw:          []string{line},
-		DetectedAt:  time.Now().UnixMilli(),
+		DetectedAt:   time.Now().UnixMilli(),
 	}
 }

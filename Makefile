@@ -1,4 +1,4 @@
-.PHONY: all build clean test dev-api dev-agent dev-web dev-mcp
+.PHONY: all build clean test lint dev-api dev-agent dev-web dev-mcp
 
 all: build
 
@@ -61,6 +61,14 @@ test:
 	cd apps/agent && go test ./...
 	cd apps/api && go test ./...
 	bash deploy/provision_test.sh
+
+# The checks CI runs beyond the tests. staticcheck and govulncheck install with
+#   go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+#   go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+lint:
+	@test -z "$$(gofmt -l apps/api apps/agent)" || { gofmt -l apps/api apps/agent; exit 1; }
+	cd apps/api && go vet ./... && staticcheck ./... && govulncheck ./...
+	cd apps/agent && go vet ./... && staticcheck ./... && govulncheck ./...
 
 # ── Clean ────────────────────────────────────────────────────────────
 clean:

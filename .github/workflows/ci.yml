@@ -15,10 +15,32 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: apps/api/go.mod
           cache-dependency-path: |
             apps/api/go.sum
             apps/agent/go.sum
+      - name: Install linters
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l apps/api apps/agent)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
+          fi
+      - name: Vet
+        run: |
+          (cd apps/api && go vet ./...)
+          (cd apps/agent && go vet ./...)
+      - name: Staticcheck
+        run: |
+          (cd apps/api && staticcheck ./...)
+          (cd apps/agent && staticcheck ./...)
+      - name: Vulnerabilities
+        run: |
+          (cd apps/api && govulncheck ./...)
+          (cd apps/agent && govulncheck ./...)
       - name: Test API
         working-directory: apps/api
         run: go test -race ./...
@@ -28,9 +50,26 @@ jobs:
       - name: Build API
         working-directory: apps/api
         run: go build ./cmd/server
-      - name: Build agent
+      - name: Build agent and server launcher
         working-directory: apps/agent
-        run: go build ./cmd/agent
+        run: |
+          go build ./cmd/agent
+          CGO_ENABLED=0 GOOS=linux go build ./cmd/mcsm-launch
+
+  deploy:
+    name: Host provisioning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provisioning tests
+        run: bash deploy/provision_test.sh
+      # Server isolation on a throwaway host: real users, the launcher with its
+      # file capabilities, and the agent's checks of what a server can reach.
+      - name: Server isolation end to end
+        run: |
+          go_version=$(sed -n 's/^go \([0-9.]*\).*/\1/p' apps/agent/go.mod)
+          docker run --rm -v "$PWD/apps:/src" -v "$PWD/deploy:/deploy:ro" \
+            "golang:${go_version%.*}" bash /deploy/isolation_e2e.sh
 
   mod:
     name: Helper mod

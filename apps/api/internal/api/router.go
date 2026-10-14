@@ -115,6 +115,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 		opt(&svc)
 	}
 	svc.defaults(s, notifier)
+	// The notification engine, when notifications are configured; handlers
+	// treat a nil engine as "no alerts".
+	var notifyEngine *notify.Engine
+	if notifier != nil {
+		notifyEngine = notifier.Engine
+	}
 
 	// Pin the WebSocket Origin allowlist to the app origin (defense in depth on
 	// top of the single-use ticket auth). APP_ORIGIN unset => any origin, which
@@ -164,8 +170,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// holding a session cannot multiply their guesses across endpoints.
 	passwordThrottles := handlers.NewPasswordThrottles()
 	authH := handlers.NewAuthHandlers(s, jwtSecret, tickets, passwordThrottles)
-	if notifier != nil {
-		authH.WithNotifier(notifier.Engine)
+	if notifyEngine != nil {
+		authH.WithNotifier(notifyEngine)
 	}
 	apiKeyH := handlers.NewAPIKeyHandlers(s, passwordThrottles)
 	nodeH := handlers.NewNodeHandlers(s, passwordThrottles)
@@ -176,11 +182,11 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s).WithOperations(svc.Ops)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine).WithBus(svc.Bus).WithServices(svc.Ops, svc.Life)
+	modH := handlers.NewModHandlers(s, serverRoot, updater, notifyEngine).WithBus(svc.Bus).WithServices(svc.Ops, svc.Life)
 	migrationEngine := migrate.New(s)
 	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
-	backupH := handlers.NewBackupHandlers(s, notifier.Engine).WithService(svc.Backups)
+	backupH := handlers.NewBackupHandlers(s, notifyEngine).WithService(svc.Backups)
 	taskH := handlers.NewTaskHandlers(s)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
 	consoleH := handlers.NewConsoleHandlers(s)
@@ -202,8 +208,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// alert, so a pending request is visible from any screen rather than only on
 	// the settings card that lists them.
 	mcpOpts := []mcpserver.Option{mcpserver.WithMigrationStarter(migrationEngine), mcpserver.WithPower(svc.Life)}
-	if notifier != nil {
-		mcpOpts = append(mcpOpts, mcpserver.WithNotifier(notifier.Engine))
+	if notifyEngine != nil {
+		mcpOpts = append(mcpOpts, mcpserver.WithNotifier(notifyEngine))
 	}
 	mcpGrantH := handlers.NewMCPGrantHandlers(s, mcpURLs, passwordThrottles, mcpOpts...)
 

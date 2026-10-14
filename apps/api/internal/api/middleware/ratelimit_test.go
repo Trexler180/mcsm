@@ -88,7 +88,7 @@ func TestRateLimiterIsolatesKeys(t *testing.T) {
 	}
 
 	// Two tokens of burst, then the third trips.
-	if call("noisy") != http.StatusNoContent || call("noisy") != http.StatusNoContent {
+	if first, second := call("noisy"), call("noisy"); first != http.StatusNoContent || second != http.StatusNoContent {
 		t.Fatal("the first two requests should pass")
 	}
 	if got := call("noisy"); got != http.StatusTooManyRequests {

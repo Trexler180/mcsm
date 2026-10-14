@@ -115,8 +115,8 @@ func parseItems(v any) []ItemStack {
 		if count == 0 {
 			count = asInt(m["Count"])
 		}
-		tag := asMap(m["tag"])              // legacy (<=1.20.4)
-		comp := asMap(m["components"])      // modern (>=1.20.5)
+		tag := asMap(m["tag"])         // legacy (<=1.20.4)
+		comp := asMap(m["components"]) // modern (>=1.20.5)
 		out = append(out, ItemStack{
 			Slot:         asInt(m["Slot"]),
 			ID:           id,

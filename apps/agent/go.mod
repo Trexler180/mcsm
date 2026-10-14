@@ -1,12 +1,12 @@
 module github.com/mcsm/agent
 
-go 1.25.12
+go 1.26.9
 
 require (
 	github.com/coder/websocket v1.8.12
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/shirou/gopsutil/v4 v4.24.11
-	golang.org/x/sys v0.29.0
+	golang.org/x/sys v0.49.0
 )
 
 require (

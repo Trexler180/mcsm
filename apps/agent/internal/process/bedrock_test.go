@@ -145,7 +145,7 @@ func TestGamertagFromInput(t *testing.T) {
 		{
 			// With substitution off there is nothing to reverse, so an underscore
 			// must be left alone.
-			name: "no substitution leaves underscores",
+			name:  "no substitution leaves underscores",
 			input: ".Cool_Guy", cfg: floodgateCfg{Prefix: ".", ReplaceSpaces: false},
 			want: "Cool_Guy",
 		},

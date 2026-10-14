@@ -34,7 +34,6 @@ type recordingSink struct {
 	connected []string
 	snapshots []Snapshot
 	events    []Event
-	dropped   int
 
 	snapshotCh chan struct{}
 	eventCh    chan struct{}

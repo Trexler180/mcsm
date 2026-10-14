@@ -270,12 +270,6 @@ func (s *Session) write(ctx context.Context, payload []byte) error {
 	return nil
 }
 
-// close ends the session with a protocol close code.
-func (s *Session) close(code websocket.StatusCode, reason string) {
-	_ = s.conn.Close(code, reason)
-	s.finish()
-}
-
 // finish releases everyone waiting on this session exactly once.
 func (s *Session) finish() {
 	s.closeOnce.Do(func() {

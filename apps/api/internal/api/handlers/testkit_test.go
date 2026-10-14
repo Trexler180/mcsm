@@ -17,16 +17,9 @@ import (
 	"github.com/mcsm/api/migrations"
 )
 
-// newTestStore opens a private in-memory database with every migration
-// applied.
-func newTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	s, _ := newTestStoreDB(t)
-	return s
-}
-
-// newTestStoreDB is newTestStore that also returns the raw handle, for tests
-// that need to arrange state the API never writes (a backdated timestamp).
+// newTestStoreDB opens a private in-memory database with every migration
+// applied, and returns the raw handle too, for tests that need to arrange
+// state the API never writes (a backdated timestamp).
 func newTestStoreDB(t *testing.T) (*store.Store, *sql.DB) {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())

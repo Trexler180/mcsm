@@ -14,18 +14,18 @@ import (
 
 func TestIsPublicIPRejectsInternalRanges(t *testing.T) {
 	cases := map[string]bool{
-		"8.8.8.8":         true,
-		"1.1.1.1":         true,
-		"127.0.0.1":       false,
-		"10.1.2.3":        false,
-		"192.168.0.10":    false,
-		"172.16.5.5":      false,
-		"169.254.169.254": false, // cloud metadata
-		"100.64.0.1":      false, // CGNAT
-		"0.0.0.0":         false,
-		"::1":             false,
-		"fe80::1":         false,
-		"fc00::1":         false,
+		"8.8.8.8":              true,
+		"1.1.1.1":              true,
+		"127.0.0.1":            false,
+		"10.1.2.3":             false,
+		"192.168.0.10":         false,
+		"172.16.5.5":           false,
+		"169.254.169.254":      false, // cloud metadata
+		"100.64.0.1":           false, // CGNAT
+		"0.0.0.0":              false,
+		"::1":                  false,
+		"fe80::1":              false,
+		"fc00::1":              false,
 		"2606:4700:4700::1111": true,
 	}
 	for ip, wantPublic := range cases {
