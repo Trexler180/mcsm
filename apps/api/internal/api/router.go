@@ -174,7 +174,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	eventH := handlers.NewEventHandlers(s, svc.Bus)
 	folderH := handlers.NewFolderHandlers(s)
 	memberH := handlers.NewServerMemberHandlers(s)
-	fileH := handlers.NewFileHandlers(s)
+	fileH := handlers.NewFileHandlers(s).WithOperations(svc.Ops)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine).WithBus(svc.Bus).WithServices(svc.Ops, svc.Life)
 	migrationEngine := migrate.New(s)

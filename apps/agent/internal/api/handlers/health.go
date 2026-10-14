@@ -31,7 +31,7 @@ var DiskPath = "/"
 
 // Capabilities name the agent features the panel may rely on. The panel checks
 // this list rather than the version, so an older agent degrades gracefully.
-var Capabilities = []string{"batch_status", "exit_cause", "persistent_registry", "server_logs"}
+var Capabilities = []string{"batch_status", "exit_cause", "persistent_registry", "server_logs", "world_jobs"}
 
 func init() {
 	// Prime the CPU sampler: cpu.Percent(0, ...) reports usage since the

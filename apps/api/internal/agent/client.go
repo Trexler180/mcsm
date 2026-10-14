@@ -813,3 +813,36 @@ func writeProxyError(w http.ResponseWriter, msg string) {
 	w.WriteHeader(http.StatusBadGateway)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg, "code": "node_unreachable", "retryable": true})
 }
+
+// ErrNotFound means the agent answered 404.
+var ErrNotFound = errors.New("not found on the agent")
+
+// WorldJob is a background world unpack on the agent.
+type WorldJob struct {
+	ID     string         `json:"id"`
+	Status string         `json:"status"`
+	Done   int64          `json:"done_bytes"`
+	Total  int64          `json:"total_bytes"`
+	Error  string         `json:"error,omitempty"`
+	Result map[string]any `json:"result,omitempty"`
+}
+
+// WorldJob reports an asynchronous world unpack.
+func (c *Client) WorldJob(ctx context.Context, serverID, jobID string) (*WorldJob, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/agent/v1/servers/"+serverID+"/worlds/jobs/"+url.PathEscape(jobID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrNotFound
+	}
+	if err := checkError(resp); err != nil {
+		return nil, err
+	}
+	var job WorldJob
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}

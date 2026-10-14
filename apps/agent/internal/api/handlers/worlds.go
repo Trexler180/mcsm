@@ -21,7 +21,8 @@ import (
 // inspected for a level.dat, unpacked into a folder of its own, and kept away
 // from a world the server currently has open.
 type WorldHandlers struct {
-	mgr *process.Manager
+	mgr  *process.Manager
+	jobs worldJobs
 }
 
 func NewWorldHandlers(mgr *process.Manager) *WorldHandlers {
@@ -171,17 +172,48 @@ func (h *WorldHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	replaced, _ := agentfiles.WorldExists(base, name)
-	if err := agentfiles.ExtractWorld(base, tmp.Name(), arc, name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
+	result := map[string]any{
 		"name":     name,
 		"files":    arc.Files,
 		"bytes":    arc.Bytes,
 		"replaced": replaced,
-	})
+	}
+
+	// async=true answers as soon as the archive is in and checked, and unpacks
+	// in the background as a job the caller can follow; a large world can take
+	// minutes to unpack, longer than a request should be held open.
+	if r.URL.Query().Get("async") == "true" {
+		staged := tmp.Name() + ".job"
+		if err := os.Rename(tmp.Name(), staged); err != nil {
+			writeError(w, http.StatusInternalServerError, "stage upload: "+err.Error())
+			return
+		}
+		job := h.jobs.start(arc.Bytes, result)
+		go func() {
+			defer os.Remove(staged)
+			err := agentfiles.ExtractWorldProgress(base, staged, arc, name, job.progress)
+			job.finish(err)
+		}()
+		result["job_id"] = job.ID
+		writeJSON(w, http.StatusAccepted, result)
+		return
+	}
+
+	if err := agentfiles.ExtractWorld(base, tmp.Name(), arc, name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// Job reports an asynchronous unpack.
+func (h *WorldHandlers) Job(w http.ResponseWriter, r *http.Request) {
+	job, ok := h.jobs.get(chi.URLParam(r, "jobId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "no such job")
+		return
+	}
+	writeJSON(w, http.StatusOK, job.snapshot())
 }
 
 // checkDestination returns a refusal message and status for a destination that

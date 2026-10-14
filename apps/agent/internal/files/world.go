@@ -214,7 +214,14 @@ func WorldExists(base, name string) (bool, error) {
 // upload, a full disk — can't leave a half-written world where a working one
 // used to be. An existing world of the same name is moved aside and only
 // deleted after the swap succeeds.
-func ExtractWorld(base, zipPath string, arc *WorldArchive, name string) (err error) {
+func ExtractWorld(base, zipPath string, arc *WorldArchive, name string) error {
+	return ExtractWorldProgress(base, zipPath, arc, name, nil)
+}
+
+// ExtractWorldProgress is ExtractWorld reporting progress: progress, when not
+// nil, is called after each file with the uncompressed bytes written so far
+// and the total the archive declares.
+func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, progress func(done, total int64)) (err error) {
 	cleanBase, err := secureBase(base)
 	if err != nil {
 		return err
@@ -246,6 +253,7 @@ func ExtractWorld(base, zipPath string, arc *WorldArchive, name string) (err err
 		}
 	}()
 
+	var written int64
 	for _, f := range zr.File {
 		entry, ok := zipEntryName(f.Name)
 		if !ok {
@@ -274,6 +282,10 @@ func ExtractWorld(base, zipPath string, arc *WorldArchive, name string) (err err
 		}
 		if err := writeZipEntry(f, dest); err != nil {
 			return err
+		}
+		if progress != nil {
+			written += int64(f.UncompressedSize64)
+			progress(written, arc.Bytes)
 		}
 	}
 

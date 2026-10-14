@@ -843,13 +843,18 @@ export const api = {
     // level.dat inside the archive, unpacks only the world (a full server
     // backup zip works too), and installs it as its own folder in the server
     // root. `overwrite` is required to replace a world that already exists.
+    //
+    // The server answers as soon as the bytes are in and the archive is
+    // checked, then unpacks in the background; this waits for the unpack
+    // (reporting it through onUnpack) and resolves with the installed world.
     upload: (
       serverId: string,
       file: File,
       opts: { name: string; overwrite?: boolean },
       onProgress?: (p: UploadProgress) => void,
+      onUnpack?: (op: Operation) => void,
     ) => {
-      const params = new URLSearchParams({ name: opts.name });
+      const params = new URLSearchParams({ name: opts.name, async: "true" });
       if (opts.overwrite) params.set("overwrite", "true");
       const fd = new FormData();
       fd.append("file", file);
@@ -860,13 +865,23 @@ export const api = {
       ).then(async (r) => {
         if (!r.ok) {
           let msg = `HTTP ${r.status}`;
+          let body: { code?: string; operation?: Operation } = {};
           try {
             const err = await r.json();
             msg = err.error || msg;
+            body = err;
           } catch {}
-          throw new Error(msg);
+          throw new ApiError(r.status, msg, body);
         }
-        return r.json() as Promise<WorldUploadResult>;
+        const answer = (await r.json()) as WorldUploadResult & {
+          operation?: Operation;
+        };
+        if (!answer.operation) return answer;
+        if (onUnpack) onUnpack(answer.operation);
+        const done = await waitForOperation(serverId, answer.operation, {
+          onProgress: onUnpack,
+        });
+        return { ...answer, ...(done?.result as Partial<WorldUploadResult>) };
       });
     },
   },

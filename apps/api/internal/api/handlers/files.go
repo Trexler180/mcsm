@@ -12,11 +12,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/mcsm/api/internal/agent"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
 type FileHandlers struct {
 	store *store.Store
+	ops   *operations.Manager
 }
 
 func NewFileHandlers(s *store.Store) *FileHandlers {
@@ -281,6 +283,10 @@ func (h *FileHandlers) UploadWorld(w http.ResponseWriter, r *http.Request) {
 
 	if err := c.RegisterDir(ctx, srv.ID, srv.DirectoryPath); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to register server directory")
+		return
+	}
+	if r.URL.Query().Get("async") == "true" && h.ops != nil {
+		h.uploadWorldAsync(w, r, srv, c, ctx)
 		return
 	}
 

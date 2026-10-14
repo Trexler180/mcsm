@@ -114,6 +114,7 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				// upload: the zip has to be validated and unpacked into a folder,
 				// not dropped on disk as-is.
 				r.Post("/worlds/upload", wh.Upload)
+				r.Get("/worlds/jobs/{jobId}", wh.Job)
 			})
 		})
 	})
