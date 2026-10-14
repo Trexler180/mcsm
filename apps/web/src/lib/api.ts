@@ -12,6 +12,7 @@ import type {
   FleetSummary,
   ServerLogFile,
   LogProblem,
+  ServerIdentity,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -684,6 +685,7 @@ export const api = {
     kill: (id: string, opts?: { force?: boolean }) =>
       post(`/servers/${id}/kill${opts?.force ? "?force=true" : ""}`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
+    identity: (id: string) => get<ServerIdentity>(`/servers/${id}/identity`),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),

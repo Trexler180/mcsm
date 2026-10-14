@@ -685,6 +685,20 @@ export interface LogProblem {
   last_at?: string;
 }
 
+// What a player sees of a server. address_source is "custom" when set in the
+// server's settings (connect_address), else "node". The rest is read from the
+// server's files and absent when its node is unreachable.
+export interface ServerIdentity {
+  address: string;
+  address_source: "custom" | "node";
+  max_players?: number;
+  motd?: string;
+  motd_plain?: string;
+  // server-icon.png as a data URL.
+  icon?: string;
+  files_read: boolean;
+}
+
 // Where a server sits in the dashboard.
 export interface ServerPlacement {
   id: string;

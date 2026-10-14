@@ -149,9 +149,10 @@ type resourcePackFields struct {
 // non-admin may change it. import decides which jar the agent runs and whether
 // it installs a runtime, so only an administrator sets it.
 var settingsKeys = map[string]bool{
-	"helper_mod":    true,
-	"resource_pack": true,
-	"import":        false,
+	"helper_mod":      true,
+	"resource_pack":   true,
+	"connect_address": true,
+	"import":          false,
 }
 
 // validateSettingsChange checks a new settings object against the current one.
@@ -198,6 +199,11 @@ func validateSettingsChange(current, next json.RawMessage, isAdmin bool) (json.R
 			}
 			if len(rp.Prompt) > 1000 {
 				return nil, badField("settings", "the resource pack prompt is too long")
+			}
+		case "connect_address":
+			var addr string
+			if err := json.Unmarshal(raw, &addr); err != nil || (addr != "" && !validConnectAddress(addr)) {
+				return nil, badField("settings", "connect_address must be a host name or host:port")
 			}
 		case "import":
 			var imp struct {

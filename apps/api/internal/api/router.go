@@ -461,6 +461,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					backupsDelete := requireServerPermission(s, store.ServerPermissionBackupsDelete)
 
 					r.With(viewAccess).Get("/", serverH.Get)
+					r.With(viewAccess).Get("/identity", serverH.Identity)
 					r.With(settingsAccess).Put("/", serverH.Update)
 					r.With(serverAdminAccess).Delete("/", serverH.Delete)
 					// Clone into a new server (admin only, like Create — it sets
