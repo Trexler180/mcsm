@@ -105,6 +105,11 @@ func NewRouter(token string, mgr *process.Manager, collector *metrics.Collector,
 				r.Get("/files/download", fh.Download)
 				r.Post("/files/upload", fh.Upload)
 
+				// The server's own log files, and the problems grouped from them.
+				r.Get("/logs", fh.ListLogs)
+				r.Get("/logs/problems", fh.LogProblems)
+				r.Get("/logs/{name}", fh.ReadLog)
+
 				// Worlds get their own upload route rather than reusing the file
 				// upload: the zip has to be validated and unpacked into a folder,
 				// not dropped on disk as-is.

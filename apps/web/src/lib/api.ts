@@ -10,6 +10,8 @@ import type {
   ServerPlacement,
   FolderUndo,
   FleetSummary,
+  ServerLogFile,
+  LogProblem,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -1136,6 +1138,19 @@ export const api = {
     // the server's clock, which the rebooting screen measures the restart by.
     reboot: (id: string, auth: { password: string; totp_code?: string }) =>
       post<{ status: string; requested_at: string }>(`/nodes/${id}/reboot`, auth),
+  },
+
+  logs: {
+    list: (serverId: string) =>
+      get<ServerLogFile[]>(`/servers/${serverId}/logs`),
+    read: (serverId: string, name: string, tail = 1000) =>
+      get<{ name: string; lines: string[]; truncated: boolean }>(
+        `/servers/${serverId}/logs/${encodeURIComponent(name)}?tail=${tail}`,
+      ),
+    problems: (serverId: string, file = "latest.log") =>
+      get<{ file: string; problems: LogProblem[] }>(
+        `/servers/${serverId}/logs/problems?file=${encodeURIComponent(file)}`,
+      ),
   },
 
   operations: {

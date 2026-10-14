@@ -663,6 +663,28 @@ export interface FleetSummary {
   event_seq: number;
 }
 
+// One of the server's own log files (logs/latest.log, logs/<date>-<n>.log.gz).
+export interface ServerLogFile {
+  name: string;
+  size: number;
+  modified: string;
+  compressed: boolean;
+}
+
+// A kind of warning or error in a log, with every occurrence grouped.
+export interface LogProblem {
+  level: "WARN" | "ERROR";
+  // Normalized text the occurrences share (numbers and ids replaced by #).
+  message: string;
+  // The first occurrence as written, with its stack trace.
+  sample: string;
+  count: number;
+  first_line: number;
+  last_line: number;
+  first_at?: string;
+  last_at?: string;
+}
+
 // Where a server sits in the dashboard.
 export interface ServerPlacement {
   id: string;

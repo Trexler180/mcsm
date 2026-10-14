@@ -492,6 +492,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 					// Console & metrics (WebSocket)
 					r.With(consoleAccess).Get("/console", consoleH.Console)
+					// The server's own log files and the problems grouped from them.
+					r.With(consoleAccess).Get("/logs", fileH.ListLogs)
+					r.With(consoleAccess).Get("/logs/problems", fileH.LogProblems)
+					r.With(consoleAccess).Get("/logs/{name}", fileH.ReadLog)
 					r.With(viewAccess).Get("/metrics", consoleH.Metrics)
 					// Sampled resource history (JSON, bucket-averaged)
 					r.With(viewAccess).Get("/metrics/history", serverH.MetricsHistory)
