@@ -699,6 +699,43 @@ export interface ServerIdentity {
   files_read: boolean;
 }
 
+// Why a server didn't start, and what can be done about it.
+export interface FixStep {
+  kind: "disable_mods" | "install_mod" | "set_java" | "start";
+  label: string;
+  mod_ids?: string[];
+  source?: string;
+  project_id?: string;
+  version_id?: string;
+  java_path?: string;
+}
+
+export interface FixPlan {
+  id: string;
+  title: string;
+  description: string;
+  steps: FixStep[];
+  recommended: boolean;
+  permissions: string[];
+  requires_admin: boolean;
+  unresolved?: string[];
+}
+
+export interface StartupProblem {
+  problem: {
+    kind: "incompatible" | "crash" | "missing_dependency" | "java_version" | string;
+    headline: string;
+    detail: string;
+    mods: string[];
+    required_java?: number;
+    log: string[];
+    detected_at: number;
+    // false when the node could not be asked; no plans then.
+    live: boolean;
+  } | null;
+  plans: FixPlan[];
+}
+
 // Where a server sits in the dashboard.
 export interface ServerPlacement {
   id: string;

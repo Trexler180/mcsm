@@ -109,26 +109,44 @@ func (s *Service) Start(ctx context.Context, srv *store.Server, actor operations
 	return s.ops.Run(ctx, srv.ID, operations.KindStart, actor, operations.Options{
 		Timeout: startTimeout, Phase: "starting", Msg: "Starting the server",
 	}, func(op *operations.Op) (any, error) {
-		s.SetStatus(srv.ID, "starting")
-		// Re-read: the record may have changed between the request and now.
-		current, err := s.store.GetServer(op.Context(), srv.ID)
-		if err != nil {
-			return nil, err
-		}
-		if err := c.RegisterDir(op.Context(), current.ID, current.DirectoryPath); err != nil {
-			s.startFailed(current, actor, err)
-			return nil, fmt.Errorf("%w: %v", ErrNodeUnreachable, err)
-		}
-		op.Progress("launching", "Preparing the runtime and launching the server", nil)
-		if err := c.StartServer(op.Context(), current.ID, agent.StartConfigForServer(current)); err != nil {
-			if errors.Is(err, agent.ErrServerAlreadyRunning) {
-				return map[string]string{"status": "already running"}, nil
-			}
-			s.startFailed(current, actor, err)
-			return nil, err
-		}
-		return map[string]string{"status": "starting"}, nil
+		return s.launch(op, c, srv.ID, actor)
 	})
+}
+
+// StartWithin starts a server as the last step of an operation that already
+// holds it (applying a startup fix, say), where Start would be refused as busy.
+func (s *Service) StartWithin(op *operations.Op, srv *store.Server, actor operations.Actor) error {
+	c, err := s.agents(op.Context(), srv)
+	if err != nil {
+		return err
+	}
+	actor.Audit(op.Context(), s.store, srv.ID, "server.start", nil)
+	_, err = s.launch(op, c, srv.ID, actor)
+	return err
+}
+
+// launch is the body of a start: it re-reads the record, makes sure the node
+// knows the directory, and asks it to start the server.
+func (s *Service) launch(op *operations.Op, c Agent, serverID string, actor operations.Actor) (any, error) {
+	s.SetStatus(serverID, "starting")
+	// Re-read: the record may have changed between the request and now.
+	current, err := s.store.GetServer(op.Context(), serverID)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.RegisterDir(op.Context(), current.ID, current.DirectoryPath); err != nil {
+		s.startFailed(current, actor, err)
+		return nil, fmt.Errorf("%w: %v", ErrNodeUnreachable, err)
+	}
+	op.Progress("launching", "Preparing the runtime and launching the server", nil)
+	if err := c.StartServer(op.Context(), current.ID, agent.StartConfigForServer(current)); err != nil {
+		if errors.Is(err, agent.ErrServerAlreadyRunning) {
+			return map[string]string{"status": "already running"}, nil
+		}
+		s.startFailed(current, actor, err)
+		return nil, err
+	}
+	return map[string]string{"status": "starting"}, nil
 }
 
 func (s *Service) startFailed(srv *store.Server, actor operations.Actor, err error) {

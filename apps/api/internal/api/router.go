@@ -176,7 +176,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	memberH := handlers.NewServerMemberHandlers(s)
 	fileH := handlers.NewFileHandlers(s)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
-	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine).WithBus(svc.Bus)
+	modH := handlers.NewModHandlers(s, serverRoot, updater, notifier.Engine).WithBus(svc.Bus).WithServices(svc.Ops, svc.Life)
 	migrationEngine := migrate.New(s)
 	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
@@ -462,6 +462,10 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 					r.With(viewAccess).Get("/", serverH.Get)
 					r.With(viewAccess).Get("/identity", serverH.Identity)
+					// Why the server didn't start, and fixes that can be applied
+					// as one operation (each fix checks its own permissions).
+					r.With(viewAccess).Get("/startup-problem", modH.StartupProblem)
+					r.With(viewAccess).Post("/startup-problem/fixes/{planId}/apply", modH.ApplyFix)
 					r.With(settingsAccess).Put("/", serverH.Update)
 					r.With(serverAdminAccess).Delete("/", serverH.Delete)
 					// Clone into a new server (admin only, like Create — it sets

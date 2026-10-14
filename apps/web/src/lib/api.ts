@@ -13,6 +13,7 @@ import type {
   ServerLogFile,
   LogProblem,
   ServerIdentity,
+  StartupProblem,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -686,6 +687,13 @@ export const api = {
       post(`/servers/${id}/kill${opts?.force ? "?force=true" : ""}`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     identity: (id: string) => get<ServerIdentity>(`/servers/${id}/identity`),
+    startupProblem: (id: string) =>
+      get<StartupProblem>(`/servers/${id}/startup-problem`),
+    // Runs the plan's steps then starts the server, as one operation.
+    applyFix: (id: string, planId: string) =>
+      post<OperationAccepted>(
+        `/servers/${id}/startup-problem/fixes/${planId}/apply`,
+      ),
     javaInstallations: (id: string) => get<JavaInfo>(`/servers/${id}/java`),
     command: (id: string, command: string) =>
       post(`/servers/${id}/command`, { command }),

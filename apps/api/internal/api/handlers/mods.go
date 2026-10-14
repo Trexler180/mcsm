@@ -10,12 +10,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/events"
+	"github.com/mcsm/api/internal/lifecycle"
 	"github.com/mcsm/api/internal/mc"
 	"github.com/mcsm/api/internal/mods/curseforge"
 	"github.com/mcsm/api/internal/mods/hangar"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/mods/spigotmc"
 	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
@@ -35,6 +37,8 @@ type ModHandlers struct {
 	notifier      *notify.Engine
 	bus           *events.Bus
 	rescans       modRescans
+	ops           *operations.Manager
+	life          *lifecycle.Service
 }
 
 func NewModHandlers(s *store.Store, serverRoot string, updater *autoupdate.Engine, notifier *notify.Engine) *ModHandlers {

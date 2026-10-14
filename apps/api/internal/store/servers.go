@@ -476,3 +476,10 @@ func (s *Store) ResumeUptime(ctx context.Context, id string, processStartedAt ti
 	}
 	return true, tx.Commit()
 }
+
+// SetServerJavaBinary points a server at another Java runtime.
+func (s *Store) SetServerJavaBinary(ctx context.Context, id, path string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET java_binary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, path, id)
+	return err
+}
