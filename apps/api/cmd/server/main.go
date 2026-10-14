@@ -317,7 +317,7 @@ func main() {
 	updater.SetOperations(ops)
 
 	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier, panelapi.WithServices(panelapi.Services{
-		Bus: bus, Ops: ops, Life: life, Backups: backupSvc,
+		Bus: bus, Ops: ops, Life: life, Backups: backupSvc, Background: bgCtx,
 	}))
 
 	srv := &http.Server{

@@ -281,3 +281,19 @@ func NewDeviceLogin(ip, device string) Event {
 		Data:  map[string]any{"ip": ip, "device": device},
 	}
 }
+
+// ModUpdatesAvailable reports mods with newer compatible versions.
+func ModUpdatesAvailable(serverID, serverName string, mods []string) Event {
+	body := fmt.Sprintf("%d mod(s) can be updated", len(mods))
+	if len(mods) > 0 && len(mods) <= 5 {
+		body += ": " + strings.Join(mods, ", ")
+	}
+	return Event{
+		Type: EventModUpdateAvailable, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("Mod updates for %s", display(serverName, serverID)),
+		Body:  body + ".",
+		Data:  map[string]any{"count": len(mods), "mods": mods},
+		// More updates than last time is news even inside the usual window.
+		DedupeKey: fmt.Sprintf("%s:%s:%d", EventModUpdateAvailable, serverID, len(mods)),
+	}
+}

@@ -88,6 +88,7 @@ var Catalog = []EventDef{
 	{EventMCPActionRequested, "AI agent asked to act on a server", "A connected agent filed a start, stop, restart, or version-upgrade request. The alert offers to approve or deny it.", SeverityWarning, ScopeServer, true},
 	{EventMCPActionResolved, "Agent action request settled", "An agent's request was approved, denied, or ran automatically under your approval policy.", SeverityInfo, ScopeServer, true},
 	{EventModConflict, "Mod conflict detected", "A mod incompatibility or crash-on-load was detected.", SeverityWarning, ScopeServer, false},
+	{EventModUpdateAvailable, "Mod updates available", "A check found newer versions of a server's mods that fit it.", SeverityInfo, ScopeServer, false},
 	{EventModUpdateApplied, "Mod update applied", "An auto-update run installed new mod versions.", SeverityInfo, ScopeServer, false},
 	{EventModUpdateFailed, "Mod update failed", "An auto-update run failed.", SeverityWarning, ScopeServer, false},
 	{EventBackupSuccess, "Backup succeeded", "A backup completed successfully.", SeverityInfo, ScopeServer, false},

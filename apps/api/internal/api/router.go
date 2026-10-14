@@ -78,6 +78,9 @@ type Services struct {
 	Ops     *operations.Manager
 	Life    *lifecycle.Service
 	Backups *backups.Service
+	// Background, when set, runs the router's own background work (the mod
+	// update watcher) until it is done. Tests leave it nil.
+	Background context.Context
 }
 
 // RouterOption configures NewRouter.
@@ -183,6 +186,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	fileH := handlers.NewFileHandlers(s).WithOperations(svc.Ops)
 	resourcePackH := handlers.NewResourcePackHandlers(s)
 	modH := handlers.NewModHandlers(s, serverRoot, updater, notifyEngine).WithBus(svc.Bus).WithServices(svc.Ops, svc.Life)
+	if svc.Background != nil {
+		go modH.WatchUpdates(svc.Background)
+	}
 	migrationEngine := migrate.New(s)
 	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)

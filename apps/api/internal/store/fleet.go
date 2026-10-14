@@ -134,3 +134,14 @@ func (s *Store) ModUpdateChecks(ctx context.Context) (map[string]ModUpdateCheck,
 	}
 	return out, rows.Err()
 }
+
+// ModUpdateCheckFor returns a server's last mod-update check, or nil.
+func (s *Store) ModUpdateCheckFor(ctx context.Context, serverID string) (*ModUpdateCheck, error) {
+	var c ModUpdateCheck
+	err := s.db.QueryRowContext(ctx,
+		`SELECT available, checked_at FROM mod_update_checks WHERE server_id = ?`, serverID).Scan(&c.Available, &c.CheckedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}

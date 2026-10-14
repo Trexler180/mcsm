@@ -14,28 +14,51 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/api/internal/autoupdate"
 	"github.com/mcsm/api/internal/mods/modrinth"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
 
+// modUpdate is one installed mod with a newer compatible version.
+type modUpdate struct {
+	ModID           string `json:"mod_id"`
+	Name            string `json:"name"`
+	Source          string `json:"source"`
+	Enabled         bool   `json:"enabled"`
+	CurrentVersion  string `json:"current_version"`
+	LatestVersion   string `json:"latest_version"`
+	LatestVersionID string `json:"latest_version_id"`
+}
+
+// Updates lists the server's mods that have a newer compatible version.
 func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
-	serverID := chi.URLParam(r, "id")
-	srv, err := h.store.GetServer(r.Context(), serverID)
+	srv, err := h.store.GetServer(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeLookupError(w, r, "server", err)
 		return
 	}
-	mods, err := h.store.ListMods(r.Context(), serverID)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, err := h.findUpdates(ctx, srv)
 	if err != nil {
-		writeServerError(w, r, "mod updates: list mods", err)
+		writeServerError(w, r, "mod updates", err)
 		return
 	}
+	h.noteUpdates(r.Context(), srv, out)
+	writeJSON(w, http.StatusOK, out)
+}
 
-	// Blocklisted versions (auto-reverted by a previous run) are never offered.
-	skippedRows, err := h.store.ListSkippedModVersions(r.Context(), serverID)
+// findUpdates asks each mod's source for a newer version that fits the
+// server, never offering one a safe update has blocklisted.
+func (h *ModHandlers) findUpdates(ctx context.Context, srv *store.Server) ([]modUpdate, error) {
+	mods, err := h.store.ListMods(ctx, srv.ID)
 	if err != nil {
-		writeServerError(w, r, "mod updates: skipped versions", err)
-		return
+		return nil, err
+	}
+	// Blocklisted versions (auto-reverted by a previous run) are never offered.
+	skippedRows, err := h.store.ListSkippedModVersions(ctx, srv.ID)
+	if err != nil {
+		return nil, err
 	}
 	skipped := map[string]map[string]bool{} // project id -> version id -> true
 	for _, sv := range skippedRows {
@@ -45,24 +68,12 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 		skipped[sv.ProjectID][sv.VersionID] = true
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
 	loader := modrinth.LoaderForPlatform(srv.Platform)
-	type updateInfo struct {
-		ModID           string `json:"mod_id"`
-		Name            string `json:"name"`
-		Source          string `json:"source"`
-		Enabled         bool   `json:"enabled"`
-		CurrentVersion  string `json:"current_version"`
-		LatestVersion   string `json:"latest_version"`
-		LatestVersionID string `json:"latest_version_id"`
-	}
 	// Update checks need GetVersions to return reliably-ordered, resolvable
 	// versions; CurseForge's key-less listing is paged/filtered enough that it
 	// stays out, matching its previous behavior.
 	updatable := map[string]bool{"modrinth": true, "hangar": true, "spigotmc": true}
-	out := []updateInfo{}
+	out := []modUpdate{}
 	for _, m := range mods {
 		if !updatable[m.Source] || m.SourceID == nil || m.VersionID == nil || m.Pinned {
 			continue
@@ -71,22 +82,67 @@ func (h *ModHandlers) Updates(w http.ResponseWriter, r *http.Request) {
 		if err != nil || len(versions) == 0 {
 			continue
 		}
-		target := autoupdate.PickUpdate(versions, *m.VersionID, skipped[*m.SourceID])
-		if target != nil {
-			out = append(out, updateInfo{
-				ModID:           m.ID,
-				Name:            m.Name,
-				Source:          m.Source,
-				Enabled:         m.Enabled,
-				CurrentVersion:  m.Version,
-				LatestVersion:   target.VersionNumber,
-				LatestVersionID: target.ID,
+		if target := autoupdate.PickUpdate(versions, *m.VersionID, skipped[*m.SourceID]); target != nil {
+			out = append(out, modUpdate{
+				ModID: m.ID, Name: m.Name, Source: m.Source, Enabled: m.Enabled,
+				CurrentVersion: m.Version, LatestVersion: target.VersionNumber, LatestVersionID: target.ID,
 			})
 		}
 	}
-	// The fleet summary reports this count without asking upstream again.
-	_ = h.store.RecordModUpdateCheck(r.Context(), serverID, len(out))
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
+}
+
+// noteUpdates records how many updates a check found (the fleet summary
+// reports it without asking upstream again) and raises an alert when there are
+// more than the last check found.
+func (h *ModHandlers) noteUpdates(ctx context.Context, srv *store.Server, found []modUpdate) {
+	prev, _ := h.store.ModUpdateCheckFor(ctx, srv.ID)
+	_ = h.store.RecordModUpdateCheck(ctx, srv.ID, len(found))
+	if len(found) == 0 || (prev != nil && len(found) <= prev.Available) {
+		return
+	}
+	names := make([]string, 0, len(found))
+	for _, u := range found {
+		names = append(names, u.Name)
+	}
+	h.notifier.Emit(notify.ModUpdatesAvailable(srv.ID, srv.Name, names))
+}
+
+// updateWatchInterval is how often every server's mods are checked for
+// updates in the background, so Home and the alert know without anyone
+// opening the Mods tab.
+const updateWatchInterval = 12 * time.Hour
+
+// WatchUpdates checks every server's mods for updates until ctx ends: shortly
+// after startup, then every updateWatchInterval, one server at a time so the
+// mod sources are not hammered.
+func (h *ModHandlers) WatchUpdates(ctx context.Context) {
+	wait := 5 * time.Minute
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		wait = updateWatchInterval
+		servers, err := h.store.ListServers(ctx)
+		if err != nil {
+			continue
+		}
+		for _, srv := range servers {
+			cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			found, err := h.findUpdates(cctx, srv)
+			cancel()
+			if err == nil {
+				h.noteUpdates(ctx, srv, found)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
 }
 
 // Compatibility buckets returned by VersionCheck.
