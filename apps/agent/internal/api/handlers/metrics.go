@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/agent/internal/link"
@@ -105,7 +104,7 @@ func (h *MetricsHandlers) Stats(w http.ResponseWriter, r *http.Request) {
 func (h *MetricsHandlers) ServerMetrics(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	conn, err := acceptAPISocket(w, r)
 	if err != nil {
 		return
 	}
@@ -156,7 +155,7 @@ func (h *MetricsHandlers) ServerMetrics(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *MetricsHandlers) HostMetrics(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	conn, err := acceptAPISocket(w, r)
 	if err != nil {
 		return
 	}

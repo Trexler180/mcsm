@@ -28,12 +28,7 @@ type wsMsg struct {
 func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// Origin checking protects browsers from cross-site sockets. Nothing but
-	// the API connects here, it carries the agent token, and it sends no
-	// browser Origin worth checking, so verification is off on purpose.
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := acceptAPISocket(w, r)
 	if err != nil {
 		return
 	}
@@ -170,4 +165,13 @@ func (h *ConsoleHandlers) RegisterDir(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mgr.RegisterDir(id, dir)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// acceptAPISocket accepts a WebSocket from the panel's API. Origin checking
+// protects browsers from cross-site sockets; nothing but the API connects to
+// the agent, every request already carries the agent token (checked by the
+// auth middleware before this runs), and the API sends no browser Origin
+// worth checking — so verification is off on purpose, here and only here.
+func acceptAPISocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	return websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 }
