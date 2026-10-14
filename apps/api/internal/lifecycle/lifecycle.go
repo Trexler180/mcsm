@@ -335,13 +335,15 @@ func (s *Service) Delete(ctx context.Context, srv *store.Server, actor operation
 	if err != nil && !o.Force {
 		return fmt.Errorf("%w; the server was not deleted: %v", ErrNodeUnreachable, err)
 	}
+	// Recorded against the server while it still exists, so the row carries
+	// its name and closes the server's own history; audit rows outlive it.
+	actor.Audit(ctx, s.store, srv.ID, "server.delete", map[string]any{
+		"name": srv.Name, "deleted_files": o.Files, "deleted_backups": o.Backups,
+		"forced": o.Force, "node_reached": err == nil,
+	})
 	if err := s.store.DeleteServer(ctx, srv.ID); err != nil {
 		return err
 	}
-	actor.Audit(ctx, s.store, "", "server.delete", map[string]any{
-		"server_id": srv.ID, "name": srv.Name, "deleted_files": o.Files, "deleted_backups": o.Backups,
-		"forced": o.Force, "node_reached": err == nil,
-	})
 	if s.bus != nil {
 		s.bus.Publish(events.Event{Type: events.ServerDeleted, ServerID: srv.ID})
 	}
