@@ -300,6 +300,10 @@ export function AccessTab({ serverId }: { serverId: string }) {
     queryKey: ["server-members", serverId],
     queryFn: () => api.servers.members(serverId),
   });
+  const { data: server } = useQuery({
+    queryKey: ["server", serverId],
+    queryFn: () => api.servers.get(serverId),
+  });
 
   const remove = useMutation({
     mutationFn: (member: ServerMember) =>
@@ -332,6 +336,14 @@ export function AccessTab({ serverId }: { serverId: string }) {
           </Button>
         </div>
 
+        {server?.isolated === false && (
+          <p className="border-b border-border bg-yellow-500/10 px-4 py-2.5 text-xs text-yellow-200 sm:px-5">
+            This server&apos;s node does not isolate servers from the panel.
+            Anyone who can edit its files or install its mods can run code as
+            the panel&apos;s own user, so grant Files › Edit and Mods › Install
+            only to people you would trust as an administrator.
+          </p>
+        )}
         {isLoading ? (
           <SkeletonList rows={4} />
         ) : (

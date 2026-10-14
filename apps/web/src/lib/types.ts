@@ -325,6 +325,9 @@ export interface Server {
   directory_path: string | null;
   java_binary: string | null;
   jvm_args: string[] | null;
+  // Whether the server's node runs it isolated from the panel; absent when
+  // unknown. Only on GET /servers/{id}.
+  isolated?: boolean;
   port: number;
   ram_mb_min: number;
   ram_mb_max: number;

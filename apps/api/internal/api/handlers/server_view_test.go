@@ -69,3 +69,30 @@ func TestUpdateAcceptsUnchangedHostFields(t *testing.T) {
 		t.Fatalf("record after updates: %+v", got)
 	}
 }
+
+// A server reports whether its node isolates it, so the access editor can say
+// what file and mod permissions really grant.
+func TestServerReportsNodeIsolation(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user("owner@example.com", "user")
+	srv := f.server(owner, "Survival")
+	h := NewServerHandlers(f.store, t.TempDir())
+	isolated := func() any {
+		rr := httptest.NewRecorder()
+		h.Get(rr, withURLParams(as(owner, "user", http.MethodGet, "/", nil), "id", srv.ID))
+		var out map[string]any
+		_ = json.NewDecoder(rr.Body).Decode(&out)
+		return out["isolated"]
+	}
+	if got := isolated(); got != nil {
+		t.Fatalf("isolated = %v before the node reported", got)
+	}
+	if err := f.store.UpdateNodeHeartbeat(context.Background(), f.node.ID, store.NodeHeartbeat{
+		Isolation: []byte(`{"mode":"off","active":false}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := isolated(); got != false {
+		t.Fatalf("isolated = %v, want false", got)
+	}
+}

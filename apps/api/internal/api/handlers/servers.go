@@ -308,6 +308,10 @@ type serverView struct {
 	DirectoryPath *string  `json:"directory_path"`
 	JavaBinary    *string  `json:"java_binary"`
 	JVMArgs       []string `json:"jvm_args"`
+	// Isolated says whether the server's node runs it as the dedicated server
+	// user (null when the node has not reported). Without it, whoever may
+	// write its files or install its mods can run code as the panel's user.
+	Isolated *bool `json:"isolated,omitempty"`
 }
 
 func viewServer(srv *store.Server, isAdmin bool) serverView {
@@ -521,7 +525,16 @@ func (h *ServerHandlers) Get(w http.ResponseWriter, r *http.Request) {
 		writeLookupError(w, r, "server", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, viewServer(srv, h.isAdmin(r)))
+	view := viewServer(srv, h.isAdmin(r))
+	if node, err := h.store.GetNode(r.Context(), srv.NodeID); err == nil && len(node.Isolation) > 0 {
+		var iso struct {
+			Active bool `json:"active"`
+		}
+		if json.Unmarshal(node.Isolation, &iso) == nil {
+			view.Isolated = &iso.Active
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
