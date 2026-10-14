@@ -14,6 +14,7 @@ import type {
   LogProblem,
   ServerIdentity,
   StartupProblem,
+  ServerSettingsView,
   Backup,
   BackupCreated,
   BackupTarget,
@@ -687,6 +688,10 @@ export const api = {
       post(`/servers/${id}/kill${opts?.force ? "?force=true" : ""}`),
     status: (id: string) => get<AgentStatus>(`/servers/${id}/status`),
     identity: (id: string) => get<ServerIdentity>(`/servers/${id}/identity`),
+    settings: (id: string) => get<ServerSettingsView>(`/servers/${id}/settings`),
+    // Keys sent replace those keys; null removes one; the rest are kept.
+    patchSettings: (id: string, changes: Record<string, unknown>) =>
+      patch<ServerSettingsView>(`/servers/${id}/settings`, changes),
     startupProblem: (id: string) =>
       get<StartupProblem>(`/servers/${id}/startup-problem`),
     // Runs the plan's steps then starts the server, as one operation.

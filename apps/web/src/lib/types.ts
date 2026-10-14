@@ -736,6 +736,23 @@ export interface StartupProblem {
   plans: FixPlan[];
 }
 
+// A server's settings as typed fields, and which ones this caller may change.
+export interface ServerSettingsView {
+  values: {
+    helper_mod: boolean | null;
+    resource_pack: Record<string, unknown> | null;
+    connect_address: string;
+    import?: { jar_file?: string; no_install?: boolean };
+  };
+  fields: {
+    key: string;
+    type: "boolean" | "string" | "object";
+    label: string;
+    description: string;
+    editable: boolean;
+  }[];
+}
+
 // Where a server sits in the dashboard.
 export interface ServerPlacement {
   id: string;

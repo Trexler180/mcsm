@@ -462,6 +462,8 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 
 					r.With(viewAccess).Get("/", serverH.Get)
 					r.With(viewAccess).Get("/identity", serverH.Identity)
+					r.With(viewAccess).Get("/settings", serverH.Settings)
+					r.With(settingsAccess).Patch("/settings", serverH.PatchSettings)
 					// Why the server didn't start, and fixes that can be applied
 					// as one operation (each fix checks its own permissions).
 					r.With(viewAccess).Get("/startup-problem", modH.StartupProblem)
