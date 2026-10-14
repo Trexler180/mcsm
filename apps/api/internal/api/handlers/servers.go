@@ -1061,7 +1061,11 @@ func (h *ServerHandlers) Command(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusBadGateway, "agent_error", err.Error())
 		return
 	}
-	audit(h.store, r, id, "console.command", map[string]any{"command": body.Command})
+	// A delegated (MCP) command is recorded by the facade, with the verb it
+	// was rendered from; recording it here too would log it twice.
+	if auth.DelegatedActorFrom(r.Context()) == nil {
+		audit(h.store, r, id, "console.command", map[string]any{"command": body.Command})
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
