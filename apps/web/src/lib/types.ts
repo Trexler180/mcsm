@@ -86,6 +86,17 @@ export interface Node {
   os: string | null;
   arch: string | null;
   agent_version: string | null;
+  // Whether the node runs Minecraft servers as a dedicated user, isolated
+  // from the panel. null for agents that predate isolation.
+  isolation: NodeIsolation | null;
+}
+
+export interface NodeIsolation {
+  mode: "auto" | "enforced" | "off";
+  active: boolean;
+  user?: string;
+  // Why servers are not isolated, when they are not.
+  reason?: string;
 }
 
 export type ServerStatus =

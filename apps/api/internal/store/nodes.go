@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -14,12 +15,12 @@ import (
 // nodeCols and nodeScanDest keep the node SELECT column list and its scan
 // targets in one place so Get/List can't drift apart.
 const nodeCols = `id, name, fqdn, port, scheme, token, memory_mb, disk_gb, cpu_cores, location, created_at, last_seen,
-	mem_used_mb, disk_used_gb, cpu_pct, uptime_seconds, os, arch, agent_version`
+	mem_used_mb, disk_used_gb, cpu_pct, uptime_seconds, os, arch, agent_version, isolation`
 
 func nodeScanDest(n *Node) []any {
 	return []any{
 		&n.ID, &n.Name, &n.FQDN, &n.Port, &n.Scheme, &n.Token, &n.MemoryMb, &n.DiskGb, &n.CPUCores, &n.Location, &n.CreatedAt, &n.LastSeen,
-		&n.MemUsedMb, &n.DiskUsedGb, &n.CPUPct, &n.UptimeSeconds, &n.OS, &n.Arch, &n.AgentVersion,
+		&n.MemUsedMb, &n.DiskUsedGb, &n.CPUPct, &n.UptimeSeconds, &n.OS, &n.Arch, &n.AgentVersion, (*jsonRaw)(&n.Isolation),
 	}
 }
 
@@ -147,14 +148,17 @@ type NodeHeartbeat struct {
 	OS            *string
 	Arch          *string
 	AgentVersion  *string
+	// Isolation is the agent's isolation report, as JSON; nil keeps the last.
+	Isolation json.RawMessage
 }
 
 func (s *Store) UpdateNodeHeartbeat(ctx context.Context, id string, hb NodeHeartbeat) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE nodes SET memory_mb=?, disk_gb=?, cpu_cores=?, mem_used_mb=?, disk_used_gb=?, cpu_pct=?,
-		 uptime_seconds=?, os=?, arch=?, agent_version=?, last_seen=CURRENT_TIMESTAMP WHERE id=?`,
+		 uptime_seconds=?, os=?, arch=?, agent_version=?, isolation=COALESCE(?, isolation),
+		 last_seen=CURRENT_TIMESTAMP WHERE id=?`,
 		hb.MemoryMb, hb.DiskGb, hb.CPUCores, hb.MemUsedMb, hb.DiskUsedGb, hb.CPUPct,
-		hb.UptimeSeconds, hb.OS, hb.Arch, hb.AgentVersion, id,
+		hb.UptimeSeconds, hb.OS, hb.Arch, hb.AgentVersion, nullableJSON(hb.Isolation), id,
 	)
 	return err
 }
@@ -167,4 +171,12 @@ func (s *Store) SetNodeToken(ctx context.Context, id, token string) error {
 	}
 	_, err = s.db.ExecContext(ctx, `UPDATE nodes SET token = ? WHERE id = ?`, enc, id)
 	return err
+}
+
+// nullableJSON stores an absent document as NULL.
+func nullableJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }

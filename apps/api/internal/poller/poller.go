@@ -170,6 +170,11 @@ func (p *Poller) pollNode(ctx context.Context, node *store.Node, servers []*stor
 		Arch:          strFromInfo(info, "arch"),
 		AgentVersion:  strFromInfo(info, "version"),
 	}
+	if iso, ok := info["isolation"]; ok && iso != nil {
+		if raw, err := json.Marshal(iso); err == nil {
+			hb.Isolation = raw
+		}
+	}
 	if err := p.store.UpdateNodeHeartbeat(ctx, node.ID, hb); err != nil {
 		log.Printf("poller: update node heartbeat %s: %v", node.ID, err)
 	}

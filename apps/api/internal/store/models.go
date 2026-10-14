@@ -251,6 +251,9 @@ type Node struct {
 	OS            *string  `json:"os"`
 	Arch          *string  `json:"arch"`
 	AgentVersion  *string  `json:"agent_version"`
+	// Isolation is whether the node runs servers as the dedicated server
+	// user: {"mode","active","user","reason"}, null for older agents.
+	Isolation json.RawMessage `json:"isolation"`
 }
 
 var ErrNodeHasServers = errors.New("node has servers")

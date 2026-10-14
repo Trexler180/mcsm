@@ -44,7 +44,8 @@ func (f *fakeAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/agent/v1/info":
-		_ = json.NewEncoder(w).Encode(map[string]any{"version": "test", "boot_id": "b1", "memory_mb": 8192})
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": "test", "boot_id": "b1", "memory_mb": 8192,
+			"isolation": map[string]any{"mode": "enforced", "active": true, "user": "mcsm-mc"}})
 	case "/agent/v1/servers/status":
 		_ = json.NewEncoder(w).Encode(map[string]any{"servers": f.statuses})
 	default:
@@ -214,5 +215,18 @@ func TestInstallingStartIsNotOverwritten(t *testing.T) {
 	e.sweep()
 	if e.status() != "starting" {
 		t.Fatalf("status = %s, want starting while installing", e.status())
+	}
+}
+
+// The node keeps what its agent reports about server isolation.
+func TestNodeRecordsIsolation(t *testing.T) {
+	e := newEnv(t)
+	e.sweep()
+	node, err := e.store.GetNode(context.Background(), e.node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(node.Isolation), `"active":true`) {
+		t.Fatalf("isolation = %s", node.Isolation)
 	}
 }

@@ -25,6 +25,7 @@ const node = {
   os: null,
   arch: null,
   agent_version: null,
+  isolation: null,
 } satisfies Node;
 
 afterEach(cleanup);

@@ -369,6 +369,28 @@ function NodeDialog({
                 )}
               </div>
             )}
+            {node.isolation && (
+              <div className="border-t border-border/50 pt-2 text-xs text-text-secondary">
+                {node.isolation.active ? (
+                  <span>
+                    Servers run as{' '}
+                    <span className="font-mono text-text-primary">{node.isolation.user}</span>, isolated
+                    from the panel
+                  </span>
+                ) : (
+                  <span title={node.isolation.reason}>
+                    <span className={node.isolation.mode === 'off' ? 'text-text-primary' : 'text-yellow-400'}>
+                      {node.isolation.mode === 'off'
+                        ? 'Server isolation is turned off'
+                        : node.isolation.mode === 'enforced'
+                          ? 'Server isolation is required but unavailable — servers will not start'
+                          : 'Servers are not isolated'}
+                    </span>
+                    {node.isolation.reason ? `: ${node.isolation.reason}` : ''}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
         <div className="space-y-1.5">
