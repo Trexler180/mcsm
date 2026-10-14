@@ -172,3 +172,36 @@ func TestScheduledActorNamesItsTask(t *testing.T) {
 		t.Fatalf("actor from context = %+v, %v", got, ok)
 	}
 }
+
+// An operation is driven by one goroutine and read by others (a request
+// answering with it, the event stream); that must be safe, and Done must
+// finish it exactly once.
+func TestOperationIsSafeAcrossGoroutines(t *testing.T) {
+	s, _, serverID := testEnv(t)
+	m := New(s, events.New())
+	op, err := m.Begin(context.Background(), serverID, KindBackup, System, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			f := float64(i) / 50
+			op.Progress("archiving", "working", &f)
+		}
+		op.Done(nil, map[string]any{"ok": true})
+		op.Done(errors.New("late"), nil) // ignored: the first call won
+	}()
+	for i := 0; i < 50; i++ {
+		_ = op.Record()
+	}
+	<-done
+	rec, err := s.GetOperation(context.Background(), op.ID())
+	if err != nil || rec.Status != store.OpSucceeded {
+		t.Fatalf("operation ended %+v (%v), want succeeded", rec, err)
+	}
+	if got := op.Record(); got.Status != store.OpSucceeded {
+		t.Fatalf("in-memory record %s after a second Done", got.Status)
+	}
+}

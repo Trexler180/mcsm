@@ -72,12 +72,12 @@ func (h *FileHandlers) uploadWorldAsync(w http.ResponseWriter, r *http.Request, 
 	op.SetRef(accepted.JobID)
 	frac := 0.0
 	op.Progress("unpacking", "Unpacking "+accepted.Name, &frac)
+	rec := op.Record()
 	go h.followWorldJob(op, c, srv.ID, accepted.JobID, accepted.Name)
 
 	auditOutcome(h.store, r, srv.ID, "world.upload", map[string]any{
 		"name": accepted.Name, "overwrite": r.URL.Query().Get("overwrite") == "true", "operation_id": op.ID(),
 	}, http.StatusAccepted)
-	rec := op.Record()
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status": "unpacking", "name": accepted.Name, "files": accepted.Files, "bytes": accepted.Bytes,
 		"operation": &rec,

@@ -147,9 +147,14 @@ func New(s *store.Store, bus *events.Bus) *Manager {
 // Op is a running operation.
 type Op struct {
 	m      *Manager
-	rec    *store.Operation
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// mu guards rec: the code driving an operation and a request reading it
+	// may be different goroutines. rec.ID never changes after Begin.
+	mu   sync.Mutex
+	rec  *store.Operation
+	done bool
 }
 
 // Options tune Begin.
@@ -279,7 +284,11 @@ func (m *Manager) publish(rec *store.Operation) {
 }
 
 // Record is the operation as last written.
-func (op *Op) Record() store.Operation { return *op.rec }
+func (op *Op) Record() store.Operation {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	return *op.rec
+}
 
 // ID is the operation's id.
 func (op *Op) ID() string { return op.rec.ID }
@@ -291,19 +300,28 @@ func (op *Op) Context() context.Context { return op.ctx }
 // Progress records where the operation has got to. fraction is nil when there
 // is no meaningful measure.
 func (op *Op) Progress(phase, message string, fraction *float64) {
+	op.mu.Lock()
+	if op.done {
+		op.mu.Unlock()
+		return
+	}
 	op.rec.Phase, op.rec.Message, op.rec.Progress = phase, message, fraction
 	op.rec.UpdatedAt = time.Now().UTC()
+	snapshot := *op.rec
+	op.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := op.m.store.UpdateOperationProgress(ctx, op.rec.ID, phase, message, fraction); err != nil {
-		slog.Warn("operations: progress", "operation", op.rec.ID, "error", err)
+	if err := op.m.store.UpdateOperationProgress(ctx, snapshot.ID, phase, message, fraction); err != nil {
+		slog.Warn("operations: progress", "operation", snapshot.ID, "error", err)
 	}
-	op.m.publish(op.rec)
+	op.m.publish(&snapshot)
 }
 
 // SetRef links the operation to the record it produced.
 func (op *Op) SetRef(ref string) {
+	op.mu.Lock()
 	op.rec.RefID = &ref
+	op.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = op.m.store.SetOperationRef(ctx, op.rec.ID, ref)
@@ -316,6 +334,13 @@ func (op *Op) Cancelled() bool { return op.ctx.Err() != nil }
 // context was cancelled, failed otherwise. Safe to call more than once; the
 // first call wins.
 func (op *Op) Done(err error, result any) {
+	op.mu.Lock()
+	if op.done {
+		op.mu.Unlock()
+		return
+	}
+	op.done = true
+	op.mu.Unlock()
 	status := store.OpSucceeded
 	msg := ""
 	switch {
@@ -338,6 +363,9 @@ func (op *Op) Done(err error, result any) {
 	op.m.mu.Unlock()
 	op.cancel()
 	now := time.Now().UTC()
+	op.mu.Lock()
 	op.rec.Status, op.rec.Error, op.rec.FinishedAt, op.rec.UpdatedAt = status, msg, &now, now
-	op.m.publish(op.rec)
+	snapshot := *op.rec
+	op.mu.Unlock()
+	op.m.publish(&snapshot)
 }
