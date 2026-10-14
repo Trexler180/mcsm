@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/mcsm/agent/internal/childenv"
 )
@@ -54,7 +55,7 @@ func openStdinWriter(fifoPath string) (io.WriteCloser, error) {
 
 func processAlive(pid int) bool { return false }
 
-func processMatchesDir(pid int, dir string) bool { return false }
+func processMatchesDir(pid int, dir string, startedAt time.Time) bool { return false }
 
 // terminate kills the process. Windows has no cheap process-group kill here; the
 // single-process kill matches the previous behavior and suffices for local dev.

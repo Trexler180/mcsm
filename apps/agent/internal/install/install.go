@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/mcsm/agent/internal/childenv"
+	"github.com/mcsm/agent/internal/isolation"
 )
 
 const (
@@ -423,7 +424,11 @@ func spigotJar(ctx context.Context, dir, mcVersion, javaBinary string) error {
 		return fmt.Errorf("download BuildTools: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, javaBinary, "-jar", "BuildTools.jar", "--rev", mcVersion)
+	program, argv, err := isolation.Command(javaBinary, []string{"-jar", "BuildTools.jar", "--rev", mcVersion}, tmpDir)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, program, argv...)
 	cmd.Dir = tmpDir
 	// BuildTools is third-party code: it gets the allowlisted environment, not
 	// the agent's, which carries the agent token.
@@ -533,7 +538,12 @@ func neoforgeInstall(ctx context.Context, dir, mcVersion, javaBinary string) err
 // inside dir, then extracts the launch args from the produced run.bat / run.sh
 // and writes them to mcsm-runtime.txt. The agent reads that file at start.
 func runInstallerAndCaptureRuntime(ctx context.Context, dir, installerJar, javaBinary string) error {
-	cmd := exec.CommandContext(ctx, javaBinary, "-jar", installerJar, "--installServer")
+	// Installers are third-party code too: isolated like the server they build.
+	program, argv, err := isolation.Command(javaBinary, []string{"-jar", installerJar, "--installServer"}, dir)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, program, argv...)
 	cmd.Dir = dir
 	// The installer is third-party code; see childenv.
 	cmd.Env = childenv.Build()

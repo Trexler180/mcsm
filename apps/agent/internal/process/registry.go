@@ -45,7 +45,7 @@ func loadRegistry(serverRoot string) map[string]string {
 // saveRegistry writes the registry atomically. A failure is logged and
 // otherwise ignored: the panel can always register a directory again.
 func saveRegistry(serverRoot string, dirs map[string]string) {
-	if err := os.MkdirAll(runtimeRoot(serverRoot), 0o755); err != nil {
+	if err := ensureRuntimeRoot(serverRoot); err != nil {
 		log.Printf("directory registry: %v", err)
 		return
 	}

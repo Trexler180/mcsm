@@ -3,14 +3,20 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mcsm/agent/internal/childenv"
+	"github.com/mcsm/agent/internal/isolation"
 )
 
 // supportsReattach is true on platforms where servers are spawned detached and
@@ -36,7 +42,15 @@ func launch(java string, args []string, dir, logPath, fifoPath string, extraEnv 
 		return nil, err
 	}
 
-	cmd := exec.Command(java, args...)
+	// Isolated, the JVM is started by the launcher as the server user; the
+	// launcher execs it in place, so the pid tracked below is the JVM's.
+	program, argv, err := isolation.Command(java, args, dir)
+	if err != nil {
+		logFile.Close()
+		stdin.Close()
+		return nil, err
+	}
+	cmd := exec.Command(program, argv...)
 	cmd.Dir = dir
 	// Always an explicit environment: a nil Env would inherit the agent's,
 	// including AGENT_TOKEN, and hand it to every mod and plugin.
@@ -114,9 +128,14 @@ func processAlive(pid int) bool {
 
 // processMatchesDir guards against PID reuse at reattach time: the candidate
 // process must have the recorded server directory as its working directory
-// (every server is launched with cmd.Dir = its directory).
-func processMatchesDir(pid int, dir string) bool {
+// (every server is launched with cmd.Dir = its directory). A server running as
+// the isolated server user hides its working directory from the agent; it is
+// then identified by when it started instead.
+func processMatchesDir(pid int, dir string, startedAt time.Time) bool {
 	link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if errors.Is(err, fs.ErrPermission) {
+		return processStartedAt(pid, startedAt)
+	}
 	if err != nil {
 		return false
 	}
@@ -146,4 +165,61 @@ func terminate(pid, pgid int, force bool) error {
 		return syscall.Kill(pid, sig)
 	}
 	return nil
+}
+
+// startSlack is how far a process's start time may be from the time the agent
+// recorded for it: the record is written just after the launch.
+const startSlack = 10 * time.Second
+
+// processStartedAt reports whether pid started at about the recorded time,
+// read from /proc/<pid>/stat (readable for any user's process) and the boot
+// time. A reused pid belongs to a process started later.
+func processStartedAt(pid int, startedAt time.Time) bool {
+	if startedAt.IsZero() {
+		return false
+	}
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// Fields after the parenthesised command name; starttime is field 22.
+	i := strings.LastIndexByte(string(stat), ')')
+	if i < 0 {
+		return false
+	}
+	fields := strings.Fields(string(stat[i+1:]))
+	if len(fields) < 20 {
+		return false
+	}
+	ticks, err := strconv.ParseInt(fields[19], 10, 64)
+	if err != nil {
+		return false
+	}
+	boot, ok := bootTime()
+	if !ok {
+		return false
+	}
+	started := boot.Add(time.Duration(ticks) * time.Second / clockTicks)
+	diff := started.Sub(startedAt)
+	return diff > -startSlack && diff < startSlack
+}
+
+// clockTicks is USER_HZ, which Linux fixes at 100 for /proc.
+const clockTicks = 100
+
+func bootTime() (time.Time, bool) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
+			sec, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return time.Time{}, false
+			}
+			return time.Unix(sec, 0), true
+		}
+	}
+	return time.Time{}, false
 }

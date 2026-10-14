@@ -79,7 +79,7 @@ func (m *Manager) Reattach() {
 		return
 	}
 	for _, st := range listRunStates(m.serverRoot) {
-		if !processAlive(st.PID) || !processMatchesDir(st.PID, st.Directory) {
+		if !processAlive(st.PID) || !processMatchesDir(st.PID, st.Directory, st.StartedAt) {
 			clearRunState(m.serverRoot, st.ID)
 			continue
 		}

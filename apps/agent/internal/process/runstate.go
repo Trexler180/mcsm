@@ -64,7 +64,10 @@ func statePath(serverRoot, id string) string {
 // nothing and keeps a live credential off a world-readable path.
 func writeRunState(serverRoot string, st runState) error {
 	dir := runtimeDir(serverRoot, st.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureRuntimeRoot(serverRoot); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
@@ -120,4 +123,15 @@ func listRunStates(serverRoot string) []runState {
 // Called on a clean stop or when a reattach finds the process already dead.
 func clearRunState(serverRoot, id string) {
 	_ = os.RemoveAll(runtimeDir(serverRoot, id))
+}
+
+// ensureRuntimeRoot creates .mcsm-run readable by the agent alone. It holds
+// every server's console log and helper-mod launch token, which no server —
+// least of all one isolated as another user — may read.
+func ensureRuntimeRoot(serverRoot string) error {
+	root := runtimeRoot(serverRoot)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(root, 0o700)
 }

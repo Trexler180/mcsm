@@ -258,10 +258,13 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	// Backups go in <server_dir>/../mcsm-backups/<server_id>/<backup_id>.zip
 	parent := filepath.Dir(src)
 	backupDir := filepath.Join(parent, "mcsm-backups", id)
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	// The agent's alone: a server, isolated or not, has no business reading or
+	// rewriting another server's backups.
+	if err := os.MkdirAll(backupDir, 0o750); err != nil {
 		writeError(w, http.StatusInternalServerError, "create backup dir: "+err.Error())
 		return
 	}
+	_ = os.Chmod(filepath.Join(parent, "mcsm-backups"), 0o750)
 	zipPath := filepath.Join(backupDir, backupID+".zip")
 
 	skipRoots := []string{

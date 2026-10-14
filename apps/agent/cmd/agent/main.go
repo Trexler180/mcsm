@@ -20,6 +20,7 @@ import (
 	"github.com/mcsm/agent/internal/api/handlers"
 	"github.com/mcsm/agent/internal/hardening"
 	"github.com/mcsm/agent/internal/helpermod"
+	"github.com/mcsm/agent/internal/isolation"
 	"github.com/mcsm/agent/internal/link"
 	"github.com/mcsm/agent/internal/metrics"
 	"github.com/mcsm/agent/internal/process"
@@ -134,6 +135,15 @@ func main() {
 
 	serverRoot := defaultServerRoot()
 	handlers.DiskPath = serverRoot
+	iso := isolation.Configure(isolation.FromEnv(serverRoot))
+	switch {
+	case iso.Active:
+		log.Printf("servers run as %q, isolated from the agent (mode %s)", iso.User, iso.Mode)
+	case iso.Mode == isolation.Enforced:
+		log.Printf("WARNING: server isolation is required but unavailable, so servers will not start: %s", iso.Reason)
+	default:
+		log.Printf("servers run as the agent's own user: %s", iso.Reason)
+	}
 	mgr := process.NewManager(serverRoot)
 	collector := metrics.NewCollector()
 
