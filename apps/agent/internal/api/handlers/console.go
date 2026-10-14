@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
@@ -25,8 +27,19 @@ type wsMsg struct {
 	Data json.RawMessage `json:"data"`
 }
 
+// Console streams a server's console and accepts commands for it.
+//
+// Frames sent: {"type":"hello","data":{"run_id","resumed","status"}} when a
+// run's stream begins, then {"type":"line","data":{line,stream,ts,seq}} and
+// {"type":"status","data":{"status"}}. A client that reconnects with
+// ?run=<run_id>&since=<seq> receives only what it missed (resumed=true); a
+// hello with resumed=false means "start over": clear what you show, the run's
+// history follows. The socket stays open while the server is stopped, and the
+// next run's hello arrives when it starts.
 func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	runID := r.URL.Query().Get("run")
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 
 	conn, err := acceptAPISocket(w, r)
 	if err != nil {
@@ -35,26 +48,8 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 
 	ctx := r.Context()
-
-	ch, unsub, err := h.mgr.Subscribe(id)
-	if err != nil {
-		// server not running — still allow connection, send offline status
-		if err := wsjson.Write(ctx, conn, map[string]any{
-			"type": "status",
-			"data": map[string]string{"status": "offline"},
-		}); err != nil {
-			return
-		}
-		conn.Close(websocket.StatusNormalClosure, "server offline")
-		return
-	}
-	defer unsub()
-
-	writeStatus := func(s process.Status) error {
-		return wsjson.Write(ctx, conn, map[string]any{
-			"type": "status",
-			"data": map[string]string{"status": string(s)},
-		})
+	write := func(typ string, data any) error {
+		return wsjson.Write(ctx, conn, map[string]any{"type": typ, "data": data})
 	}
 
 	// Commands are executed on their own goroutine rather than inline in the
@@ -66,8 +61,7 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 	// must execute in the order they were typed, and fanning out would let a slow
 	// command be overtaken by the next one. The queue is bounded, so a mod that
 	// has stopped answering eventually applies backpressure to the reader
-	// instead of growing without limit — that is the extreme case, not the
-	// one-slow-command case this exists to handle.
+	// instead of growing without limit.
 	commands := make(chan string, 32)
 	go func() {
 		for cmd := range commands {
@@ -77,8 +71,6 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 			_, _ = h.mgr.ExecCommand(ctx, id, cmd)
 		}
 	}()
-
-	// reader: commands from client
 	go func() {
 		defer close(commands)
 		for {
@@ -101,50 +93,84 @@ func (h *ConsoleHandlers) Console(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Tell the client the current status immediately, so a connection (or a
-	// reconnect after a restart spawned a fresh instance) learns the server is
-	// starting/online without waiting for a log line. The agent's console events
-	// are log lines only, so a status change — most importantly the flip to
-	// "online" once the server finishes booting — is surfaced by polling.
-	lastStatus := h.mgr.Status(id).Status
-	if err := writeStatus(lastStatus); err != nil {
-		return
-	}
-	statusTicker := time.NewTicker(time.Second)
-	defer statusTicker.Stop()
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
+	pollTicker := time.NewTicker(time.Second)
+	defer pollTicker.Stop()
 
-	// writer: events to client
+	reportedOffline := false
 	for {
-		select {
-		case event, ok := <-ch:
-			if !ok {
-				// process exited
-				_ = writeStatus(h.mgr.Status(id).Status)
-				conn.Close(websocket.StatusNormalClosure, "server stopped")
-				return
-			}
-			if err := wsjson.Write(ctx, conn, map[string]any{
-				"type": "line",
-				"data": event,
-			}); err != nil {
-				return
-			}
-		case <-statusTicker.C:
-			if s := h.mgr.Status(id).Status; s != lastStatus {
-				lastStatus = s
-				if err := writeStatus(s); err != nil {
+		stream, err := h.mgr.SubscribeConsole(id, runID, since)
+		if err != nil {
+			// Not running: say so once, then wait for a start.
+			if !reportedOffline {
+				if err := write("status", map[string]string{"status": string(process.StatusOffline)}); err != nil {
 					return
 				}
+				reportedOffline = true
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-pingTicker.C:
+				if err := conn.Ping(ctx); err != nil {
+					return
+				}
+			case <-pollTicker.C:
+			}
+			continue
+		}
+		reportedOffline = false
+		if !h.streamRun(ctx, id, stream, write, conn, pingTicker, pollTicker) {
+			stream.Cancel()
+			return
+		}
+		stream.Cancel()
+		// The run ended. Whatever starts next is a new run, streamed from its
+		// beginning.
+		runID, since = "", 0
+	}
+}
+
+// streamRun forwards one run's console until it ends (true) or the client goes
+// away (false).
+func (h *ConsoleHandlers) streamRun(ctx context.Context, id string, stream *process.ConsoleStream,
+	write func(string, any) error, conn *websocket.Conn, pingTicker, pollTicker *time.Ticker) bool {
+	lastStatus := h.mgr.Status(id).Status
+	if err := write("hello", map[string]any{
+		"run_id": stream.RunID, "resumed": stream.Resumed, "status": string(lastStatus),
+	}); err != nil {
+		return false
+	}
+	// The status as well, for clients that predate the hello frame. The
+	// agent's console events are log lines only, so a status change — most
+	// importantly the flip to "online" once the server finishes booting — is
+	// surfaced by polling.
+	if err := write("status", map[string]string{"status": string(lastStatus)}); err != nil {
+		return false
+	}
+	for {
+		select {
+		case event, ok := <-stream.Events:
+			if !ok {
+				return write("status", map[string]string{"status": string(h.mgr.Status(id).Status)}) == nil
+			}
+			if err := write("line", event); err != nil {
+				return false
+			}
+		case <-pollTicker.C:
+			if s := h.mgr.Status(id).Status; s != lastStatus {
+				lastStatus = s
+				if err := write("status", map[string]string{"status": string(s)}); err != nil {
+					return false
+				}
+			}
+		case <-pingTicker.C:
+			if err := conn.Ping(ctx); err != nil {
+				return false
 			}
 		case <-ctx.Done():
-			return
-		case <-pingTicker.C:
-			// keepalive ping
-			if err := conn.Ping(ctx); err != nil {
-				return
-			}
+			return false
 		}
 	}
 }

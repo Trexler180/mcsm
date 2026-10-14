@@ -7,10 +7,19 @@ export type WsMessage = {
 
 export type ConsoleMessage = {
   type: 'line'
-  data: { line: string; stream: 'stdout' | 'stderr'; ts: number }
+  data: { line: string; stream: 'stdout' | 'stderr'; ts: number; seq?: number }
 } | {
   type: 'status'
   data: { status: string }
+} | {
+  // A run's stream begins. resumed=false means start over: the run's history
+  // follows, so clear what is shown first. ServerConsole turns that into a
+  // 'reset' message.
+  type: 'hello'
+  data: { run_id: string; resumed: boolean; status: string }
+} | {
+  type: 'reset'
+  data: null
 }
 
 type Listener = (msg: WsMessage) => void
@@ -22,6 +31,10 @@ export class ServerConsole {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectDelay = 1000
   private closed = false
+  // Where this console is in the server's current run, so a reconnect asks
+  // only for what it missed rather than replaying the history again.
+  private runId = ''
+  private lastSeq = 0
 
   constructor(serverId: string) {
     this.serverId = serverId
@@ -37,7 +50,10 @@ export class ServerConsole {
     if (this.closed || !ticket) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const url = `${protocol}//${host}${consolePath}?ticket=${encodeURIComponent(ticket)}`
+    const resume = this.runId && this.lastSeq > 0
+      ? `&run=${encodeURIComponent(this.runId)}&since=${this.lastSeq}`
+      : ''
+    const url = `${protocol}//${host}${consolePath}?ticket=${encodeURIComponent(ticket)}${resume}`
 
     this.ws = new WebSocket(url)
 
@@ -48,6 +64,7 @@ export class ServerConsole {
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as WsMessage
+        if (!this.track(msg)) return
         this.listeners.forEach((l) => l(msg))
       } catch {}
     }
@@ -64,6 +81,28 @@ export class ServerConsole {
     this.ws.onerror = () => {
       this.ws?.close()
     }
+  }
+
+  // track follows the run and line position, and reports whether a message
+  // should reach listeners (a line already shown should not).
+  private track(msg: WsMessage): boolean {
+    if (msg.type === 'hello') {
+      const d = msg.data as { run_id: string; resumed: boolean }
+      if (!d.resumed) {
+        this.lastSeq = 0
+        this.listeners.forEach((l) => l({ type: 'reset', data: null }))
+      }
+      this.runId = d.run_id
+      return true
+    }
+    if (msg.type === 'line') {
+      const seq = (msg.data as { seq?: number }).seq
+      if (seq !== undefined) {
+        if (seq <= this.lastSeq) return false
+        this.lastSeq = seq
+      }
+    }
+    return true
   }
 
   send(command: string) {

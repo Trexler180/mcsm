@@ -122,6 +122,9 @@ type ConsoleEvent struct {
 	Line   string `json:"line"`
 	Stream string `json:"stream"`
 	TS     int64  `json:"ts"`
+	// Seq numbers the lines of one run from 1, so a reconnecting client can
+	// ask for only what it missed.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 type StatusInfo struct {
@@ -207,6 +210,7 @@ type Instance struct {
 
 	histMu  sync.Mutex
 	history []ConsoleEvent
+	seq     int64 // last Seq handed out; guarded by histMu
 
 	playersMu sync.Mutex
 	players   map[string]time.Time
@@ -477,7 +481,8 @@ func reattachInstance(serverRoot string, st runState, onJoinDenied func(serverID
 	now := time.Now().UnixMilli()
 	inst.histMu.Lock()
 	for _, line := range seeded {
-		inst.history = append(inst.history, ConsoleEvent{Line: line, Stream: "stdout", TS: now})
+		inst.seq++
+		inst.history = append(inst.history, ConsoleEvent{Line: line, Stream: "stdout", TS: now, Seq: inst.seq})
 	}
 	inst.histMu.Unlock()
 
@@ -868,13 +873,16 @@ func (inst *Instance) RefreshPlayers(timeout time.Duration) []Player {
 
 func (inst *Instance) broadcastLoop() {
 	for event := range inst.broadcastCh {
+		// Numbered, recorded and fanned out under one lock, so a subscriber
+		// registering at the same moment sees each line exactly once and in
+		// order: in the history it is handed, or live, never neither.
 		inst.histMu.Lock()
+		inst.seq++
+		event.Seq = inst.seq
 		inst.history = append(inst.history, event)
 		if len(inst.history) > ringCapacity {
 			inst.history = inst.history[len(inst.history)-ringCapacity:]
 		}
-		inst.histMu.Unlock()
-
 		inst.subsMu.Lock()
 		for ch := range inst.subs {
 			select {
@@ -883,6 +891,7 @@ func (inst *Instance) broadcastLoop() {
 			}
 		}
 		inst.subsMu.Unlock()
+		inst.histMu.Unlock()
 	}
 
 	// broadcastCh closed by the tailer after finalize: tear down subscribers so
@@ -1062,37 +1071,42 @@ func (inst *Instance) sendCommand(cmd string) error {
 }
 
 func (inst *Instance) subscribe() (<-chan ConsoleEvent, func()) {
+	ch, unsub, _ := inst.subscribeSince(0)
+	return ch, unsub
+}
+
+// subscribeSince streams the console from just after line since. When those
+// lines are no longer in the history (or since is 0), it replays the whole
+// history instead and reports resumed=false, so the client starts over.
+func (inst *Instance) subscribeSince(since int64) (<-chan ConsoleEvent, func(), bool) {
 	ch := make(chan ConsoleEvent, consoleBufSize)
 
 	// Dead instance: hand back an already-closed channel so the consumer ends.
 	if inst.exited() {
 		close(ch)
-		return ch, func() {}
+		return ch, func() {}, false
 	}
 
 	inst.histMu.Lock()
-	hist := make([]ConsoleEvent, len(inst.history))
-	copy(hist, inst.history)
-	inst.histMu.Unlock()
-
+	resumed := since > 0 && since <= inst.seq &&
+		(len(inst.history) == 0 || inst.history[0].Seq <= since+1)
+	// The buffer holds the whole ring, so this never blocks, and the history
+	// goes in ahead of anything live.
+	for _, e := range inst.history {
+		if !resumed || e.Seq > since {
+			ch <- e
+		}
+	}
 	inst.subsMu.Lock()
 	inst.subs[ch] = struct{}{}
 	inst.subsMu.Unlock()
-
-	go func() {
-		for _, e := range hist {
-			select {
-			case ch <- e:
-			default:
-			}
-		}
-	}()
+	inst.histMu.Unlock()
 
 	return ch, func() {
 		inst.subsMu.Lock()
 		delete(inst.subs, ch)
 		inst.subsMu.Unlock()
-	}
+	}, resumed
 }
 
 func (inst *Instance) statusInfo() StatusInfo {

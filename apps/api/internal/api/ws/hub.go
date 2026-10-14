@@ -6,6 +6,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -106,7 +109,7 @@ func ProxyConsole(w http.ResponseWriter, r *http.Request, agentClient *agent.Cli
 		return
 	}
 
-	agentURL := agentClient.WebSocketURL("/agent/v1/servers/" + serverID + "/console")
+	agentURL := agentClient.WebSocketURL("/agent/v1/servers/"+serverID+"/console") + resumeQuery(r)
 	agentConn, _, err := websocket.Dial(ctx, agentURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + agentClient.Token}},
 	})
@@ -219,4 +222,19 @@ func closeWhenPermissionRevoked(ctx context.Context, cancel context.CancelFunc, 
 			}
 		}
 	}
+}
+
+var runIDRe = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+
+// resumeQuery passes a reconnecting console's position on to the agent: the
+// run it was watching and the last line it has. Only those two, validated; the
+// browser's ticket stays here.
+func resumeQuery(r *http.Request) string {
+	q := r.URL.Query()
+	run, since := q.Get("run"), q.Get("since")
+	n, err := strconv.ParseInt(since, 10, 64)
+	if !runIDRe.MatchString(run) || err != nil || n < 1 {
+		return ""
+	}
+	return "?" + url.Values{"run": {run}, "since": {strconv.FormatInt(n, 10)}}.Encode()
 }

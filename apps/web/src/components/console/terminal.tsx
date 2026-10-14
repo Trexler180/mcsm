@@ -187,6 +187,11 @@ export function ServerTerminal({ serverId }: TerminalProps) {
     term.writeln("\x1b[2m--- Connecting… ---\x1b[0m");
 
     const unsub = sc.on((msg) => {
+      if (msg.type === "reset") {
+        // A new run, or a gap too old to fill: its history follows.
+        term.clear();
+        return;
+      }
       if (msg.type === "line") {
         const d = msg.data as { line: string };
         term.writeln(d.line);

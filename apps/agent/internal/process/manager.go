@@ -305,6 +305,38 @@ func (m *Manager) ExecCommand(ctx context.Context, id, cmd string) (ExecOutcome,
 	return ExecOutcome{}, nil
 }
 
+// ConsoleStream is a console subscription from a point in one run.
+type ConsoleStream struct {
+	Events <-chan ConsoleEvent
+	Cancel func()
+	// RunID names the run being streamed; Resumed says the stream continues
+	// from the line asked for rather than starting the run's history over.
+	RunID   string
+	Resumed bool
+}
+
+// SubscribeConsole streams a running server's console. A client resuming the
+// same run passes its run id and the last line it has; anything else (another
+// run, lines no longer in memory) starts over with the whole history.
+func (m *Manager) SubscribeConsole(id, runID string, since int64) (*ConsoleStream, error) {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+	// An instance whose process has exited may linger briefly; its run is
+	// over, so there is nothing to stream until the next one starts.
+	if !ok || inst.exited() {
+		return nil, errNotRunning
+	}
+	inst.mu.RLock()
+	current := inst.runID
+	inst.mu.RUnlock()
+	if runID != current {
+		since = 0
+	}
+	ch, unsub, resumed := inst.subscribeSince(since)
+	return &ConsoleStream{Events: ch, Cancel: unsub, RunID: current, Resumed: resumed}, nil
+}
+
 func (m *Manager) Subscribe(id string) (<-chan ConsoleEvent, func(), error) {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
