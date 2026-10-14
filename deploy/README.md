@@ -20,6 +20,11 @@ deploy's report, and the next `-Part host` replaces it (keeping a backup).
 | `nginx` | `nginx/mcsm-dashboard.conf` | `/etc/nginx/snippets/mcsm-dashboard.conf` | `nginx -t`, then reload |
 | | `nginx/mcsm-ws-upgrade.conf` | `/etc/nginx/conf.d/mcsm-ws-upgrade.conf` | |
 | `api-env` | `systemd/mcsm-api.service.d/20-provisioned.conf` | `/etc/systemd/system/mcsm-api.service.d/` | API restart |
+| `api-hardening` | `systemd/mcsm-api.service.d/30-hardening.conf` | `/etc/systemd/system/mcsm-api.service.d/` | API restart |
+| `isolation` | `systemd/mcsm-agent.service.d/30-isolation.conf` | `/etc/systemd/system/mcsm-agent.service.d/` | agent restart |
+| | the `mcsm-mc` system user, and `mcsm` added to its group | `/etc/passwd`, `/etc/group` | agent restart |
+| | `mcsm-launch`, built by `Deploy-Dashboard.ps1` into the bundle | `/usr/local/libexec/mcsm/mcsm-launch` (root:mcsm 0750, `cap_setuid,cap_setgid+ep`) | next server start |
+| | the API's data directory (`DATABASE_PATH`'s) closed to other users | `chmod 0700` | immediately |
 | `reboot` | `systemd/mcsm-agent.service.d/20-allow-reboot.conf` | `/etc/systemd/system/mcsm-agent.service.d/` | agent restart |
 | | `polkit/50-mcsm-reboot.rules` (`.pkla` on polkit 0.105) | `/etc/polkit-1/rules.d/` | immediately |
 | `ssh-watchdog` | `ssh-watchdog/*` | `/usr/local/sbin/ssh-watchdog`, `/etc/systemd/system/` | timer enabled |
@@ -33,8 +38,30 @@ Plus checks with nothing to install:
 - **Effective settings** — read from the running processes, so a pending
   restart or a `secrets.env` override is reported rather than assumed away.
 - **Reboot grant** — logind must answer `yes` to `CanReboot` for the `mcsm` user.
+- **Server isolation** — `mcsm-mc` must be able to reach the server root
+  (`AGENT_SERVER_ROOT`) and must not be able to reach the API's data
+  directory. Provisioning never changes the directories above the server
+  root; it reports the one that blocks the way.
 - **Boot** — `mcsm-api`, `mcsm-agent`, nginx, and SSH must be enabled, or the
   dashboard (and remote access) will not come back after a reboot.
+
+### Server isolation and the opt-out
+
+With the `isolation` component applied, the agent runs every Minecraft server
+(and the installers that build them) as `mcsm-mc` through `mcsm-launch`, which
+can switch to that one user and never to root. Mods and plugins then cannot
+read the panel's database, its encryption key, `secrets.env`, or other
+servers' launch tokens. See `docs/security.md`.
+
+To opt out on a host, add `AGENT_ISOLATE_SERVERS=0` to
+`/srv/dashboard/data/secrets.env` and restart the agent: servers then run as
+`mcsm` again, with everything `mcsm` can reach. Provisioning reports the
+opt-out instead of treating it as drift. Servers already running keep the user
+they started with until their next start.
+
+`deploy/isolation_e2e.sh` checks the whole arrangement on a throwaway Linux
+host (a container): the launcher, the capabilities, what a server can and
+cannot read, and that the agent can still manage and stop it.
 
 Not managed, deliberately: `secrets.env` (secrets never leave the host), the
 `mcsm-*.service` units themselves and their pre-existing `10-killmode.conf`
@@ -53,7 +80,9 @@ drop-in, and the nginx site file.
 - **SSH is never restarted.** The watchdog drop-in only changes how systemd
   reacts the next time sshd exits.
 - **Root-only path.** The bundle is uploaded to and run from `/root/mcsm-deploy`,
-  never from a directory the `mcsm` user can write.
+  never from a directory the `mcsm` user can write. That includes the
+  launcher: it is built into the bundle, not shipped with the agent binary,
+  because provisioning gives it capabilities.
 - **Consistent with the deploy.** `apply` refuses to run if the bundle's
   `APP_BASE_PATH` or nginx location disagree with the web base the deploy built.
 

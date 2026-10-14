@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for provision.sh. Runs the real script against a throwaway directory
 # standing in for the host, with stand-ins for systemctl, nginx, curl, runuser,
-# and pkaction that record what they were asked to do. Needs only bash and
+# pkaction, and the user and capability tools that record what they were asked
+# to do. Needs only bash and
 # coreutils, so it runs on Linux and in Git Bash.
 #
 #   bash deploy/provision_test.sh
@@ -43,8 +44,17 @@ EOF
     cp "$HERE/nginx/mcsm-ws-upgrade.conf" "$R/etc/nginx/conf.d/mcsm-ws-upgrade.conf"
 
     # Running processes start with only what secrets.env gives them.
-    printf 'JWT_SECRET=x\0' > "$T/proc/101/environ"
-    printf 'AGENT_TOKEN=x\0' > "$T/proc/102/environ"
+    printf 'JWT_SECRET=x\nDATABASE_PATH=/srv/dashboard/data/mcsm.db\n' > "$T/state/base-mcsm-api.service"
+    printf 'AGENT_TOKEN=x\nAGENT_SERVER_ROOT=/srv/dashboard/servers\n' > "$T/state/base-mcsm-agent.service"
+    tr '\n' '\0' < "$T/state/base-mcsm-api.service" > "$T/proc/101/environ"
+    tr '\n' '\0' < "$T/state/base-mcsm-agent.service" > "$T/proc/102/environ"
+    mkdir -p "$R/srv/dashboard/data" "$R/srv/dashboard/servers"
+
+    # The host's users: the agent's, without the server user yet.
+    echo mcsm > "$T/state/users"
+    : > "$T/state/groups-mcsm"
+    # The launcher Deploy-Dashboard.ps1 would have built into the bundle.
+    printf 'launcher-binary' > "$T/mcsm-launch"
 
     make_shims
 }
@@ -52,14 +62,17 @@ EOF
 # A restart re-reads the unit's drop-ins into its process environment, the way
 # systemd would; secrets.env overrides are simulated with state/override-*.
 restart_env() { # unit pid
-    local env=""
-    local f
+    local f lines="$T/state/env-$1"
+    : > "$lines"
+    [ -f "$T/state/base-$1" ] && cat "$T/state/base-$1" >> "$lines"
     for f in "$R/etc/systemd/system/$1.d/"*.conf; do
         [ -f "$f" ] || continue
-        env+=$(sed -n 's/^Environment=//p' "$f" | tr '\n' '\0')
+        sed -n 's/^Environment=//p' "$f" >> "$lines"
     done
-    [ -f "$T/state/override-$1" ] && env+=$(tr '\n' '\0' < "$T/state/override-$1")
-    printf '%s\0' "$env" > "$T/proc/$2/environ"
+    [ -f "$T/state/override-$1" ] && cat "$T/state/override-$1" >> "$lines"
+    # A later assignment of a name replaces an earlier one, as in systemd.
+    awk -F= '{ if (!($1 in v)) o[++n] = $1; v[$1] = $0 } END { for (i = 1; i <= n; i++) print v[o[i]] }' "$lines" |
+        tr '\n' '\0' > "$T/proc/$2/environ"
 }
 
 make_shims() {
@@ -110,12 +123,57 @@ EOF
 
     cat > "$T/bin/runuser" <<EOF
 #!/usr/bin/env bash
+echo "runuser \$*" >> '$T/calls'
+# "runuser -u mcsm-mc -- test -x DIR": can the server user reach DIR?
+if [ "\$4" = test ]; then
+  case "\$6" in
+    */srv/dashboard/data) [ ! -e '$T/state/data-closed' ] ;;
+    *) [ ! -e '$T/state/servers-unreachable' ] ;;
+  esac
+  exit
+fi
 if [ -f '$R/etc/polkit-1/rules.d/50-mcsm-reboot.rules' ] ||
    [ -f '$R/etc/polkit-1/localauthority/50-local.d/50-mcsm-reboot.pkla' ]; then
   echo 's "yes"'
 else
   echo 's "challenge"'
 fi
+EOF
+
+    # Users and groups, from state/users and state/groups-<user>.
+    cat > "$T/bin/getent" <<EOF
+#!/usr/bin/env bash
+grep -qx "\$2" '$T/state/users'
+EOF
+    cat > "$T/bin/id" <<EOF
+#!/usr/bin/env bash
+echo "\${@: -1} \$(tr '\\n' ' ' < '$T/state/groups-'\${@: -1} 2>/dev/null)"
+EOF
+    cat > "$T/bin/useradd" <<EOF
+#!/usr/bin/env bash
+echo "useradd \$*" >> '$T/calls'
+echo "\${@: -1}" >> '$T/state/users'
+EOF
+    cat > "$T/bin/usermod" <<EOF
+#!/usr/bin/env bash
+echo "usermod \$*" >> '$T/calls'
+echo "\$2" >> '$T/state/groups-'"\$3"
+EOF
+    # File capabilities, kept in state/caps-<file name>.
+    cat > "$T/bin/setcap" <<EOF
+#!/usr/bin/env bash
+echo "setcap \$*" >> '$T/calls'
+echo "\$2 \$1" > '$T/state/caps-'"\$(basename "\$2")"
+EOF
+    cat > "$T/bin/getcap" <<EOF
+#!/usr/bin/env bash
+cat '$T/state/caps-'"\$(basename "\$1")" 2>/dev/null
+EOF
+    # Closing the data directory is what the server user's probe sees.
+    cat > "$T/bin/chmod" <<EOF
+#!/usr/bin/env bash
+echo "chmod \$*" >> '$T/calls'
+case "\${@: -1}" in */srv/dashboard/data) touch '$T/state/data-closed' ;; esac
 EOF
 
     cat > "$T/bin/pkaction" <<EOF
@@ -128,6 +186,7 @@ EOF
 run() { # mode [args...] -> sets OUT and CODE
     OUT=$(PATH="$T/bin:$PATH" PROVISION_ROOT="$R" PROVISION_PROC="$T/proc" \
         PROVISION_DOMAIN_FILE="$T/domain" PROVISION_WAIT_SECONDS=1 \
+        PROVISION_LAUNCHER_SRC="${LAUNCHER_SRC_OVERRIDE:-$T/mcsm-launch}" \
         bash "$PROVISION" "$@" 2>&1)
     CODE=$?
 }
@@ -260,6 +319,69 @@ test_usage_errors() {
     assert_eq "$CODE" 64 "unknown mode"
     run check --base-path
     assert_eq "$CODE" 64 "missing value"
+}
+
+# ── Server isolation ─────────────────────────────────────────────
+
+test_apply_sets_up_server_isolation() {
+    new_host
+    run apply
+    assert_eq "$CODE" 0 "apply status"
+    assert_contains "$OUT" "created the server user mcsm-mc" "user"
+    assert_contains "$OUT" "added mcsm to the mcsm-mc group" "group"
+    assert_contains "$OUT" "installed /usr/local/libexec/mcsm/mcsm-launch" "launcher"
+    assert_contains "$OUT" "closed the API's data directory" "data dir"
+    assert_same "$T/mcsm-launch" "$R/usr/local/libexec/mcsm/mcsm-launch" "launcher copied"
+    assert_contains "$(calls)" "setcap cap_setuid,cap_setgid+ep" "capabilities"
+    assert_contains "$(calls)" "useradd --system --user-group" "system user"
+    assert_same "$HERE/systemd/mcsm-agent.service.d/30-isolation.conf" \
+        "$R/etc/systemd/system/mcsm-agent.service.d/30-isolation.conf" "agent drop-in"
+    assert_same "$HERE/systemd/mcsm-api.service.d/30-hardening.conf" \
+        "$R/etc/systemd/system/mcsm-api.service.d/30-hardening.conf" "api drop-in"
+    assert_contains "$(calls)" "systemctl restart mcsm-agent.service" "agent picks it up"
+    assert_contains "$OUT" "ok: host matches the repo" "converged"
+
+    reset_calls
+    run apply
+    assert_eq "$CODE" 0 "second apply"
+    assert_contains "$OUT" "nothing to change" "idempotent"
+    assert_not_contains "$(calls)" "useradd" "user created once"
+    assert_not_contains "$(calls)" "setcap" "capabilities set once"
+    assert_not_contains "$(calls)" "restart" "no restart when nothing changed"
+}
+
+# The deliberate opt-out is reported, not treated as drift.
+test_isolation_opt_out_is_honoured() {
+    new_host
+    echo "AGENT_ISOLATE_SERVERS=0" > "$T/state/override-mcsm-agent.service"
+    run apply
+    assert_eq "$CODE" 0 "apply status"
+    assert_contains "$OUT" "isolation: turned off on this host (AGENT_ISOLATE_SERVERS=0)" "reported"
+    assert_not_contains "$OUT" "does not have AGENT_ISOLATE_SERVERS=1" "not drift"
+}
+
+test_missing_launcher_is_reported() {
+    new_host
+    LAUNCHER_SRC_OVERRIDE=$T/no-such-launcher run apply
+    assert_eq "$CODE" 1 "apply status"
+    assert_contains "$OUT" "the bundle has no launcher" "explains"
+}
+
+test_unreachable_server_root_is_reported() {
+    new_host
+    touch "$T/state/servers-unreachable"
+    run apply
+    assert_contains "$OUT" "mcsm-mc cannot reach the server root /srv/dashboard/servers" "explains"
+}
+
+test_server_root_inside_data_dir_is_refused() {
+    new_host
+    printf 'AGENT_TOKEN=x\nAGENT_SERVER_ROOT=/srv/dashboard/data/servers\n' > "$T/state/base-mcsm-agent.service"
+    tr '\n' '\0' < "$T/state/base-mcsm-agent.service" > "$T/proc/102/environ"
+    run apply
+    assert_eq "$CODE" 1 "apply status"
+    assert_contains "$OUT" "is inside the API's data directory" "explains"
+    assert_not_contains "$(calls)" "chmod 0700" "left the data directory open rather than cut off the servers"
 }
 
 tests=$(declare -F | awk '{print $3}' | grep '^test_')

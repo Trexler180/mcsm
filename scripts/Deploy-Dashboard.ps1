@@ -11,7 +11,8 @@
     a health check. Nothing is deployed unless every build step succeeds.
 
     Host configuration outside /srv/dashboard — the nginx snippets, systemd
-    drop-ins, the polkit reboot grant, the SSH watchdog — lives in deploy/ and
+    drop-ins, the polkit reboot grant, the SSH watchdog, server isolation (the
+    mcsm-mc user and the mcsm-launch helper, built here) — lives in deploy/ and
     is applied by deploy/provision.sh. Every deploy ships that bundle and
     reports drift between the host and the repo; -Provision (or -Part host)
     converges the host to it. Secrets stay in /srv/dashboard/data/secrets.env
@@ -187,13 +188,27 @@ if ($parts.Count -eq 0 -and -not $doProvision) { throw "nothing to deploy" }
 $provStage = Join-Path $Stage 'provision'
 if (Test-Path $provStage) { Remove-Item -Recurse -Force $provStage }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-Get-ChildItem $ProvisionSrc -Recurse -File | Where-Object { $_.Name -notlike '*_test.sh' } | ForEach-Object {
+Get-ChildItem $ProvisionSrc -Recurse -File | Where-Object { $_.Name -notlike '*_test.sh' -and $_.Name -ne 'isolation_e2e.sh' } | ForEach-Object {
     $rel = $_.FullName.Substring($ProvisionSrc.Length).TrimStart('\', '/')
     $dest = Join-Path $provStage $rel
     New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
     $text = [IO.File]::ReadAllText($_.FullName) -replace "`r`n", "`n" -replace "`r", "`n"
     [IO.File]::WriteAllText($dest, $text, $utf8)
 }
+# The server-isolation launcher travels in this root-only bundle, never with
+# the agent binary: provision.sh gives it cap_setuid/cap_setgid, so it must
+# not pass through anything the mcsm user can write.
+Step "Building the server launcher (linux/amd64)"
+$env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
+Push-Location "$RepoPath\apps\agent"
+try {
+    go build -trimpath -ldflags='-s -w' -o (Join-Path $provStage 'launcher/mcsm-launch') ./cmd/mcsm-launch
+    if ($LASTEXITCODE) { throw "launcher build failed" }
+} finally {
+    Pop-Location
+    Remove-Item Env:\GOOS, Env:\GOARCH, Env:\CGO_ENABLED -ErrorAction SilentlyContinue
+}
+
 $provTgz = Join-Path $Stage 'provision.tgz'
 if (Test-Path $provTgz) { Remove-Item $provTgz }
 tar -czf $provTgz -C $provStage .

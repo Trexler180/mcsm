@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ServerManager host provisioning: the parts of the production host that live
 # outside /srv/dashboard — the nginx snippets, systemd drop-ins, the polkit
-# reboot grant, and the SSH watchdog.
+# reboot grant, the SSH watchdog, and server isolation (the mcsm-mc user and
+# the mcsm-launch helper Minecraft servers start through).
 #
 # Every file it installs is a byte-for-byte copy of a file next to this script,
 # so the repo is the source of truth and the host can be checked against it.
@@ -26,6 +27,8 @@ R=${PROVISION_ROOT:-}                                  # prefix for every host p
 PROC=${PROVISION_PROC:-/proc}
 DOMAIN_FILE=${PROVISION_DOMAIN_FILE:-/root/.test_domain}
 WAIT_SECONDS=${PROVISION_WAIT_SECONDS:-30}
+# The launcher binary Deploy-Dashboard.ps1 builds into the bundle.
+LAUNCHER_SRC=${PROVISION_LAUNCHER_SRC:-$HERE/launcher/mcsm-launch}
 
 AGENT_USER=mcsm
 API_UNIT=mcsm-api.service
@@ -33,6 +36,10 @@ AGENT_UNIT=mcsm-agent.service
 API_LOCAL=http://127.0.0.1:8081
 DASHBOARD_SNIPPET=/etc/nginx/snippets/mcsm-dashboard.conf
 API_DROPIN=systemd/mcsm-api.service.d/20-provisioned.conf
+# Server isolation: Minecraft servers run as SERVER_USER, started through
+# LAUNCHER, a helper that can switch to that user and no other.
+SERVER_USER=mcsm-mc
+LAUNCHER=/usr/local/libexec/mcsm/mcsm-launch
 
 usage() { echo "usage: provision.sh apply|check [--base-path PATH]" >&2; exit 64; }
 
@@ -92,6 +99,8 @@ manifest() {
     echo "nginx|nginx/mcsm-dashboard.conf|$R$DASHBOARD_SNIPPET|0644"
     echo "api-env|$API_DROPIN|$R/etc/systemd/system/$API_UNIT.d/20-provisioned.conf|0644"
     echo "reboot|systemd/mcsm-agent.service.d/20-allow-reboot.conf|$R/etc/systemd/system/$AGENT_UNIT.d/20-allow-reboot.conf|0644"
+    echo "isolation|systemd/mcsm-agent.service.d/30-isolation.conf|$R/etc/systemd/system/$AGENT_UNIT.d/30-isolation.conf|0644"
+    echo "api-hardening|systemd/mcsm-api.service.d/30-hardening.conf|$R/etc/systemd/system/$API_UNIT.d/30-hardening.conf|0644"
     if polkit_legacy; then
         echo "reboot|polkit/50-mcsm-reboot.pkla|$R/etc/polkit-1/localauthority/50-local.d/50-mcsm-reboot.pkla|0644"
     else
@@ -151,6 +160,139 @@ wait_for_api() {
     return 1
 }
 
+# ── Server isolation ─────────────────────────────────────────────
+
+# The value NAME has in a running unit's environment ("" when unset).
+unit_env() { # unit NAME
+    local pid
+    pid=$(systemctl show "$1" -p MainPID --value 2>/dev/null || echo 0)
+    [ -n "$pid" ] && [ "$pid" != 0 ] || return 0
+    tr '\0' '\n' < "$PROC/$pid/environ" 2>/dev/null | sed -n "s/^$2=//p" | tail -n 1
+}
+
+# A unit's path setting, made absolute against its working directory.
+unit_path() { # unit NAME default
+    local v pid
+    v=$(unit_env "$1" "$2")
+    [ -n "$v" ] || v=$3
+    case "$v" in
+        /*) echo "$v" ;;
+        *)
+            pid=$(systemctl show "$1" -p MainPID --value 2>/dev/null || echo 0)
+            echo "$(readlink -f "$PROC/$pid/cwd" 2>/dev/null || echo /)/$v" ;;
+    esac
+}
+
+# The opt-out: AGENT_ISOLATE_SERVERS=0 (in secrets.env) on the running agent.
+isolation_opted_out() {
+    case "$(unit_env "$AGENT_UNIT" AGENT_ISOLATE_SERVERS | tr '[:upper:]' '[:lower:]')" in
+        0 | false | no | off | disable | disabled) return 0 ;;
+    esac
+    return 1
+}
+
+user_exists() { getent passwd "$1" >/dev/null 2>&1; }
+in_group() { id -nG "$1" 2>/dev/null | tr ' ' '\n' | grep -qx "$2"; }
+
+launcher_installed() {
+    [ -f "$R$LAUNCHER" ] && [ -f "$LAUNCHER_SRC" ] && cmp -s "$LAUNCHER_SRC" "$R$LAUNCHER" || return 1
+    local caps
+    caps=$(getcap "$R$LAUNCHER" 2>/dev/null || true)
+    case "$caps" in *cap_setuid*) ;; *) return 1 ;; esac
+    case "$caps" in *cap_setgid*) ;; *) return 1 ;; esac
+}
+
+# Whether the server user can walk into a directory (every directory above it
+# included), asked as that user.
+server_user_reaches() { runuser -u "$SERVER_USER" -- test -x "$R$1" 2>/dev/null; }
+
+check_isolation() {
+    if isolation_opted_out; then
+        say "isolation: turned off on this host (AGENT_ISOLATE_SERVERS=0); Minecraft servers run as $AGENT_USER"
+    else
+        unit_env_is "$AGENT_UNIT" "AGENT_ISOLATE_SERVERS=1" ||
+            bad "isolation: the running agent does not have AGENT_ISOLATE_SERVERS=1 (restart pending?)"
+    fi
+    user_exists "$SERVER_USER" || { bad "isolation: the server user $SERVER_USER does not exist"; return; }
+    in_group "$AGENT_USER" "$SERVER_USER" || bad "isolation: $AGENT_USER is not in the $SERVER_USER group"
+    if [ ! -f "$LAUNCHER_SRC" ]; then
+        bad "isolation: the bundle has no launcher (deploy with Deploy-Dashboard.ps1, which builds it)"
+    elif ! launcher_installed; then
+        bad "isolation: $LAUNCHER is missing, differs from the bundle, or lacks cap_setuid,cap_setgid"
+    fi
+    local data servers
+    data=$(dirname "$(unit_path "$API_UNIT" DATABASE_PATH mcsm.db)")
+    servers=$(unit_path "$AGENT_UNIT" AGENT_SERVER_ROOT servers)
+    if server_user_reaches "$data"; then
+        bad "isolation: $SERVER_USER can reach the API's data directory $data (it should be 0700)"
+    fi
+    if ! isolation_opted_out && ! server_user_reaches "$servers"; then
+        bad "isolation: $SERVER_USER cannot reach the server root $servers; let it traverse the directories above it (chmod o+x)"
+    fi
+}
+
+# Set up isolation: the user, the agent's membership of its group, the
+# launcher with its capabilities, and the API's data directory closed to
+# servers. Sets ISOLATION_CHANGED when the agent must restart to pick it up.
+ISOLATION_CHANGED=0
+apply_isolation() {
+    local failed=0
+    if ! user_exists "$SERVER_USER"; then
+        if useradd --system --user-group --no-create-home --home-dir /nonexistent \
+            --shell /usr/sbin/nologin "$SERVER_USER"; then
+            say "isolation: created the server user $SERVER_USER"
+            ISOLATION_CHANGED=1
+        else
+            bad "isolation: could not create the server user $SERVER_USER"
+            return 1
+        fi
+    fi
+    if ! in_group "$AGENT_USER" "$SERVER_USER"; then
+        if usermod -aG "$SERVER_USER" "$AGENT_USER"; then
+            say "isolation: added $AGENT_USER to the $SERVER_USER group"
+            ISOLATION_CHANGED=1
+        else
+            bad "isolation: could not add $AGENT_USER to the $SERVER_USER group"
+            failed=1
+        fi
+    fi
+    if [ ! -f "$LAUNCHER_SRC" ]; then
+        bad "isolation: the bundle has no launcher (deploy with Deploy-Dashboard.ps1, which builds it)"
+        failed=1
+    elif ! launcher_installed; then
+        local owner=()
+        [ -n "$R" ] || owner=(-o root -g "$AGENT_USER")
+        # Root's, executable by the agent's group only, writable by nobody
+        # else: the capabilities are only as safe as the file holding them.
+        if install -D "${owner[@]}" -m 0750 "$LAUNCHER_SRC" "$R$LAUNCHER" &&
+            setcap cap_setuid,cap_setgid+ep "$R$LAUNCHER"; then
+            say "isolation: installed $LAUNCHER"
+            ISOLATION_CHANGED=1
+        else
+            bad "isolation: could not install $LAUNCHER with its capabilities"
+            failed=1
+        fi
+    fi
+    local data servers
+    data=$(dirname "$(unit_path "$API_UNIT" DATABASE_PATH mcsm.db)")
+    servers=$(unit_path "$AGENT_UNIT" AGENT_SERVER_ROOT servers)
+    case "$servers/" in
+        "$data"/*)
+            bad "isolation: the server root $servers is inside the API's data directory; move it out before closing that directory"
+            failed=1 ;;
+        *)
+            if server_user_reaches "$data"; then
+                if chmod 0700 "$R$data"; then
+                    say "isolation: closed the API's data directory $data to other users"
+                else
+                    bad "isolation: could not restrict $data"
+                    failed=1
+                fi
+            fi ;;
+    esac
+    return $failed
+}
+
 # ── Check ────────────────────────────────────────────────────────
 
 check() {
@@ -194,6 +336,8 @@ check() {
         *) bad "reboot: logind does not let $AGENT_USER reboot (answered: ${answer:-nothing})" ;;
     esac
 
+    check_isolation
+
     if [ -n "$(ssh_unit)" ]; then
         systemctl is-enabled --quiet ssh-watchdog.timer 2>/dev/null &&
             systemctl is-active --quiet ssh-watchdog.timer 2>/dev/null ||
@@ -211,7 +355,7 @@ check() {
     fi
 
     if [ "$problems" -eq 0 ]; then
-        say "ok: host matches the repo (nginx, api-env, reboot, ssh-watchdog, boot)"
+        say "ok: host matches the repo (nginx, api-env, api-hardening, reboot, isolation, ssh-watchdog, boot)"
         return 0
     fi
     say "$problems problem(s); deploy with -Provision to converge"
@@ -286,6 +430,8 @@ apply() {
         [ "$rc" -ne 2 ] || failed=1
     done < <(manifest)
 
+    apply_isolation || failed=1
+
     # nginx: test before reloading, and verify the dashboard after. Either
     # failing puts the previous files back, so a bad snippet costs a warning
     # rather than the site.
@@ -310,7 +456,7 @@ apply() {
         fi
     fi
 
-    if changed api-env || changed reboot || changed ssh-watchdog; then
+    if changed api-env || changed api-hardening || changed reboot || changed isolation || changed ssh-watchdog; then
         systemctl daemon-reload || { bad "systemd: daemon-reload failed"; failed=1; }
     fi
     if [ -n "$(ssh_unit)" ]; then
@@ -319,14 +465,15 @@ apply() {
         systemctl enable --now ssh-watchdog.timer >/dev/null 2>&1 ||
             { bad "ssh-watchdog: could not enable the timer"; failed=1; }
     fi
-    if changed api-env; then
-        say "api-env: restarting $API_UNIT"
+    if changed api-env || changed api-hardening; then
+        say "api: restarting $API_UNIT"
         systemctl restart "$API_UNIT" || { bad "api-env: $API_UNIT failed to restart"; failed=1; }
     fi
-    if changed reboot; then
-        # Minecraft servers keep running across an agent restart (KillMode=process).
-        say "reboot: restarting $AGENT_UNIT"
-        systemctl restart "$AGENT_UNIT" || { bad "reboot: $AGENT_UNIT failed to restart"; failed=1; }
+    if changed reboot || changed isolation || [ "$ISOLATION_CHANGED" = 1 ]; then
+        # Minecraft servers keep running across an agent restart (KillMode=process);
+        # the ones already running stay as they were until their next start.
+        say "agent: restarting $AGENT_UNIT"
+        systemctl restart "$AGENT_UNIT" || { bad "agent: $AGENT_UNIT failed to restart"; failed=1; }
     fi
 
     mkdir -p "$STATE_DIR" || true
