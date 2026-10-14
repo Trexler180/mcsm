@@ -16,9 +16,14 @@ The API auto-registers the agent as `Local Agent` when
 
 ## Build
 
+Go 1.26.9 or newer (with the default `GOTOOLCHAIN=auto`, an older Go downloads
+it), Node 22 and pnpm 10.
+
 ```bash
 cd apps/api   && go build -o mcsm-api   ./cmd/server
 cd apps/agent && go build -o mcsm-agent ./cmd/agent
+# Server isolation helper (Linux); install it as below, never next to the agent.
+cd apps/agent && CGO_ENABLED=0 go build -o mcsm-launch ./cmd/mcsm-launch
 cd apps/web   && pnpm install --frozen-lockfile && pnpm build
 ```
 
@@ -111,6 +116,34 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcsm-api mcsm-agent
 ```
+
+#### Server isolation
+
+To run Minecraft servers as their own user (strongly recommended; see
+[security.md](security.md#server-isolation)):
+
+```bash
+sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin mcsm-mc
+sudo usermod -aG mcsm-mc mcsm
+sudo install -D -o root -g mcsm -m 0750 mcsm-launch /usr/local/libexec/mcsm/mcsm-launch
+sudo setcap cap_setuid,cap_setgid+ep /usr/local/libexec/mcsm/mcsm-launch
+sudo chmod 0700 /var/lib/mcsm      # the API's data directory, not the server root
+```
+
+and give the agent unit:
+
+```ini
+[Service]
+AmbientCapabilities=CAP_KILL
+Environment=AGENT_ISOLATE_SERVERS=1
+```
+
+The server user must be able to traverse to `AGENT_SERVER_ROOT` (every
+directory above it needs `o+x`) and must not be able to reach the API's data
+directory, so keep the server root outside it. On the production host this is
+all done by `deploy/provision.sh`. Set `AGENT_ISOLATE_SERVERS=0` to opt out and
+run servers as the agent's user.
 
 ### nginx (static UI + API/WebSocket proxy)
 
@@ -261,6 +294,12 @@ server. See [`deploy/README.md`](../deploy/README.md) for what is managed.
 .\scripts\Deploy-Dashboard.ps1 -Part host     # converge host config only
 .\scripts\Deploy-Dashboard.ps1 -Provision     # code deploy + converge
 ```
+
+Provisioning also sets up server isolation — the `mcsm-mc` user, the
+`mcsm-launch` helper (built by `Deploy-Dashboard.ps1` into the root-only
+bundle), the agent's isolation drop-in, and the API's hardening drop-in — and
+reports a deliberate opt-out (`AGENT_ISOLATE_SERVERS=0` in `secrets.env`)
+instead of treating it as drift.
 
 Every deploy, with or without `-Provision`, ships the bundle and prints a
 `[config]` report comparing the host with the repo. Drift on a code-only deploy
@@ -436,3 +475,19 @@ If the agent is reachable outside the host, set `AGENT_TLS_CERT` and
 `AGENT_TLS_KEY`; plain public HTTP agents are not recommended. On a single-host
 deployment the agent stays on loopback (`AGENT_HOST=127.0.0.1`) and needs no TLS
 of its own.
+
+## Settings reference
+
+Settings added for the hardened backend (the rest are described above):
+
+| Setting | Process | Default | Meaning |
+|---|---|---|---|
+| `AGENT_ISOLATE_SERVERS` | agent | auto | `1` requires server isolation, `0` turns it off, unset isolates when the host allows |
+| `AGENT_SERVER_USER` | agent | `mcsm-mc` | The user isolated servers run as (the launcher reads `/etc/mcsm/server-user`) |
+| `AGENT_LAUNCHER` | agent | `/usr/local/libexec/mcsm/mcsm-launch` | The isolation helper |
+| `AGENT_CHILD_ENV_PASSTHROUGH` | agent | — | Extra variable names passed to server processes (never `AGENT_*`, `MCSM_*` or secrets) |
+| `MCSM_HELPER_INDEX_PUBKEY` | agent | — | Key(s) the remote helper-mod index must be signed with; without one the index is ignored and the embedded helper build is used |
+| `MCSM_HELPER_INDEX_INSECURE` | agent | — | `1` accepts an unsigned index (development only) |
+| `AUDIT_RETENTION_DAYS` | API | `365` | How long audit rows are kept; `0` keeps them forever |
+| `APP_ENCRYPTION_KEY` / `APP_ENCRYPTION_KEY_FILE` | API | `.mcsm-secret-key` beside the database | Encrypts stored secrets; back it up with the database |
+| `TRUSTED_PROXIES` | API | loopback | Peers whose `X-Real-IP` / `X-Forwarded-For` are believed |

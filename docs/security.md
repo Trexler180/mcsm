@@ -23,6 +23,14 @@
 The granular permission model is live (not reserved). `api_keys` now backs agent
 access keys (see below).
 
+The global roles are `admin` and `user`. The former `operator` global role,
+which was accepted but granted nothing, is gone (migration 031 turned existing
+operators into users); "operator" is now a per-server preset. The permission
+groups, their leaves and the administrator/operator/viewer presets are served as
+data at `GET /api/v1/permissions/presets`, so the dashboard's access editor and
+the API share one definition, and adding a member may name a preset instead of
+a list.
+
 ### Server folders
 
 Folders (`server_folders`, `servers.folder_id`) are a flat, presentation-only
@@ -41,22 +49,47 @@ rather than being deleted or stopped.
 
 `java_binary`, `jvm_args`, and `directory_path` are inputs the agent executes,
 so changing them is effectively host code execution. They are editable by global
-admins only — a server-scoped `settings` collaborator cannot change them. As
-defense in depth, the agent independently refuses to launch anything whose
-basename is not a Java executable (`java`/`javaw`).
+admins only — a server-scoped `settings` collaborator cannot change them — and
+readable by admins only: everyone else receives them as `null`. Sending them back
+unchanged is not a change, so a form that echoes the record still saves. The
+`import` setting (which jar an imported server runs, and whether a runtime is
+installed) is admin-only the same way, and every settings key is validated by
+type. As defense in depth, the agent independently refuses to launch anything
+whose basename is not a Java executable (`java`/`javaw`).
 
 ## Tokens
 
-- JWT access tokens (15 min) authenticate ordinary API requests.
-- Refresh tokens are stored only as hashed rows and rotated on use. Browser
-  refresh tokens are `HttpOnly`, `SameSite=Strict` cookies scoped to
-  `/api/v1/auth`; the frontend stores only the short-lived access token.
+- JWT access tokens (15 min) authenticate ordinary API requests. Each one names
+  the refresh-token session it was issued under (`sid`), and that session is
+  checked on every request: logging out, revoking a session, changing or
+  resetting a password, or a demotion ends its access tokens at once instead of
+  up to 15 minutes later. Tokens carry and are checked for issuer
+  (`mcsm-api`), audience (`mcsm-panel`) and type (`access`), so no other token
+  the panel signs can pass as one. A rejected token says why
+  (`token_expired`: refresh and retry; `session_revoked`: sign in again).
+- Refresh tokens are stored only as hashed rows and rotated on use. A token
+  presented again within 30 seconds of its rotation (two tabs refreshing
+  together) still earns an access token; presented after that, it is treated
+  as stolen and the whole session ends. Browser refresh tokens are `HttpOnly`,
+  `SameSite=Strict` cookies scoped to `/api/v1/auth`; the frontend stores only
+  the short-lived access token. Logout is keyed on that cookie and works with
+  an expired access token.
 - Query-string tokens are never accepted. WebSocket/download endpoints that
   cannot carry an Authorization header accept a short-lived, single-use ticket
-  minted from an authenticated request instead.
+  minted from an authenticated request instead. A ticket is bound to the one
+  path it was minted for: a download ticket cannot open a console socket.
 - Agent calls use bearer tokens stored **encrypted at rest** in the API database
   (AES-256-GCM under the app encryption key) and never emitted in node JSON. The
-  agent compares the presented token in constant time.
+  agent compares the presented token in constant time. Changing a node's address
+  requires entering its token again, so an address edit cannot send the stored
+  token to a new host.
+- Every encrypted value (node tokens, TOTP secrets, integration secrets,
+  webhook signing secrets) is bound to its row as associated data, so a value
+  copied onto another row does not decrypt. Values written before that are
+  upgraded at startup. **Back up the encryption key with the database**
+  (`APP_ENCRYPTION_KEY`, or `.mcsm-secret-key` beside it): without it, nodes
+  are unreachable and two-factor accounts cannot sign in, which sign-in reports
+  plainly (`encryption_key_mismatch`).
 
   **The node token is never distributed.** It grants the worker's entire HTTP
   surface on that host with no user, server, or action check, and revoking it
@@ -378,6 +411,78 @@ capabilities, which are displayed as mutation authority at consent time.
 Setup, connection, and revocation guidance is in [operations.md](operations.md);
 the reverse-proxy and TLS requirements are in [deployment.md](deployment.md).
 
+## Server isolation
+
+Everything a Minecraft server loads — every mod and plugin — runs in its JVM.
+When servers ran as the same user as the agent and the API, that code could
+read the panel's database and its encryption key, the API's environment, and
+every other server's helper-mod launch token, which made `files.write`,
+`mods.install` and installing any compromised mod equivalent to panel admin.
+
+On a provisioned host, servers (and the installers that build them, which run
+downloaded code too) run as a dedicated user, `mcsm-mc`:
+
+- The agent starts them through `mcsm-launch`, a small helper installed
+  root-owned (`root:mcsm 0750`) with only `cap_setuid,cap_setgid`. It can
+  switch to the one user named in `/etc/mcsm/server-user` (default `mcsm-mc`)
+  and refuses root. It sets `no_new_privs`, clears its ambient capabilities and
+  execs the JVM in place, so the server has no capabilities and can never gain
+  any. The helper is built into the root-only provisioning bundle, never shipped
+  with the agent binary, because it carries capabilities.
+- A server can read and write its own directory (the agent shares it through
+  the `mcsm-mc` group before each start) and nothing of the panel's: the API's
+  data directory is `0700`, `.mcsm-run` (console logs, launch tokens) and
+  `mcsm-backups` are the agent's alone, and the agent and API processes are
+  non-dumpable, so their `/proc` entries are closed to it.
+- The agent keeps `CAP_KILL` to stop a server running as another user, and
+  clears it from its ambient set so no child inherits it. It recognises an
+  isolated server at reattach by its start time, since that server's working
+  directory is hidden from it.
+- Servers receive an allowlisted environment (`PATH`, `HOME`, locale, Java
+  settings), never the agent's, which holds the agent token.
+
+`AGENT_ISOLATE_SERVERS` chooses the mode: unset isolates when the host is set
+up for it; `1` (what provisioning sets) requires it and refuses to start servers
+otherwise; **`0` is the opt-out**, set in `secrets.env`: servers run as `mcsm`
+again, with everything `mcsm` can reach — for example so a mod can act as the
+panel's user when nothing else on the host can. With the opt-out, `files.write`
+and `mods.install` are again equivalent to panel admin. Each node reports its
+mode, and why servers are not isolated when they are not, on the Nodes page.
+
+What isolation does not do: all servers share `mcsm-mc`, so one server's code
+can reach another server's files; and the API and the agent still share `mcsm`.
+
+The API's own unit is hardened as well (`deploy/systemd/mcsm-api.service.d/`):
+no new privileges, private `/tmp`, read-only system directories, hidden home
+directories and other users' processes.
+
+## Helper-mod index
+
+The agent installs the helper mod from a version index it downloads. The index
+is signed (ed25519, `versions.json.sig`) and the agent verifies it — fetched and
+cached copies alike — against `MCSM_HELPER_INDEX_PUBKEY` before trusting any
+entry; an unsigned or tampered index is refused. `MCSM_HELPER_INDEX_INSECURE=1`
+turns the check off for development only. Signing is described in
+`apps/mod/INDEX-FORMAT.md`.
+
+## Audit trail
+
+Every human change is recorded with who made it (and, for automation, which
+access key or MCP grant), from where, and what changed: power actions, console
+commands (including those typed into the console socket, which the API reads
+before forwarding and refuses when they hold a line break), player moderation
+and player-data deletion, file writes, deletes, renames, uploads and downloads,
+users, nodes, folders, tasks and their runs, backups and restores, settings,
+sign-ins, failed sign-ins (with a reason and a short hash of the address, never
+the address), and logouts. Proxied changes record the node's answer, so a
+refusal reads as a refusal. Background work is attributed to the schedule, run,
+person or delegation that started it.
+
+Audit rows outlive the server they describe (they keep its id and a snapshot of
+its name), and are kept for `AUDIT_RETENTION_DAYS` (default 365). The audit log
+page (`GET /api/v1/audit-log`) filters by server, user, action and time;
+non-admins see rows about their servers and their own actions only.
+
 ## Host reboot
 
 Rebooting a node's host is the most disruptive action the panel has, so it is
@@ -414,8 +519,10 @@ gated at three layers:
   code); the server returns `mfa_required` after a correct password to drive the
   two-step prompt. Failed codes count against the login throttle; the expected
   "need a code" step does not.
-- Disabling MFA requires a current code. An admin can clear a locked-out user's
-  MFA via `PUT /users/{id}` with `disable_mfa: true` (lost-authenticator
+- Starting enrollment, disabling MFA, and generating new recovery codes each
+  need a step-up: the current password plus a current code (or a recovery code).
+  Wrong attempts spend from the login throttle. An admin can clear a locked-out
+  user's MFA via `PUT /users/{id}` with `disable_mfa: true` (lost-authenticator
   recovery).
 
 ## Sessions
@@ -425,7 +532,11 @@ gated at three layers:
   original login time across the 15-minute access-token cycle.
 - Users review and revoke their sessions from Settings → Security
   (`GET/DELETE /auth/sessions`, `POST /auth/sessions/revoke-others`). Deleting a
-  user cascade-revokes their sessions.
+  user cascade-revokes their sessions; resetting a password or demoting a user
+  ends their sessions, and changing your own password (`POST /auth/password`,
+  which needs the current one) ends your other sessions.
+- A sign-in from a browser or system the account has not used before raises an
+  alert to the account's owner (`auth.new_device`).
 
 ## Brute-force, enumeration, and DoS controls
 
@@ -434,13 +545,17 @@ gated at three layers:
   without letting anyone deny a real user access to their account for long.
 - A failed login spends the same CPU whether or not the account exists, so
   response timing can't enumerate valid accounts.
-- Authenticated traffic is rate-limited per caller (per user id, else IP).
+- Authenticated traffic is rate-limited per caller (per user id, else IP);
+  public routes (public status pages, token refresh, logout) have their own
+  per-IP limit.
 - `ReadHeaderTimeout` bounds slow-header (slowloris) connections.
 - Passwords set through the API must be at least 10 characters.
 - Non-multipart request bodies are size-capped (API 8 MiB, agent 32 MiB);
   uploads stream through the multipart path.
 - Internal errors are logged server-side and returned to clients as a generic
-  message, so SQL/path/agent details don't leak.
+  message, so SQL/path/agent details don't leak. Every error answers in one
+  envelope, `{error, code, retryable, field?, details?}`, and a database
+  failure is never reported as a missing row.
 
 ## Scheduled-task authorization
 
@@ -464,7 +579,15 @@ gated at three layers:
   unless `AGENT_ALLOW_INSECURE=1`.
 - `APP_ORIGIN` pins the WebSocket Origin allowlist.
 - `TRUSTED_PROXIES` controls which peers may set `X-Forwarded-*`; from anyone
-  else those headers are stripped (default: loopback only).
+  else those headers are stripped (default: loopback only). The client address
+  is `X-Real-IP` from a trusted proxy, else the rightmost `X-Forwarded-For` hop
+  that is not a trusted proxy, so a client cannot choose the address its login
+  throttle and audit rows are keyed on.
+- `/api/v1/health` answers only `{"status":"ok"}` to anything but a direct
+  loopback caller, which also gets the version.
+- Outbound webhooks are signed over the delivery time and the body
+  (`X-MCSM-Timestamp`, `X-MCSM-Signature-256: t=…,v1=…`), so a captured
+  delivery cannot be replayed later.
 
 ## Production Startup Guards
 

@@ -13,10 +13,109 @@ Node status in the UI is based on the API poller's last successful
 Set `LOG_FORMAT=json` for structured logs. API responses include
 `X-Request-ID`, and API logs include that request id.
 
+## Server status
+
+A server is `online`, `starting`, `stopping`, `offline`, `crashed`,
+`startup_failure`, or `unknown`. `unknown` means its node has not answered for
+longer than a restart takes: the panel cannot vouch for it, but it may well
+still be running. A crash is recorded (and alerted) only when the agent saw the
+process die on its own; a `/stop` typed in the game is a clean stop.
+
+## Operations
+
+Starting, reinstalling, backing up, restoring, migrating, safe updates,
+startup fixes, and world uploads run as **operations**: they answer `202` with
+the operation at once and continue on the server, so closing the browser does
+not abort them. Follow one with `GET /servers/{id}/operations/{opId}` or the
+live event stream; cancel one with `POST .../cancel`.
+
+Only one runs per server at a time. Anything that would change a busy server —
+another operation, a stop, a kill — is refused with `409 server_busy`, naming
+the operation that holds it. A kill or delete with `?force=true` cancels the
+operation first. If the API restarts mid-operation, the operation is closed as
+`interrupted` at boot and an alert says so.
+
+## Live updates
+
+`GET /api/v1/events` (a WebSocket, opened with a ticket) carries everything
+live: server status, stats and players, node health, operation progress, task
+runs, alerts, and activity — filtered to what the user may see. Every event has
+a sequence number; reconnect with `?since=<seq>` to receive what was missed, or
+`stream.reset` when the gap is too old, which means: refetch. The fleet summary
+(`GET /api/v1/fleet`) reports the sequence it reflects, so a client can load it
+and then follow the stream from there.
+
 ## Backups
 
-Use the panel's server backup feature for individual Minecraft server snapshots.
-For disaster recovery, back up the SQLite volume and server volume together.
+Backups of a running server are consistent: the agent turns autosave off,
+flushes the world with `save-all`, waits for the server to confirm, copies, and
+turns autosave back on. A server that does not confirm in time is still backed
+up, with a warning that the copy may be inconsistent. Archives are written under
+a temporary name and renamed into place once complete.
+
+Restoring first takes a backup of the current world (`pre_restore`), and stops
+if that fails, so restoring the wrong backup loses nothing. Retention keeps a
+backup target's newest *N* successful backups and drops those older than its
+maximum age, but never the newest successful one. Download an archive with
+`GET /servers/{id}/backups/{backupId}/download` (ticketed; needs backups and
+files read access).
+
+For disaster recovery, back up the SQLite database, the encryption key, and the
+server root together (see the README).
+
+## Startup problems
+
+When a server fails to start because of its mods or Java,
+`GET /servers/{id}/startup-problem` explains it — a headline, the mods
+involved, the log excerpt — and offers fix plans: disable the named mods,
+install missing dependencies from Modrinth (or turn off what needs them), or
+switch to an installed Java that fits. `POST .../fixes/{planId}/apply` runs a
+plan and then starts the server as one `fix` operation, after checking the
+caller holds every permission its steps need. Plans are rebuilt on the server
+when applied; if the problem has changed, applying answers `plan_stale`.
+
+## Mods
+
+`GET /servers/{id}/mods` answers from the panel's records. When they are more
+than a minute old it rescans the server's disk in the background (one rescan
+per server at a time; `X-Mods-Rescan` says whether one started), and
+`POST /servers/{id}/mods/rescan` rescans now and returns the result.
+
+Every server's mods are checked for updates shortly after startup and then
+twice a day; the count appears in the fleet summary, and a check that finds
+more updates than the last raises `mod.update_available`.
+
+## Console and log files
+
+The live console log (`.mcsm-run/<id>/console.log`) is rotated at 64 MiB, keeping
+one previous generation; Minecraft's own `logs/latest.log` keeps the full
+record. The server's log files — `latest.log` and the rotated `.log.gz` files —
+are listed at `GET /servers/{id}/logs` and read (last lines, decompressed) at
+`/logs/{name}`; `/logs/problems?file=` groups their warnings and errors by
+message, errors first. All three need the console permission.
+
+Without the helper mod, the player list is kept from join and leave lines;
+`list` is typed into the console only to establish it and to re-check it every
+two minutes.
+
+## Alerts
+
+Alertable events include crashes, failed starts, a server under sustained load
+(`server.performance`) or running slowly (`server.tps_low`), mod conflicts,
+available, applied, failed and reverted mod updates, backup outcomes, node
+health and disk space, failed scheduled tasks, interrupted operations, players
+turned away by the whitelist, MCP requests, and sign-ins from a new device
+(sent to the account's owner only). `GET /api/v1/notifications/events` lists
+them with their default severity.
+
+## Retention
+
+History is pruned on a schedule: resource samples after 30 days (hourly
+roll-ups are kept), audit rows after `AUDIT_RETENTION_DAYS` (default 365; `0`
+keeps them forever), and old notifications, finished deliveries, log events,
+finished update and migration runs, and ended player sessions on their own
+windows (notifications after 90 days, read or not). Pending deliveries and
+anything still running are never pruned.
 
 ## Version Migration
 
