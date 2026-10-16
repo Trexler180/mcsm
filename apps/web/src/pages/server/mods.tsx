@@ -1,24 +1,23 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { InstalledMod, ModImpact, ModProjectType, ModSearchHit, ModSortIndex, ModSource, ModUpdate, ModVersion, MyServerPermissions, Server, SkippedModVersion } from '@/lib/types'
-import { ServerPermissionsProvider } from '@/lib/server-permissions'
 import { Btn, Check, Choices, Empty, Field, Notice, Search, Select, Switch, Tabs, TextBtn, type StatusKey } from '@/ui/controls'
 import { act } from '@/ui/failure'
 import { fmtCompact, fmtDate, fmtNum, relTime } from '@/ui/format'
 import { Dialog, MenuButton, MenuItem, MenuSep, Sheet } from '@/ui/overlays'
 import { useCan } from '@/ui/perm'
 import { PLATFORMS, contentLabel, platformLabel } from '@/ui/platforms'
-import { Loaded, SheetSkeleton, SkForm, SkItems, SkTable } from '@/ui/skeleton'
+import { Loaded, SheetSkeleton, SkItems, SkTable } from '@/ui/skeleton'
 import { toast } from '@/ui/toasts'
 import { cx, plural, toMs } from '@/ui/util'
 import { allowed } from './data'
+import { ConfigsView } from './configs'
 import { InstalledModIcon, ModIcon } from './mod-icon'
 
 // Mods, plugins or datapacks: what's installed and how to change it, finding
 // more, and their config files. Changes load the next time the server starts.
 
-const ConfigsTab = lazy(() => import('@/components/configs/configs-tab').then((m) => ({ default: m.ConfigsTab })))
 
 export type ModsView = 'installed' | 'browse' | 'configs'
 
@@ -92,15 +91,7 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
         </Loaded>
       )}
       {view === 'browse' && <Browse server={server} status={status} installed={mods.data ?? []} />}
-      {view === 'configs' && (
-        <ServerPermissionsProvider permissions={perms}>
-          <Suspense fallback={<SkForm />}>
-            <div className="legacy-page" style={{ overflow: 'visible', minHeight: 480 }}>
-              <ConfigsTab serverId={server.id} />
-            </div>
-          </Suspense>
-        </ServerPermissionsProvider>
-      )}
+      {view === 'configs' && <ConfigsView server={server} />}
       {safe && <SafeUpdateDialog server={server} status={status} updates={pending} onClose={() => setSafe(false)} />}
     </>
   )
