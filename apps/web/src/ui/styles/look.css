@@ -1,0 +1,152 @@
+/* The Balanced look, the one the panel ships. It is built from the Connected
+   rules (one surface, no boxes) with cards brought back where they fit, so
+   both selectors stay; <html data-look="balanced"> turns it on. */
+
+/* ---- connected look ---------------------------------------------------------------------
+   One surface instead of many. The main area is a single panel. Inside it, groups share
+   hairline dividers instead of floating as separate rounded tiles, tabs are underlined,
+   and status pills become plain text. Toggled from Prototype controls (data-look). */
+
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) { --r-tile: 10px; --r-inset: 6px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .side { background: var(--canvas); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .main { margin: 8px 8px 8px 0; border-radius: 10px; background: var(--tile) !important; box-shadow: var(--tile-edge); overflow: hidden; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .glow::after { display: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tile.click:active { transform: none; }
+
+/* Grids of cells: one bordered block with shared dividers. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.bento, .cards, .figures, .two, .kpis, .widgets) { gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; align-items: stretch; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.bento, .cards, .two, .widgets) > .tile, :is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .figures > .figure, :is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .kpis > .kpi { background: none; border-radius: 0; box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.bento, .cards) > .tile.click:hover { background: var(--hover); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .srv-card.crashed { box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tile.inset { background: none; border-radius: 0; padding: 11px 0 !important; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tile.inset:first-child { border-top: 0; padding-top: 2px !important; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tile.flush { background: none; box-shadow: none; padding: 0; border-radius: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+
+/* Lists and tables: rows between two hairlines, no box. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .t { background: none; box-shadow: none; padding: 0; border-radius: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .t tbody tr:hover td:first-child { border-radius: 6px 0 0 6px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .t tbody tr:hover td:last-child { border-radius: 0 6px 6px 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .items { background: none; box-shadow: none; padding: 0; border-radius: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.dialog, .sheet, .tile) .items { border: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .issues { gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .issue { background: none; box-shadow: none; border-radius: 0; padding: 14px 0; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .issue:first-child { border-top: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .issue .mark { width: 30px; height: 30px; border-radius: 6px; }
+
+/* Sections separated by hairlines. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .form-section { background: none; box-shadow: none; border-radius: 0; padding: 26px 0; margin: 0; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .form-section:first-child { border-top: 0; padding-top: 2px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .chart-block { background: none; box-shadow: none; border-radius: 0; padding: 24px 0 4px; margin-top: 26px; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .chart-block.split { gap: 36px 48px !important; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .chart-block.split > div { background: none; box-shadow: none; border-radius: 0; padding: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .subnav button { border-radius: 6px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .subnav button[aria-current="true"] { background: var(--hover); box-shadow: none; }
+
+/* Server header: facts as text, tabs underlined across the panel. */
+/* Each fact carries a rule on its left; the row is pulled left and clipped, so the first
+   fact on any line never shows a stray rule, even when the row wraps. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .srv-facts { gap: 4px 0; margin-left: -13px; clip-path: inset(-4px -4px -4px 13px); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .srv-head .srv-facts > * { padding: 0 12px; border-left: 1px solid var(--line-2); line-height: 14px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.chip, .state, .live-pill) { background: none !important; box-shadow: none; padding: 0; height: auto; border-radius: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .srv-icon { border-radius: 10px; box-shadow: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tabs { display: flex; gap: 22px; padding: 0; border-radius: 0; background: none; box-shadow: inset 0 -1px 0 var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .srv-head .tabs { margin: 20px calc(-1 * var(--pad)) 0; padding: 0 var(--pad); max-width: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tab { height: 42px; padding: 0 1px; border-radius: 0; }
+/* Second-level views: the same underline, a step smaller, sitting on the bar's own rule. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tabs.sub { gap: 18px; margin: 0; box-shadow: none; align-self: stretch; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tabs.sub .tab { height: 40px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .toolbar.tabbed { margin-bottom: 20px; box-shadow: inset 0 -1px 0 var(--line); flex-wrap: nowrap; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-bar:has(.tabs.sub) { padding-top: 0; padding-bottom: 0; min-height: 46px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-bar .tabs.sub .tab { height: 46px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .tabs .slider { height: 2px !important; top: auto !important; bottom: 0; border-radius: 2px; background: var(--text); box-shadow: none; }
+
+/* Console: flush with the panel, side details in a ruled column. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-page { gap: 0; padding: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console { background: var(--console); border-radius: 0; box-shadow: none; padding: 0; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-bar { padding: 10px var(--pad); background: var(--tile); border-bottom: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-out { border-radius: 0; box-shadow: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .ln { padding: 0 var(--pad); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-in { height: 52px; margin: 0; padding: 0 12px 0 var(--pad); border-radius: 0; background: var(--tile); box-shadow: none; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-in:focus-within { box-shadow: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .suggest { left: 12px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-main > :not(.console) { margin: 12px var(--pad) !important; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-aside { gap: 0; padding: 0 22px; border-left: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .aside-block { background: none; box-shadow: none; border-radius: 0; padding: 18px 0; border-top: 1px solid var(--line); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .aside-block:first-child { border-top: 0; }
+
+/* Smaller radii everywhere else: fewer bubbles. */
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.btn, .filters button, .filters .slider, .side-search, .nav-link, .side .slider, .me, .search .input, .toast button, .prototype) { border-radius: 6px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .filters { border-radius: 10px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .me { background: none; box-shadow: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .me:hover { background: var(--hover); }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .btn.primary { box-shadow: none; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.input, .select, .textarea) { border-radius: 6px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.notice:not(.bad, .warn), .choice, .drop, .codeblock) { border-radius: 10px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.dialog, .sheet, .palette, .login-box) { border-radius: 16px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) :is(.menu, .suggest, .toast, .savebar, .sheet-foot) { border-radius: 10px; }
+:is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .menu-item { border-radius: 6px; }
+
+@media (max-width: 1100px) {
+  :is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .console-aside { border-left: 0; border-top: 1px solid var(--line); padding: 0 var(--pad); column-gap: 24px; }
+  :is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .aside-block:nth-child(-n+3) { border-top: 0; }
+}
+@media (max-width: 820px) {
+  :is(:is([data-look="connected"], [data-look="balanced"]), [data-look="balanced"]) .main { margin: 0; border-radius: 0; box-shadow: none; }
+}
+
+/* ---- balanced look ----------------------------------------------------------------------
+   The connected structure (one panel, underlined tabs, text status, hairline rows), plus a
+   card wherever something stands on its own. The rule of thumb:
+
+   Card    a self-contained thing you read or act on by itself: a figure, a chart, a widget,
+           a node, a console side panel; and one card around each table or list, so its rows
+           have an edge.
+   No card rows of the same kind (they share their list's card), settings forms (sections and
+           hairlines), the console log, page and server headers, tabs, filters, notices,
+           empty states. Overlays (dialogs, sheets, menus) are always raised.
+
+   Everything else comes from look-connected.css, which applies to both looks. */
+
+[data-look="balanced"][data-theme="dark"] { --card: #191919; --card-edge: 0 0 0 1px var(--line); }
+[data-look="balanced"][data-theme="light"] { --tile: #fafafa; --card: #ffffff; --card-edge: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, .04); }
+
+/* Standalone things: one card each. */
+[data-look="balanced"] :is(.kpis > .kpi, .widgets > .tile, .figures > .figure, .chart-block, .chart-block.split > div, .console-aside > .aside-block, .node-list > .item, .tile:not(.inset, .flush)) {
+  background: var(--card); border: 0; border-radius: 10px; box-shadow: var(--card-edge);
+}
+[data-look="balanced"] :is(.kpis, .widgets, .figures, .bento, .two) { gap: 8px; border: 0; border-radius: 0; overflow: visible; }
+[data-look="balanced"] .kpis > .kpi.click:hover { background: color-mix(in srgb, var(--card) 70%, var(--hover)); }
+[data-look="balanced"] .widgets > .tile { padding: 14px 16px 10px; }
+
+/* Lists and tables: one card around the whole list; rows keep their hairlines. */
+[data-look="balanced"] :is(.srv-list, .issues, .t, .items:not(.flush)) {
+  background: var(--card); border: 0; border-radius: 10px; box-shadow: var(--card-edge);
+}
+[data-look="balanced"] .t { padding: 2px 6px; }
+[data-look="balanced"] :is(.srv-list, .issues) { padding: 0 6px; }
+[data-look="balanced"] .issues .issue { padding-left: 8px; padding-right: 8px; }
+[data-look="balanced"] .items:not(.flush) { padding: 0 16px; }
+[data-look="balanced"] .srv-row.head { padding-top: 2px; }
+
+/* Nested lists don't get a second card. */
+[data-look="balanced"] :is(.dialog, .sheet, .tile, .kpi, .chart-block, .aside-block, .menu, .palette) :is(.t, .items, .srv-list, .issues) {
+  background: none; box-shadow: none; border-radius: 0; padding: 0;
+}
+
+/* Node cards. */
+[data-look="balanced"] .node-list { display: grid; gap: 8px; border: 0; }
+[data-look="balanced"] .node-list > .item { padding: 18px 20px !important; border-top: 0; }
+
+/* Stats: figure cards in a row, each chart its own card. */
+[data-look="balanced"] .figures > .figure { padding: 14px 16px; }
+[data-look="balanced"] .chart-block { padding: 16px 18px 10px; margin-top: 8px; border-top: 0; }
+[data-look="balanced"] .chart-block.split { background: none; box-shadow: none; padding: 0; border-radius: 0; gap: 8px !important; }
+[data-look="balanced"] .chart-block.split > div { padding: 16px 18px 10px; }
+
+/* Console: the log stays flush; the side panel is a column of small cards. */
+[data-look="balanced"] .console-aside { gap: 8px; padding: 12px; background: var(--tile); }
+[data-look="balanced"] .console-aside > .aside-block { padding: 14px 16px; border-top: 0; }
+
+@media (max-width: 1100px) {
+  [data-look="balanced"] .console-aside { column-gap: 8px; }
+}

@@ -59,3 +59,16 @@ func TestSlowSubscriberIsCutOff(t *testing.T) {
 		t.Fatalf("drained %d buffered events, want %d", n, subBuffer)
 	}
 }
+
+// The sequence starts again when the API restarts. A client still holding a
+// number from before must be told to refetch: resuming would make it treat
+// the new process's first events as ones it already has.
+func TestSubscribeReportsRestart(t *testing.T) {
+	b := New()
+	b.Publish(Event{Type: ServerStats})
+	sub, backlog, resumed := b.Subscribe(40)
+	defer sub.Close()
+	if resumed || len(backlog) != 0 {
+		t.Fatalf("resume from a number ahead of the bus: resumed=%v backlog=%v", resumed, backlog)
+	}
+}

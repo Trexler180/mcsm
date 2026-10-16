@@ -19,13 +19,6 @@ function ErrorFallback({ error, onRetry }: { error: unknown; onRetry: () => void
   );
 }
 
-// RouteErrorFallback is TanStack Router's defaultErrorComponent: a render
-// error inside a route replaces just that route's outlet, and retry re-renders
-// the route without a full page load.
-export function RouteErrorFallback({ error, reset }: { error: Error; reset?: () => void }) {
-  return <ErrorFallback error={error} onRetry={() => (reset ? reset() : window.location.reload())} />;
-}
-
 // AppErrorBoundary is the last line of defense around the router itself —
 // without it a crash outside any route (store init, provider code) unmounts
 // React and leaves a blank page.

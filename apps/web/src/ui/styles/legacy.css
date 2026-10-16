@@ -1,0 +1,42 @@
+/* Screens not yet moved to the new design still use Tailwind's color names.
+   These map those names onto the new palette, in both themes, so the older
+   screens sit inside the new shell without a second color scheme. Delete this
+   file with Tailwind once the last of them is replaced. */
+
+[data-theme="dark"] {
+  --legacy-background: 10 10 10;
+  --legacy-surface: 20 20 20;
+  --legacy-surface-2: 31 31 31;
+  --legacy-border: 38 38 38;
+  --legacy-border-hover: 58 58 58;
+  --legacy-accent: 52 211 153;
+  --legacy-accent-hover: 16 185 129;
+  --legacy-accent-muted: 6 78 59;
+  --legacy-muted: 133 133 133;
+  --legacy-text-primary: 250 250 250;
+  --legacy-text-secondary: 163 163 163;
+}
+
+[data-theme="light"] {
+  --legacy-background: 245 245 245;
+  --legacy-surface: 255 255 255;
+  --legacy-surface-2: 240 240 240;
+  --legacy-border: 229 229 229;
+  --legacy-border-hover: 212 212 212;
+  --legacy-accent: 4 120 87;
+  --legacy-accent-hover: 6 95 70;
+  --legacy-accent-muted: 209 250 229;
+  --legacy-muted: 107 107 107;
+  --legacy-text-primary: 10 10 10;
+  --legacy-text-secondary: 82 82 82;
+}
+
+/* The older screens fill their own height inside the new main area. */
+.legacy-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  font-size: 14px;
+}

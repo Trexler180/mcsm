@@ -7,25 +7,27 @@ export default {
         // Touch-screen devices, regardless of viewport width.
         touch: { raw: '(pointer: coarse)' },
       },
+      // Older screens' color names, mapped onto the new palette per theme
+      // in src/ui/styles/legacy.css.
       colors: {
-        background: '#0f0f0f',
-        surface: '#1a1a1a',
-        'surface-2': '#242424',
-        border: '#2a2a2a',
-        'border-hover': '#3a3a3a',
+        background: 'rgb(var(--legacy-background) / <alpha-value>)',
+        surface: 'rgb(var(--legacy-surface) / <alpha-value>)',
+        'surface-2': 'rgb(var(--legacy-surface-2) / <alpha-value>)',
+        border: 'rgb(var(--legacy-border) / <alpha-value>)',
+        'border-hover': 'rgb(var(--legacy-border-hover) / <alpha-value>)',
         accent: {
-          DEFAULT: '#22c55e',
-          hover: '#16a34a',
-          muted: '#14532d',
+          DEFAULT: 'rgb(var(--legacy-accent) / <alpha-value>)',
+          hover: 'rgb(var(--legacy-accent-hover) / <alpha-value>)',
+          muted: 'rgb(var(--legacy-accent-muted) / <alpha-value>)',
         },
-        muted: '#6b7280',
-        'text-primary': '#f9fafb',
-        'text-secondary': '#9ca3af',
+        muted: 'rgb(var(--legacy-muted) / <alpha-value>)',
+        'text-primary': 'rgb(var(--legacy-text-primary) / <alpha-value>)',
+        'text-secondary': 'rgb(var(--legacy-text-secondary) / <alpha-value>)',
       },
       fontFamily: {
         mono: [
+          'Geist Mono Variable',
           'JetBrains Mono Variable',
-          'JetBrains Mono',
           'Fira Code',
           'Consolas',
           'monospace',
@@ -33,5 +35,7 @@ export default {
       },
     },
   },
+  // The new design system owns these class names (src/ui/styles/base.css).
+  blocklist: ['ring'],
   plugins: [],
 }

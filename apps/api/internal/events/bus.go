@@ -149,7 +149,10 @@ func (b *Bus) Subscribe(since int64) (sub *Subscription, backlog []Event, resume
 		if len(b.ring) > 0 {
 			oldest = b.ring[0].Seq
 		}
-		if since < oldest-1 {
+		// Older than the ring: events were missed. Newer than anything
+		// published: the numbers are from before this process started, so
+		// the client's view of what it has is meaningless here.
+		if since < oldest-1 || since > b.seq {
 			resumed = false
 		}
 		for _, e := range b.ring {

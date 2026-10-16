@@ -54,6 +54,7 @@ describe("RebootOverlay", () => {
   it("renders nothing when no reboot is tracked", () => {
     renderOverlay();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("follows the host down and back up, then reconnects on its own", async () => {
@@ -66,15 +67,17 @@ describe("RebootOverlay", () => {
     useRebootTracker.getState().start(before, requestedAt);
     renderOverlay();
 
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(screen.getByText("Rebooting host-1")).toBeInTheDocument();
+    // While the panel answers, a banner: the rest of the panel keeps working.
+    expect(screen.getByRole("status")).toHaveTextContent("Rebooting host-1. Stopping its servers first.");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
 
     await poll(); // still on the old boot
-    expect(screen.getByText("Rebooting host-1")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Rebooting host-1");
 
-    await poll(); // the dashboard's own host is down
+    await poll(); // the panel's own host is down: it takes the screen
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(screen.getByText("Waiting for host-1 to come back")).toBeInTheDocument();
-    expect(screen.getByText(/dashboard runs on this machine/i)).toBeInTheDocument();
+    expect(screen.getByText(/panel runs on this machine/i)).toBeInTheDocument();
 
     await poll(); // still down (proxy answers 502)
     expect(screen.getByText("Waiting for host-1 to come back")).toBeInTheDocument();
@@ -84,6 +87,22 @@ describe("RebootOverlay", () => {
     expect(notify.success).toHaveBeenCalledWith("host-1 is back online", expect.any(String));
     expect(useRebootTracker.getState().tracked).toBeNull();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("follows a remote host without taking the screen", async () => {
+    vi.spyOn(api.nodes, "list")
+      .mockResolvedValueOnce([{ ...stopping, online: false } as Node])
+      .mockResolvedValueOnce([rebooted]);
+    useRebootTracker.getState().start(before, requestedAt);
+    renderOverlay();
+
+    await poll(); // the node went down, the panel did not
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for it to come back");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    await poll();
+    expect(notify.success).toHaveBeenCalledWith("host-1 is back online", expect.any(String));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   // The elapsed-time clock re-renders every second; the polling loop must keep
@@ -107,6 +126,6 @@ describe("RebootOverlay", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /stop waiting/i }));
     expect(useRebootTracker.getState().tracked).toBeNull();
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

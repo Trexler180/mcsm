@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __test, api, ApiError, describeBusy } from "./api";
+import {
+  __test,
+  api,
+  ApiError,
+  describeBusy,
+  onSessionEnded,
+  SESSION_ENDED,
+} from "./api";
 
 const { tokenExpiresSoon, request } = __test;
 
@@ -146,8 +153,35 @@ describe("request auth retry", () => {
       return okJson({ error: "unauthorized" }, 401);
     });
 
-    await expect(request("GET", "/servers")).rejects.toThrow("Unauthorized");
+    await expect(request("GET", "/servers")).rejects.toMatchObject({
+      status: 401,
+      code: SESSION_ENDED,
+    });
     expect(localStorage.getItem("access_token")).toBeNull();
+  });
+
+  // Once the panel is on screen, an ended session asks to sign in again over
+  // the page instead of navigating away from it.
+  it("hands an ended session to the registered handler", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/auth/refresh")) {
+        return okJson({ error: "invalid or expired refresh token" }, 401);
+      }
+      return okJson({ error: "unauthorized" }, 401);
+    });
+    const ended = vi.fn();
+    const before = window.location.href;
+    onSessionEnded(ended);
+    try {
+      const err = await request("GET", "/servers").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).code).toBe(SESSION_ENDED);
+      expect(ended).toHaveBeenCalledTimes(1);
+      expect(window.location.href).toBe(before);
+    } finally {
+      onSessionEnded(null);
+    }
   });
 });
 

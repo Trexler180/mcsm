@@ -197,6 +197,31 @@ async function retryAfterRefresh<T>(
   return retry();
 }
 
+// The session can't be renewed: the refresh cookie expired or was revoked.
+// Once the panel is on screen it registers a handler that asks the person to
+// sign in again over the page they are on, so nothing on it is lost. Before
+// that (the first load, the sign-in page itself) the browser goes to the
+// sign-in page.
+export const SESSION_ENDED = "session_ended";
+
+let sessionEndedHandler: (() => void) | null = null;
+
+export function onSessionEnded(handler: (() => void) | null) {
+  sessionEndedHandler = handler;
+}
+
+function sessionEnded() {
+  clearStoredSession();
+  if (sessionEndedHandler) sessionEndedHandler();
+  else redirectToLogin();
+}
+
+function sessionEndedError() {
+  return new ApiError(401, "Your session ended. Sign in again to continue.", {
+    code: SESSION_ENDED,
+  });
+}
+
 function redirectToLogin() {
   clearStoredSession();
   // Respect the app's base path (Vite BASE_URL, e.g. "/dashboard/") so a hard
@@ -227,7 +252,7 @@ async function fetchWithAuth(
     if (refreshed) {
       return fetchWithAuth(input, init, false);
     }
-    redirectToLogin();
+    sessionEnded();
   }
 
   return res;
@@ -263,7 +288,7 @@ function xhrUpload(
           if (refreshed) {
             xhrUpload(url, formData, onProgress, false).then(resolve, reject);
           } else {
-            redirectToLogin();
+            sessionEnded();
             resolve(new Response(xhr.responseText, { status: 401 }));
           }
         });
@@ -308,8 +333,8 @@ async function request<T>(
     if (retried !== null) {
       return retried;
     }
-    redirectToLogin();
-    throw new Error("Unauthorized");
+    sessionEnded();
+    throw sessionEndedError();
   }
 
   if (!res.ok) {
@@ -388,8 +413,8 @@ async function requestText(
     if (retried !== null) {
       return retried;
     }
-    redirectToLogin();
-    throw new Error("Unauthorized");
+    sessionEnded();
+    throw sessionEndedError();
   }
 
   if (!res.ok) {

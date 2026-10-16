@@ -1,12 +1,9 @@
 import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
-import { Sidebar } from '@/components/layout/sidebar'
-import { CommandPalette } from '@/components/layout/command-palette'
-import { McpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
-import { RebootOverlay } from '@/components/layout/reboot-overlay'
-import { Toaster } from '@/components/ui/toast'
+import { AppShell, BootScreen } from '@/shell/app-shell'
+import { TipHost } from '@/ui/overlays'
+import { Toasts } from '@/ui/toasts'
 import { useAuthStore } from '@/store/auth'
-import { notificationStream } from '@/lib/notify-stream'
 import { rememberReturnTo } from '@/lib/return-to'
 
 function RootLayout() {
@@ -15,17 +12,9 @@ function RootLayout() {
 
   useEffect(() => {
     init()
+    // Once, on first load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Maintain the live notification stream for the duration of an authenticated
-  // session. It seeds the feed/unread badge, then pushes new alerts in real
-  // time (no polling) and mirrors them as toasts.
-  useEffect(() => {
-    if (isAuthenticated) {
-      notificationStream.start()
-      return () => notificationStream.stop()
-    }
-  }, [isAuthenticated])
 
   useEffect(() => {
     // navigate() is basepath-aware; the guard must compare against the
@@ -38,48 +27,25 @@ function RootLayout() {
       rememberReturnTo(window.location.pathname, window.location.search)
       navigate({ to: '/login' })
     }
-  }, [isAuthenticated, isLoading])
+  }, [isAuthenticated, isLoading, navigate])
 
-  if (isLoading) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-text-secondary">Loading...</p>
-        </div>
-      </div>
-    )
-  }
+  if (isLoading) return <BootScreen />
 
-  // Login route renders without sidebar
+  // Sign-in renders without the shell.
   if (!isAuthenticated) {
     return (
       <>
         <Outlet />
-        <Toaster />
+        <Toasts />
+        <TipHost />
       </>
     )
   }
 
   return (
-    // h-dvh (not h-screen): mobile browsers resize dvh as the URL bar
-    // collapses, so the layout never hides behind it.
-    <div className="flex h-dvh bg-background overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        <Outlet />
-      </main>
-      <CommandPalette />
-      {/* Alongside the Toaster for the same reason: an agent's request has to be
-          answerable from whatever screen the operator is on, and the step-up
-          half of that answer needs somewhere to put a password field. */}
-      <McpApprovalDialog />
-      {/* Takes over the screen while a host reboot is followed down and back
-          up. Static import on purpose: if the dashboard's own host is the one
-          restarting, a lazy chunk could not load. */}
-      <RebootOverlay />
-      <Toaster />
-    </div>
+    <AppShell>
+      <Outlet />
+    </AppShell>
   )
 }
 
