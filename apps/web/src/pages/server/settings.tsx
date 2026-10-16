@@ -9,13 +9,13 @@ import { SkForm } from '@/ui/skeleton'
 import { cx } from '@/ui/util'
 import { allowed } from './data'
 import { GeneralSettings } from './settings-general'
+import { PropertiesSettings } from './settings-properties'
+import { AccessSettings } from './settings-access'
 
 // A server's settings, in four parts down the side: general, version and
 // Java, server.properties, and who has access.
 
-const PropertiesTab = lazy(() => import('@/components/servers/options/properties-panel').then((m) => ({ default: m.PropertiesTab })))
 const VersionTab = lazy(() => import('@/components/servers/version-migration').then((m) => ({ default: m.VersionTab })))
-const AccessTab = lazy(() => import('@/components/servers/access-tab').then((m) => ({ default: m.AccessTab })))
 
 export type SettingsSection = 'general' | 'version' | 'properties' | 'access'
 
@@ -66,17 +66,13 @@ export function SettingsTab({
       </nav>
       <div style={{ minWidth: 0 }}>
         {section === 'general' && <GeneralSettings server={server} live={live} status={status} perms={perms} />}
-        {section !== 'general' && (
+        {section === 'properties' && <PropertiesSettings server={server} status={status} perms={perms} />}
+        {section === 'access' && (canAccess ? <AccessSettings server={server} /> : <Empty title="Only people who manage access can change this." />)}
+        {section === 'version' && (
           <ServerPermissionsProvider permissions={perms}>
             <Suspense fallback={<SkForm />}>
               <div className="legacy-page" style={{ overflow: 'visible' }}>
                 {section === 'version' && <VersionTab server={server} />}
-                {section === 'properties' && (
-                  <div data-server-scroll>
-                    <PropertiesTab server={server} />
-                  </div>
-                )}
-                {section === 'access' && (canAccess ? <AccessTab serverId={server.id} /> : <Empty title="Only people who manage access can change this." />)}
               </div>
             </Suspense>
           </ServerPermissionsProvider>
