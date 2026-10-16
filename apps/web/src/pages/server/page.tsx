@@ -12,6 +12,7 @@ import { LegacyTab } from './legacy'
 import { PlayersTab } from './players'
 import { BackupsTab } from './backups'
 import { SchedulesTab } from './schedules'
+import { StatsTab } from './stats'
 import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
 
 export interface ServerSearch {
@@ -94,6 +95,12 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
     body = (
       <TabPage>
         <BackupsTab server={server} status={status} />
+      </TabPage>
+    )
+  } else if (tab === 'stats') {
+    body = (
+      <TabPage>
+        <StatsTab server={server} />
       </TabPage>
     )
   } else if (tab === 'schedules') {

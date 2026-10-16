@@ -7,7 +7,15 @@ export function useGo() {
   const navigate = useNavigate()
   // Paths come from paths.ts and match the route tree at runtime; the router's
   // literal route types can't express them as plain strings.
-  return useCallback((to: string) => void navigate({ to: to as '/' }), [navigate])
+  return useCallback(
+    (to: string) => {
+      // A query string goes in as search, which the router keeps separately.
+      const [path, query] = to.split('?')
+      const search = query ? Object.fromEntries(new URLSearchParams(query)) : undefined
+      void navigate({ to: path as '/', search: search as never })
+    },
+    [navigate],
+  )
 }
 
 /** The sidebar entry for the current address. */

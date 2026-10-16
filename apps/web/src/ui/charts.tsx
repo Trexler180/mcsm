@@ -18,12 +18,15 @@ function useWidth(ref: RefObject<HTMLElement | null>) {
   return w
 }
 
-export function niceTicks(min: number, max: number, count = 4): number[] {
+/** Round axis values from min to past max. `integer` keeps them whole, for
+ *  counts (a player is never 0.5). */
+export function niceTicks(min: number, max: number, count = 4, integer = false): number[] {
   const span = max - min || 1
   const step0 = span / count
   const mag = Math.pow(10, Math.floor(Math.log10(step0)))
   const err = step0 / mag
-  const step = (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1) * mag
+  const raw = (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1) * mag
+  const step = integer ? Math.max(1, Math.round(raw)) : raw
   const lo = Math.floor(min / step) * step
   const hi = Math.ceil(max / step) * step
   const out: number[] = []
@@ -55,6 +58,7 @@ export function LineChart({
   label,
   tipTitle,
   color = 'var(--chart)',
+  integer,
 }: {
   data: Point[]
   k: string
@@ -70,6 +74,8 @@ export function LineChart({
   label?: string
   tipTitle?: (p: Point) => string
   color?: string
+  /** A count: whole numbers on the axis. */
+  integer?: boolean
 }) {
   const box = useRef<HTMLDivElement>(null)
   const w = useWidth(box)
@@ -88,7 +94,7 @@ export function LineChart({
   const t0 = data[0].ts
   const t1 = data[data.length - 1].ts
   const max = yMax != null ? yMax : Math.max(...data.map((d) => Math.max(d[k], k2 ? d[k2] : 0)), refLine ? refLine.v : 0) * 1.12 || 1
-  const ticks = niceTicks(yMin, max, 3)
+  const ticks = niceTicks(yMin, max, 3, integer)
   const top = yMax != null ? yMax : ticks[ticks.length - 1]
   const X = (ts: number) => pad.l + ((ts - t0) / (t1 - t0 || 1)) * iw
   const Y = (v: number) => pad.t + ih - ((v - yMin) / (top - yMin || 1)) * ih
@@ -201,7 +207,7 @@ export function Columns<C extends Column>({
   const iw = Math.max(10, w - pad.l - pad.r)
   const ih = height - pad.t - pad.b
   const max = Math.max(1, ...data.map((d) => d.v))
-  const ticks = niceTicks(0, max, 3)
+  const ticks = niceTicks(0, max, 3, true)
   const top = ticks[ticks.length - 1]
   const band = iw / Math.max(1, data.length)
   const bw = Math.min(22, Math.max(3, band - 3))
