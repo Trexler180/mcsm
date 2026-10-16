@@ -53,7 +53,7 @@ export function desktopNotificationsEnabled(): boolean {
   );
 }
 
-async function swRegistration(): Promise<ServiceWorkerRegistration | undefined> {
+export async function swRegistration(): Promise<ServiceWorkerRegistration | undefined> {
   if (!("serviceWorker" in navigator)) return undefined;
   const direct = await navigator.serviceWorker.getRegistration(SW_SCOPE);
   if (direct) return direct;

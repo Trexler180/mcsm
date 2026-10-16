@@ -11,7 +11,7 @@ import { Route as usersRoute } from './routes/users'
 import { Route as auditRoute } from './routes/audit'
 import { Route as settingsRoute } from './routes/settings'
 import { Route as accountRoute } from './routes/account'
-import { Route as notificationsRoute } from './routes/notifications'
+import { AlertsRoute, AlertsTabRoute, OldNotificationsRoute } from './routes/alerts'
 import { Route as mcpConsentRoute } from './routes/mcp-consent'
 import { ServerRoute, ServerTabRoute } from './routes/s'
 
@@ -28,6 +28,8 @@ export const routeTree = rootRoute.addChildren([
   auditRoute,
   settingsRoute,
   accountRoute,
-  notificationsRoute,
+  AlertsRoute,
+  AlertsTabRoute,
+  OldNotificationsRoute,
   mcpConsentRoute,
 ])

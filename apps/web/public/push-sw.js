@@ -49,7 +49,7 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const serverId = event.notification.data && event.notification.data.serverId;
   const target = new URL(
-    serverId ? "servers/" + serverId : "notifications",
+    serverId ? "s/" + serverId : "alerts",
     appRoot(),
   ).href;
 
