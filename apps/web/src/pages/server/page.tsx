@@ -8,7 +8,7 @@ import { ConsoleSkeleton, LoadError, Sk } from '@/ui/skeleton'
 import { ConsoleTab, type ConsoleView } from './console'
 import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer, useStartupProblem } from './data'
 import { ServerHeader, tabLabel } from './header'
-import { LegacyTab } from './legacy'
+import { FilesTab, parentOf } from './files'
 import { ModsTab, modsViewOf } from './mods'
 import { WorldsTab } from './worlds'
 import { PlayersTab } from './players'
@@ -25,10 +25,25 @@ export interface ServerSearch {
   sub?: string
   /** Players: the player whose sheet is open. */
   player?: string
+  /** Files: the folder shown, from the server's root ("/plugins"). */
+  path?: string
+  /** Files: the file open beside it ("/server.properties"). */
+  open?: string
 }
 
 /** A server: its header, its tabs, and the tab that's open. */
-export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string; tab?: string; search: ServerSearch; setSearch: (s: ServerSearch) => void }) {
+export function ServerPage({
+  id,
+  tab: rawTab,
+  search,
+  setSearch,
+}: {
+  id: string
+  tab?: string
+  search: ServerSearch
+  /** push adds a history entry, so Back returns to where this was. */
+  setSearch: (s: ServerSearch, opts?: { push?: boolean }) => void
+}) {
   const go = useGo()
   const q = useServer(id)
   const perms = useMyPerms(id)
@@ -138,7 +153,15 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
       </TabPage>
     )
   } else {
-    body = <LegacyTab key={tab} tab={tab} server={server} perms={my} />
+    body = (
+      <FilesTab
+        server={server}
+        status={status}
+        path={search.path || (search.open ? parentOf(search.open) : '/')}
+        open={search.open}
+        setLocation={(path, open) => setSearch({ ...search, path: path === '/' ? undefined : path, open }, { push: true })}
+      />
+    )
   }
 
   return (

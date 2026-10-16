@@ -9,6 +9,8 @@ function validateSearch(search: Record<string, unknown>): ServerSearch {
   if (search.view === 'files' || search.view === 'problems') out.view = search.view
   if (typeof search.sub === 'string' && search.sub) out.sub = search.sub
   if (typeof search.player === 'string' && search.player) out.player = search.player
+  if (typeof search.path === 'string' && search.path.startsWith('/')) out.path = search.path
+  if (typeof search.open === 'string' && search.open.startsWith('/')) out.open = search.open
   return out
 }
 
@@ -22,7 +24,7 @@ function ServerRouteView() {
       id={params.id}
       tab={params.tab}
       search={search}
-      setSearch={(next) => void navigate({ to: '.', search: next as never, replace: true })}
+      setSearch={(next, opts) => void navigate({ to: '.', search: next as never, replace: !opts?.push })}
     />
   )
 }
