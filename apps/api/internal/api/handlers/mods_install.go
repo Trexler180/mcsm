@@ -276,7 +276,7 @@ func (h *ModHandlers) downloadAndRecord(ctx context.Context, c *agent.Client, se
 		Source:         source,
 		SourceID:       &pid,
 		VersionID:      &vid,
-		Name:           ver.Name,
+		Name:           h.projectTitle(ctx, source, projectID, ver.Name),
 		Version:        ver.VersionNumber,
 		FileName:       file.Filename,
 		SHA256:         &sha,

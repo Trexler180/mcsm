@@ -37,6 +37,7 @@ type ModHandlers struct {
 	notifier      *notify.Engine
 	bus           *events.Bus
 	rescans       modRescans
+	titles        modTitles
 	ops           *operations.Manager
 	life          *lifecycle.Service
 }

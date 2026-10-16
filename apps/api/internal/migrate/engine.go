@@ -476,7 +476,6 @@ func (e *Engine) applyUpdate(ctx context.Context, c agentAPI, serverID string, p
 	vid := p.target.ID
 	row := *p.mod
 	row.VersionID = &vid
-	row.Name = p.target.Name
 	row.Version = p.target.VersionNumber
 	row.FileName = targetFile.Filename
 	row.SHA256 = &sha

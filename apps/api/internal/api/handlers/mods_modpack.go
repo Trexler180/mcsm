@@ -76,7 +76,7 @@ func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
 		Source:      "modrinth",
 		SourceID:    &pid,
 		VersionID:   &vid,
-		Name:        ver.Name,
+		Name:        h.projectTitle(ctx, "modrinth", body.ProjectID, ver.Name),
 		Version:     ver.VersionNumber,
 		FileName:    file.Filename,
 		SHA256:      &sha,

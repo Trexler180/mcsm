@@ -39,16 +39,16 @@ type agentAPI interface {
 	DeleteFile(ctx context.Context, serverID, path string) error
 }
 
-// modSource is the slice of modrinth.Client the engine needs.
+// modSource is how the engine reaches the mod sites (see sites).
 type modSource interface {
-	GetVersions(ctx context.Context, projectID, loader, mcVersion string) ([]modrinth.Version, error)
-	GetVersion(ctx context.Context, versionID string) (*modrinth.Version, error)
+	GetVersions(ctx context.Context, source, projectID, loader, mcVersion string) ([]modrinth.Version, error)
+	GetVersion(ctx context.Context, source, projectID, versionID string) (*modrinth.Version, error)
 	Download(ctx context.Context, fileURL, wantSHA string) (string, error)
 }
 
 type Engine struct {
 	store    *store.Store
-	modrinth modSource
+	sources  modSource
 	newAgent func(n *store.Node) agentAPI
 	notifier *notify.Engine
 	// ops, when set, makes every run an operation holding its server, so no
@@ -72,7 +72,7 @@ type Engine struct {
 func New(s *store.Store) *Engine {
 	return &Engine{
 		store:        s,
-		modrinth:     modrinth.New(),
+		sources:      newSites(),
 		newAgent:     func(n *store.Node) agentAPI { return agent.New(n.Scheme, n.FQDN, n.Port, n.Token) },
 		active:       map[string]bool{},
 		pollInterval: 3 * time.Second,
@@ -538,10 +538,10 @@ func (e *Engine) findCandidates(ctx context.Context, srv *store.Server, d *runDe
 	loader := modrinth.LoaderForPlatform(srv.Platform)
 	var out []*candidate
 	for _, m := range mods {
-		if m.Source != "modrinth" || m.SourceID == nil || m.VersionID == nil || m.Pinned || !m.Enabled {
+		if !Updatable(m.Source) || m.SourceID == nil || m.VersionID == nil || m.Pinned || !m.Enabled {
 			continue
 		}
-		versions, err := e.modrinth.GetVersions(ctx, *m.SourceID, loader, srv.MCVersion)
+		versions, err := e.sources.GetVersions(ctx, m.Source, *m.SourceID, loader, srv.MCVersion)
 		if err != nil || len(versions) == 0 {
 			continue // transient lookup failure: this mod just isn't updated this run
 		}
@@ -594,7 +594,6 @@ func (e *Engine) applyUpdate(ctx context.Context, c agentAPI, serverID string, c
 	vid := cand.target.ID
 	row := *old
 	row.VersionID = &vid
-	row.Name = cand.target.Name
 	row.Version = cand.target.VersionNumber
 	row.FileName = cand.file.Filename
 	row.SHA256 = &sha
@@ -611,7 +610,10 @@ func (e *Engine) revertUpdate(ctx context.Context, c agentAPI, serverID string, 
 	if old.VersionID == nil {
 		return fmt.Errorf("no previous version recorded")
 	}
-	prev, err := e.modrinth.GetVersion(ctx, *old.VersionID)
+	if old.SourceID == nil {
+		return fmt.Errorf("no project recorded")
+	}
+	prev, err := e.sources.GetVersion(ctx, old.Source, *old.SourceID, *old.VersionID)
 	if err != nil {
 		return fmt.Errorf("look up previous version: %w", err)
 	}
@@ -631,7 +633,7 @@ func (e *Engine) revertUpdate(ctx context.Context, c agentAPI, serverID string, 
 // swapFile downloads file (SHA-verified), uploads it into installPath, and
 // removes replacesName when the filename changed.
 func (e *Engine) swapFile(ctx context.Context, c agentAPI, serverID, installPath string, file *modrinth.VersionFile, replacesName string) error {
-	tmp, err := e.modrinth.Download(ctx, file.URL, file.Hashes.SHA256)
+	tmp, err := e.sources.Download(ctx, file.URL, file.Hashes.SHA256)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

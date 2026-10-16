@@ -92,6 +92,7 @@ func (h *ModHandlers) rescan(serverID string, done chan struct{}) {
 		return
 	}
 	h.ensureDependencyGraph(ctx, serverID, mods)
+	h.refreshTitles(ctx, mods)
 	if h.bus != nil {
 		h.bus.Publish(events.Event{Type: events.ServerUpdated, ServerID: serverID,
 			Data: map[string]any{"what": "mods"}})

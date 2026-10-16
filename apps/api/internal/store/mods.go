@@ -65,6 +65,12 @@ func (s *Store) StampModHash(ctx context.Context, id, sha512 string) error {
 	return err
 }
 
+// SetModName renames a mod without otherwise changing the row.
+func (s *Store) SetModName(ctx context.Context, id, name string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE installed_mods SET name=? WHERE id=?`, name, id)
+	return err
+}
+
 // RecognizeMod upgrades an existing (typically "custom") row to a known source
 // after its jar was matched to that source's file index by hash — promoting it to
 // a managed mod with version metadata and update checking, while keeping the same

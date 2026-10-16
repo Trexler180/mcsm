@@ -69,13 +69,9 @@ func (h *ModHandlers) findUpdates(ctx context.Context, srv *store.Server) ([]mod
 	}
 
 	loader := modrinth.LoaderForPlatform(srv.Platform)
-	// Update checks need GetVersions to return reliably-ordered, resolvable
-	// versions; CurseForge's key-less listing is paged/filtered enough that it
-	// stays out, matching its previous behavior.
-	updatable := map[string]bool{"modrinth": true, "hangar": true, "spigotmc": true}
 	out := []modUpdate{}
 	for _, m := range mods {
-		if !updatable[m.Source] || m.SourceID == nil || m.VersionID == nil || m.Pinned {
+		if !autoupdate.Updatable(m.Source) || m.SourceID == nil || m.VersionID == nil || m.Pinned {
 			continue
 		}
 		versions, err := h.sourceFor(m.Source).GetVersions(ctx, *m.SourceID, loader, srv.MCVersion)
@@ -500,7 +496,9 @@ func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	sha := file.Hashes.SHA256
 	vid := ver.ID
 	mod.VersionID = &vid
-	mod.Name = ver.Name
+	if mod.SourceID != nil {
+		mod.Name = h.projectTitle(ctx, mod.Source, *mod.SourceID, mod.Name)
+	}
 	mod.Version = ver.VersionNumber
 	mod.FileName = targetFilename
 	mod.SHA256 = &sha

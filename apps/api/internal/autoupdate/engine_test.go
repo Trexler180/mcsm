@@ -92,13 +92,24 @@ func (a *fakeAgent) hasFile(name string) bool {
 type fakeSource struct {
 	byProject map[string][]modrinth.Version
 	byID      map[string]*modrinth.Version
+
+	mu    sync.Mutex
+	asked []string // "source/project" per lookup
 }
 
-func (f *fakeSource) GetVersions(ctx context.Context, projectID, loader, mcVersion string) ([]modrinth.Version, error) {
+func (f *fakeSource) note(source, projectID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, source+"/"+projectID)
+}
+
+func (f *fakeSource) GetVersions(ctx context.Context, source, projectID, loader, mcVersion string) ([]modrinth.Version, error) {
+	f.note(source, projectID)
 	return f.byProject[projectID], nil
 }
 
-func (f *fakeSource) GetVersion(ctx context.Context, versionID string) (*modrinth.Version, error) {
+func (f *fakeSource) GetVersion(ctx context.Context, source, projectID, versionID string) (*modrinth.Version, error) {
+	f.note(source, projectID)
 	v, ok := f.byID[versionID]
 	if !ok {
 		return nil, fmt.Errorf("version not found")
@@ -186,7 +197,7 @@ func newFixture(t *testing.T, agent *fakeAgent, source *fakeSource) *fixture {
 
 	e := &Engine{
 		store:        s,
-		modrinth:     source,
+		sources:      source,
 		newAgent:     func(n *store.Node) agentAPI { return agent },
 		active:       map[string]bool{},
 		pollInterval: time.Millisecond,
@@ -200,10 +211,15 @@ func newFixture(t *testing.T, agent *fakeAgent, source *fakeSource) *fixture {
 
 func (f *fixture) addMod(t *testing.T, projectID, versionID, version, filename string) *store.InstalledMod {
 	t.Helper()
+	return f.addModFrom(t, "modrinth", projectID, versionID, version, filename)
+}
+
+func (f *fixture) addModFrom(t *testing.T, source, projectID, versionID, version, filename string) *store.InstalledMod {
+	t.Helper()
 	pid, vid := projectID, versionID
 	m, err := f.store.CreateMod(context.Background(), &store.InstalledMod{
 		ServerID:    f.server.ID,
-		Source:      "modrinth",
+		Source:      source,
 		SourceID:    &pid,
 		VersionID:   &vid,
 		Name:        projectID,
@@ -317,12 +333,51 @@ func TestEngineHealthyUpdate(t *testing.T) {
 	if got.VersionID == nil || *got.VersionID != "vA2" || got.FileName != "a-2.0.jar" {
 		t.Fatalf("mod not updated: %+v", got)
 	}
+	if got.Name != "projA" {
+		t.Fatalf("name = %q; an update keeps the project's name, not the version's", got.Name)
+	}
 	if !agent.hasFile("a-2.0.jar") || agent.hasFile("a-1.0.jar") {
 		t.Fatalf("jar not swapped: %v", agent.files)
 	}
 	skipped, _ := f.store.ListSkippedModVersions(context.Background(), f.server.ID)
 	if len(skipped) != 0 {
 		t.Fatalf("nothing should be blocklisted, got %+v", skipped)
+	}
+}
+
+// Plugins from Hangar update the same way, looked up on Hangar (by project,
+// since its version ids aren't global), and keep their names.
+func TestEngineUpdatesHangarPlugins(t *testing.T) {
+	agent := newFakeAgent("b-1.0.jar")
+	agent.brokenFiles["b-2.0.jar"] = true
+	oldV := mkVersion("vB1", "projB", "1.0", "b-1.0.jar")
+	source := &fakeSource{
+		byProject: map[string][]modrinth.Version{"projB": {mkVersion("vB2", "projB", "2.0", "b-2.0.jar"), oldV}},
+		byID:      map[string]*modrinth.Version{"vB1": &oldV},
+	}
+	f := newFixture(t, agent, source)
+	mod := f.addModFrom(t, "hangar", "projB", "vB1", "1.0", "b-1.0.jar")
+
+	run := f.runAndWait(t)
+	if run.Status == "success" {
+		t.Fatalf("a broken update should not succeed: %s", run.Detail)
+	}
+	got, err := f.store.GetMod(context.Background(), mod.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VersionID == nil || *got.VersionID != "vB1" || got.Name != "projB" {
+		t.Fatalf("mod not restored as it was: %+v", got)
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	for _, a := range source.asked {
+		if a != "hangar/projB" {
+			t.Fatalf("asked %q, want every lookup on hangar/projB (all: %v)", a, source.asked)
+		}
+	}
+	if len(source.asked) < 2 {
+		t.Fatalf("lookups = %v, want the listing and the revert's version", source.asked)
 	}
 }
 
