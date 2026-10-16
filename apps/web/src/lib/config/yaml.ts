@@ -200,13 +200,17 @@ class YamlParser {
     const value = valueRaw.slice(0, trimmedLen);
 
     if (value.trim() === "") {
+      const next = this.tokens[this.pos];
       // Container value — parse the deeper block (if any).
-      if (
-        this.pos < this.tokens.length &&
-        this.tokens[this.pos].indent > indent
-      ) {
-        const childIndent = this.tokens[this.pos].indent;
-        const child = this.parseBlock(childIndent, childPath);
+      if (next && next.indent > indent) {
+        const child = this.parseBlock(next.indent, childPath);
+        child.key = key;
+        child.doc = tok.doc;
+        parent.children!.push(child);
+      } else if (next && next.indent === indent && next.content.startsWith("-")) {
+        // A compact sequence: its items sit at the key's own indent
+        // ("key:\n- a\n- b"), which YAML allows and Paper's configs use.
+        const child = this.parseBlock(indent, childPath);
         child.key = key;
         child.doc = tok.doc;
         parent.children!.push(child);
