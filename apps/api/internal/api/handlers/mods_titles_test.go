@@ -60,7 +60,10 @@ func TestResolveTitlesSkipsCheckedAndRetriesFailures(t *testing.T) {
 		titledMod("c", "curseforge", "5678", "jei-1.21.jar"),
 	}
 	renames, answered := resolveTitles(context.Background(), mods, func(id string) bool { return id == "a" }, titleLookups{
-		batch: func(context.Context, []string) (map[string]string, error) { t.Fatal("no Modrinth mods"); return nil, nil },
+		batch: func(context.Context, []string) (map[string]string, error) {
+			t.Fatal("no Modrinth mods")
+			return nil, nil
+		},
 		one: func(_ context.Context, source, _ string) (string, error) {
 			if source == "hangar" {
 				t.Fatal("asked about a mod already checked")
