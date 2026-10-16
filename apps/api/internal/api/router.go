@@ -78,6 +78,9 @@ type Services struct {
 	Ops     *operations.Manager
 	Life    *lifecycle.Service
 	Backups *backups.Service
+	// Tasks runs a scheduled task by hand. Without it (tests), that route
+	// answers 503.
+	Tasks handlers.TaskRunner
 	// Background, when set, runs the router's own background work (the mod
 	// update watcher) until it is done. Tests leave it nil.
 	Background context.Context
@@ -193,7 +196,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	migrationEngine.SetOperations(svc.Ops)
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
 	backupH := handlers.NewBackupHandlers(s, notifyEngine).WithService(svc.Backups)
-	taskH := handlers.NewTaskHandlers(s)
+	taskH := handlers.NewTaskHandlers(s).WithRunner(svc.Tasks)
 	userH := handlers.NewUserHandlers(s, jwtSecret)
 	consoleH := handlers.NewConsoleHandlers(s)
 	playersH := handlers.NewPlayersHandlers(s)
@@ -606,6 +609,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					r.With(taskAccess, requireHuman).Put("/tasks/{taskId}", taskH.Update)
 					r.With(taskAccess).Delete("/tasks/{taskId}", taskH.Delete)
 					r.With(taskAccess).Get("/tasks/{taskId}/runs", taskH.Runs)
+					r.With(taskAccess, requireHuman).Post("/tasks/{taskId}/run", taskH.RunNow)
 					r.With(taskAccess).Get("/task-runs", taskH.Runs)
 
 					// Per-server audit trail + indexed log warnings

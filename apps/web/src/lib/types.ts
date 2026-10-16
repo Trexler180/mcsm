@@ -1017,6 +1017,8 @@ export interface Backup {
   snapshot_id: string | null;
   started_at: string;
   completed_at: string | null;
+  /** For a failed backup, why: {"error": "..."}. */
+  metadata?: { error?: string } | null;
 }
 
 export interface BackupCreated extends Backup {
@@ -1202,6 +1204,19 @@ export interface ScheduledTask {
   last_run: string | null;
   next_run: string | null;
   created_at: string;
+}
+
+// One firing of a scheduled task, by the schedule or by hand.
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  server_id: string;
+  action: string;
+  status: "running" | "succeeded" | "failed" | "skipped";
+  message: string;
+  operation_id: string | null;
+  started_at: string;
+  finished_at: string | null;
 }
 
 // Panel wall-clock, used to show scheduled-task times in the timezone cron

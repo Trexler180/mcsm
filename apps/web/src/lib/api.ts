@@ -63,6 +63,7 @@ import type {
   PlayerDetail,
   PlayerSessionsResponse,
   ScheduledTask,
+  TaskRun,
   Server,
   ServerFolder,
   ServerBans,
@@ -1241,6 +1242,19 @@ export const api = {
         get<BackupTarget[]>(`/servers/${serverId}/backup-targets`),
       create: (serverId: string, data: Partial<BackupTarget>) =>
         post<BackupTarget>(`/servers/${serverId}/backup-targets`, data),
+      update: (serverId: string, targetId: string, data: Partial<BackupTarget>) =>
+        put<BackupTarget>(`/servers/${serverId}/backup-targets/${targetId}`, data),
+    },
+    // A plain <a href> download carrying a single-use ticket, like files.
+    download: async (serverId: string, backupId: string) => {
+      const endpoint = `${BASE}/servers/${serverId}/backups/${backupId}/download`;
+      const { ticket } = await api.auth.ticket(endpoint);
+      const a = document.createElement("a");
+      a.href = `${endpoint}?${new URLSearchParams({ ticket }).toString()}`;
+      a.download = `backup-${backupId}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     },
   },
 
@@ -1253,6 +1267,12 @@ export const api = {
       put<ScheduledTask>(`/servers/${serverId}/tasks/${taskId}`, data),
     delete: (serverId: string, taskId: string) =>
       del(`/servers/${serverId}/tasks/${taskId}`),
+    // Runs it now, as the caller. The outcome arrives as task.run events and
+    // in runs().
+    run: (serverId: string, taskId: string) =>
+      post<TaskRun>(`/servers/${serverId}/tasks/${taskId}/run`),
+    runs: (serverId: string, taskId: string, limit = 20) =>
+      get<TaskRun[]>(`/servers/${serverId}/tasks/${taskId}/runs?limit=${limit}`),
   },
 
   users: {

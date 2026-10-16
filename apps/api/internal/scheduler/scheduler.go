@@ -238,48 +238,90 @@ func (s *Scheduler) fire(taskID string) {
 
 func (s *Scheduler) runTask(ctx context.Context, task *store.ScheduledTask) {
 	now := time.Now()
-	defer func() {
-		var next *time.Time
-		if sched, err := Parser.Parse(task.CronExpr); err == nil {
-			n := sched.Next(time.Now())
-			next = &n
-		}
-		_ = s.store.UpdateTaskLastRun(context.Background(), task.ID, now, next)
-	}()
+	defer s.recordLastRun(task, now)
 
-	srv, err := s.store.GetServer(ctx, task.ServerID)
-	if err != nil {
-		log.Printf("scheduler: task %s server lookup: %v", task.ID, err)
+	srv, run, ok := s.begin(ctx, task)
+	if !ok {
 		return
 	}
-	run, err := s.store.StartTaskRun(ctx, task.ID, srv.ID, task.Action)
-	if err != nil {
-		log.Printf("scheduler: record run of %s: %v", task.ID, err)
-		return
-	}
-	s.publish(srv.ID, task, run.ID, "running", "")
-
-	finish := func(status, message, operationID string) {
-		_ = s.store.FinishTaskRun(context.Background(), run.ID, status, message, operationID)
-		s.publish(srv.ID, task, run.ID, status, message)
-		if status == "failed" || status == "skipped" {
-			log.Printf("scheduler: task %q %s: %s", task.Name, status, message)
-			s.engine.Emit(notify.TaskFailed(srv.ID, srv.Name, task.Name, message))
-		}
-	}
-
 	// Re-authorize at fire time: a task must never outlive its creator's ability
 	// to perform its action. If the creator was deleted or lost the permission the
 	// action requires, the task is skipped (not run with the server's authority).
 	if !s.creatorAuthorized(ctx, task, srv.ID) {
-		finish("skipped", "the task's creator no longer has the permission this action needs", "")
+		s.finish(task, srv, run, "skipped", "the task's creator no longer has the permission this action needs", "")
 		return
 	}
-
 	actor := operations.Actor{Trigger: operations.TriggerScheduled, TaskID: task.ID, RunID: run.ID}
 	if task.CreatedBy != nil {
 		actor.UserID = *task.CreatedBy
 	}
+	s.execute(ctx, task, srv, run, actor)
+}
+
+// RunNow runs a task straight away on behalf of userID, whom the caller has
+// already checked may perform its action. It answers once the run is
+// recorded; the work carries on in the background, and its outcome arrives
+// as task.run events and in the task's history like any other run.
+func (s *Scheduler) RunNow(task *store.ScheduledTask, userID string) (*store.TaskRun, error) {
+	ctx := context.Background()
+	srv, err := s.store.GetServer(ctx, task.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	run, err := s.store.StartTaskRun(ctx, task.ID, srv.ID, task.Action)
+	if err != nil {
+		return nil, err
+	}
+	s.publish(srv.ID, task, run.ID, "running", "")
+	actor := operations.Actor{Trigger: operations.TriggerManual, TaskID: task.ID, RunID: run.ID, UserID: userID}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Hour)
+		defer cancel()
+		defer s.recordLastRun(task, time.Now())
+		s.execute(ctx, task, srv, run, actor)
+	}()
+	return run, nil
+}
+
+// recordLastRun stamps when the task ran and when it runs next.
+func (s *Scheduler) recordLastRun(task *store.ScheduledTask, ran time.Time) {
+	var next *time.Time
+	if sched, err := Parser.Parse(task.CronExpr); err == nil {
+		n := sched.Next(time.Now())
+		next = &n
+	}
+	_ = s.store.UpdateTaskLastRun(context.Background(), task.ID, ran, next)
+}
+
+// begin looks up the task's server and records that the task fired.
+func (s *Scheduler) begin(ctx context.Context, task *store.ScheduledTask) (*store.Server, *store.TaskRun, bool) {
+	srv, err := s.store.GetServer(ctx, task.ServerID)
+	if err != nil {
+		log.Printf("scheduler: task %s server lookup: %v", task.ID, err)
+		return nil, nil, false
+	}
+	run, err := s.store.StartTaskRun(ctx, task.ID, srv.ID, task.Action)
+	if err != nil {
+		log.Printf("scheduler: record run of %s: %v", task.ID, err)
+		return nil, nil, false
+	}
+	s.publish(srv.ID, task, run.ID, "running", "")
+	return srv, run, true
+}
+
+// finish records how a run ended, and raises an alert when it didn't happen.
+func (s *Scheduler) finish(task *store.ScheduledTask, srv *store.Server, run *store.TaskRun, status, message, operationID string) {
+	_ = s.store.FinishTaskRun(context.Background(), run.ID, status, message, operationID)
+	s.publish(srv.ID, task, run.ID, status, message)
+	if status == "failed" || status == "skipped" {
+		log.Printf("scheduler: task %q %s: %s", task.Name, status, message)
+		s.engine.Emit(notify.TaskFailed(srv.ID, srv.Name, task.Name, message))
+	}
+}
+
+// execute does what the task is for, as actor.
+func (s *Scheduler) execute(ctx context.Context, task *store.ScheduledTask, srv *store.Server, run *store.TaskRun, actor operations.Actor) {
+	finish := func(status, message, operationID string) { s.finish(task, srv, run, status, message, operationID) }
 
 	switch task.Action {
 	case "mod_update":

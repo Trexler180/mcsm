@@ -81,7 +81,11 @@ export function routeEvent(qc: QueryClient, e: LiveEvent) {
       qc.setQueryData<Server[]>(['servers'], (list) => list?.filter((s) => s.id !== e.server_id))
       return
     case 'task.run':
-      if (e.server_id) void qc.invalidateQueries({ queryKey: ['tasks', e.server_id] })
+      if (e.server_id) {
+        void qc.invalidateQueries({ queryKey: ['tasks', e.server_id] })
+        void qc.invalidateQueries({ queryKey: ['task-runs', e.server_id] })
+        if (e.data?.action === 'backup') void qc.invalidateQueries({ queryKey: ['backups', e.server_id] })
+      }
       refreshFleetSoon(qc)
       return
   }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -188,5 +189,31 @@ func TestDisabledTaskIsUnregistered(t *testing.T) {
 	e.sched.refresh(ctx)
 	if _, ok := e.sched.entries[task.ID]; ok {
 		t.Fatal("a disabled task stayed scheduled")
+	}
+}
+
+// Run now runs the task straight away as the person asking, recorded in its
+// history like any other run, whether or not it's paused.
+func TestRunNowRunsAsTheRequester(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	task := e.task(t, nil, "say now")
+	task.Enabled = false
+	if err := e.s.UpdateTask(ctx, task.ID, task); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.sched.RunNow(task, e.owner.ID)
+	if err != nil || run.Status != "running" {
+		t.Fatalf("run %+v, err %v", run, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for e.lastRun(t, task.ID).Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := e.lastRun(t, task.ID); got.Status != "succeeded" || got.ID != run.ID {
+		t.Fatalf("run %+v", got)
+	}
+	if got := e.node.sent(); got != "say now" {
+		t.Fatalf("commands sent %q", got)
 	}
 }

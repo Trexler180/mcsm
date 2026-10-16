@@ -10,6 +10,8 @@ import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer,
 import { ServerHeader, tabLabel } from './header'
 import { LegacyTab } from './legacy'
 import { PlayersTab } from './players'
+import { BackupsTab } from './backups'
+import { SchedulesTab } from './schedules'
 import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
 
 export interface ServerSearch {
@@ -86,6 +88,18 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
     body = (
       <TabPage>
         <PlayersTab server={server} status={status} perms={my} player={search.player} setPlayer={(player) => setSearch({ ...search, player })} />
+      </TabPage>
+    )
+  } else if (tab === 'backups') {
+    body = (
+      <TabPage>
+        <BackupsTab server={server} status={status} />
+      </TabPage>
+    )
+  } else if (tab === 'schedules') {
+    body = (
+      <TabPage>
+        <SchedulesTab server={server} />
       </TabPage>
     )
   } else {

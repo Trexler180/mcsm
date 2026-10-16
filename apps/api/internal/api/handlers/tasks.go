@@ -13,11 +13,51 @@ import (
 )
 
 type TaskHandlers struct {
-	store *store.Store
+	store  *store.Store
+	runner TaskRunner
 }
 
 func NewTaskHandlers(s *store.Store) *TaskHandlers {
 	return &TaskHandlers{store: s}
+}
+
+// TaskRunner runs a scheduled task straight away (the scheduler).
+type TaskRunner interface {
+	RunNow(task *store.ScheduledTask, userID string) (*store.TaskRun, error)
+}
+
+// WithRunner enables running a task by hand.
+func (h *TaskHandlers) WithRunner(r TaskRunner) *TaskHandlers {
+	h.runner = r
+	return h
+}
+
+// RunNow runs a task now, as the person asking rather than its creator, so it
+// needs the same permission scheduling it would: the one its action requires.
+// It answers 202 with the run; the outcome follows on the event stream and in
+// the task's history.
+func (h *TaskHandlers) RunNow(w http.ResponseWriter, r *http.Request) {
+	serverID, taskID := chi.URLParam(r, "id"), chi.URLParam(r, "taskId")
+	if h.runner == nil {
+		writeError(w, http.StatusServiceUnavailable, "running a task by hand isn't available")
+		return
+	}
+	task, err := h.store.GetTask(r.Context(), taskID)
+	if err != nil || task.ServerID != serverID {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if status, msg := h.authorizeAction(r, serverID, task.Action); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	run, err := h.runner.RunNow(task, auth.ClaimsFrom(r.Context()).UserID)
+	if err != nil {
+		writeServerError(w, r, "run task", err)
+		return
+	}
+	audit(h.store, r, serverID, "task.run", map[string]any{"task_id": task.ID, "name": task.Name, "action": task.Action})
+	writeJSON(w, http.StatusAccepted, run)
 }
 
 // authorizeAction enforces that the caller may schedule the given action: the

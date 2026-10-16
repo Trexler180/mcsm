@@ -316,8 +316,12 @@ func main() {
 	backupSvc := backups.NewService(s, ops, bus, notifier.Engine, nil)
 	updater.SetOperations(ops)
 
+	// Scheduled tasks. Built before the router, which runs tasks by hand
+	// through it; started with the other background workers below.
+	sched := scheduler.New(s, updater, notifier.Engine, life, backupSvc, bus)
+
 	router := panelapi.NewRouter(s, jwtSecret, serverRoot, updater, notifier, panelapi.WithServices(panelapi.Services{
-		Bus: bus, Ops: ops, Life: life, Backups: backupSvc, Background: bgCtx,
+		Bus: bus, Ops: ops, Life: life, Backups: backupSvc, Tasks: sched, Background: bgCtx,
 	}))
 
 	srv := &http.Server{
@@ -333,7 +337,6 @@ func main() {
 
 	// Background workers: cron-driven scheduled tasks + status synchronization.
 	// bgCtx/bgCancel are created above (the dispatcher already runs on bgCtx).
-	sched := scheduler.New(s, updater, notifier.Engine, life, backupSvc, bus)
 	sched.Start(bgCtx)
 
 	go poller.Run(bgCtx, s, notifier.Engine, bus)
