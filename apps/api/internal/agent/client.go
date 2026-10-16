@@ -794,6 +794,10 @@ func (c *Client) WebSocketURL(path string) string {
 	return u.String()
 }
 
+// ErrServerNotRunning means the agent refused because the server isn't
+// running, so there was nothing to send a command to.
+var ErrServerNotRunning = errors.New("agent: server not running")
+
 func checkError(resp *http.Response) error {
 	if resp.StatusCode < 400 {
 		return nil
@@ -802,6 +806,9 @@ func checkError(resp *http.Response) error {
 	var e map[string]string
 	if err := json.Unmarshal(body, &e); err != nil || e["error"] == "" {
 		return fmt.Errorf("agent: HTTP %d", resp.StatusCode)
+	}
+	if e["error"] == "server not running" {
+		return ErrServerNotRunning
 	}
 	return fmt.Errorf("agent: %s", e["error"])
 }

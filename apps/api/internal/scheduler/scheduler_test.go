@@ -35,9 +35,16 @@ func TestValidateCron(t *testing.T) {
 type commandNode struct {
 	mu       sync.Mutex
 	commands []string
+	// stopped answers commands the way an agent does for a server that isn't running.
+	stopped bool
 }
 
 func (n *commandNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/command") && n.stopped {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"server not running"}`))
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/command") {
 		var body struct {
 			Command string `json:"command"`
@@ -215,5 +222,35 @@ func TestRunNowRunsAsTheRequester(t *testing.T) {
 	}
 	if got := e.node.sent(); got != "say now" {
 		t.Fatalf("commands sent %q", got)
+	}
+}
+
+// A console command for a server that's stopped is a message nobody would
+// hear: the run is recorded as skipped, with the reason, rather than failed.
+func TestCommandForAStoppedServerIsSkipped(t *testing.T) {
+	e := newEnv(t)
+	e.node.stopped = true
+	task := e.task(t, e.owner, "say restarting soon")
+
+	e.sched.fire(task.ID)
+	run := e.lastRun(t, task.ID)
+	if run.Status != "skipped" || run.Message != "the server wasn't running" {
+		t.Fatalf("run %+v, want skipped because the server wasn't running", run)
+	}
+}
+
+// A scheduled restart leaves a stopped server stopped: someone may have
+// stopped it on purpose, and restarting would start it.
+func TestRestartOfAStoppedServerIsSkipped(t *testing.T) {
+	e := newEnv(t)
+	task, err := e.s.CreateTask(context.Background(), &store.ScheduledTask{
+		ServerID: e.srv.ID, Name: "Nightly restart", CronExpr: "0 5 * * *", Action: "restart", Enabled: true, CreatedBy: &e.owner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.sched.fire(task.ID)
+	if run := e.lastRun(t, task.ID); run.Status != "skipped" || run.Message != "the server wasn't running" {
+		t.Fatalf("run %+v, want skipped because the server wasn't running", run)
 	}
 }

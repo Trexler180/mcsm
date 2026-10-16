@@ -2,6 +2,7 @@ package process
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1060,6 +1061,11 @@ func (inst *Instance) kill() error {
 }
 
 func (inst *Instance) sendCommand(cmd string) error {
+	// A server that has exited keeps its record (status, exit cause) but its
+	// console pipe is closed; say so rather than surfacing the write error.
+	if inst.exited() {
+		return errNotRunning
+	}
 	inst.mu.RLock()
 	stdin := inst.stdin
 	inst.mu.RUnlock()
@@ -1067,6 +1073,10 @@ func (inst *Instance) sendCommand(cmd string) error {
 		return fmt.Errorf("stdin not available")
 	}
 	_, err := fmt.Fprintf(stdin, "%s\n", cmd)
+	if errors.Is(err, os.ErrClosed) {
+		// It exited between the check and the write.
+		return errNotRunning
+	}
 	return err
 }
 

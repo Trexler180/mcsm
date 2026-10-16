@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -309,10 +310,15 @@ func (s *Scheduler) begin(ctx context.Context, task *store.ScheduledTask) (*stor
 	return srv, run, true
 }
 
-// finish records how a run ended, and raises an alert when it didn't happen.
-func (s *Scheduler) finish(task *store.ScheduledTask, srv *store.Server, run *store.TaskRun, status, message, operationID string) {
+// record records how a run ended, without raising an alert.
+func (s *Scheduler) record(task *store.ScheduledTask, srv *store.Server, run *store.TaskRun, status, message, operationID string) {
 	_ = s.store.FinishTaskRun(context.Background(), run.ID, status, message, operationID)
 	s.publish(srv.ID, task, run.ID, status, message)
+}
+
+// finish records how a run ended, and raises an alert when it didn't happen.
+func (s *Scheduler) finish(task *store.ScheduledTask, srv *store.Server, run *store.TaskRun, status, message, operationID string) {
+	s.record(task, srv, run, status, message, operationID)
 	if status == "failed" || status == "skipped" {
 		log.Printf("scheduler: task %q %s: %s", task.Name, status, message)
 		s.engine.Emit(notify.TaskFailed(srv.ID, srv.Name, task.Name, message))
@@ -354,6 +360,12 @@ func (s *Scheduler) execute(ctx context.Context, task *store.ScheduledTask, srv 
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err = c.SendCommand(cctx, srv.ID, p.Command)
 		cancel()
+		if errors.Is(err, agent.ErrServerNotRunning) {
+			// A message for players, with no players to hear it: recorded,
+			// but not worth an alert.
+			s.record(task, srv, run, "skipped", "the server wasn't running", "")
+			return
+		}
 		if err != nil {
 			finish("failed", err.Error(), "")
 			return
@@ -370,6 +382,12 @@ func (s *Scheduler) execute(ctx context.Context, task *store.ScheduledTask, srv 
 		finish("succeeded", "", op.ID)
 
 	case "restart":
+		// Restarting a stopped server would start it, undoing whoever stopped
+		// it on purpose; a nightly restart only refreshes one that's running.
+		if srv.Status != "online" && srv.Status != "starting" {
+			s.record(task, srv, run, "skipped", "the server wasn't running", "")
+			return
+		}
 		if err := s.life.Restart(ctx, srv, actor); err != nil {
 			finish("failed", err.Error(), "")
 			return
