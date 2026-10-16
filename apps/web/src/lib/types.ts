@@ -1340,6 +1340,7 @@ export type MCPOperatorScope =
 
 export type MCPScope =
   | MCPDiagnosticScope
+  | MCPSensitiveReadScope
   | MCPActionRequestScope
   | MCPOperatorScope;
 

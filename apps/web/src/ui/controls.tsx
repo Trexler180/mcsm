@@ -240,6 +240,7 @@ export function Check({
   indeterminate,
   disabled,
   hideLabel,
+  'aria-label': ariaLabel,
 }: {
   checked: boolean
   onChange?: (v: boolean) => void
@@ -247,6 +248,8 @@ export function Check({
   indeterminate?: boolean
   disabled?: boolean
   hideLabel?: boolean
+  /** A name for the box when the label carries more than its name. */
+  'aria-label'?: string
 }) {
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -254,7 +257,7 @@ export function Check({
   }, [indeterminate])
   return (
     <label className="check" onClick={(e) => e.stopPropagation()}>
-      <input ref={ref} type="checkbox" checked={!!checked} disabled={disabled} onChange={(e) => onChange?.(e.target.checked)} />
+      <input ref={ref} type="checkbox" checked={!!checked} disabled={disabled} aria-label={ariaLabel} onChange={(e) => onChange?.(e.target.checked)} />
       {label != null && <span className={hideLabel ? 'sr-only' : undefined}>{label}</span>}
     </label>
   )

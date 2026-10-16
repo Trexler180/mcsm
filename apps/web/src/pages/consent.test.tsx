@@ -14,7 +14,7 @@ import {
   DIAGNOSTIC_SCOPES,
   OPERATOR_SCOPES,
   browserNav,
-} from "./mcp-consent.page";
+} from "./consent";
 
 vi.mock("@/store/notifications", () => ({
   useNotifications: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -433,5 +433,15 @@ describe("ConsentPage", () => {
     );
     await screen.findAllByTestId("consent-client");
     expect(container.textContent).not.toMatch(/mcsm_mcp[acr]_/);
+  });
+});
+
+describe("groupScopes", () => {
+  it("orders what was asked for by what it means, unknown scopes last", async () => {
+    const { groupScopes } = await import("./consent");
+    const asked = ["mcp:power.restart", "mcp:logs.raw", "mcp:servers.read", "mcp:actions.request", "mcp:future.thing"].map((scope) => ({ scope }));
+    const groups = groupScopes(asked as never);
+    expect(groups.map((g) => g.title)).toEqual(["Read only", "Sensitive reads", "Ask first", "Without asking", "Other"]);
+    expect(groups[3].items.map((i: { scope: string }) => i.scope)).toEqual(["mcp:power.restart"]);
   });
 });

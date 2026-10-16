@@ -80,7 +80,7 @@ describe("McpApprovalDialog", () => {
     const submit = await screen.findByRole("button", { name: /approve and run/i });
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/confirm your password/i), {
+    fireEvent.change(screen.getByLabelText(/your password/i), {
       target: { value: "hunter2hunter2" },
     });
     fireEvent.click(screen.getByRole("button", { name: /approve and run/i }));
@@ -98,12 +98,12 @@ describe("McpApprovalDialog", () => {
     renderDialog();
     useMcpApprovalDialog.getState().open(alert);
 
-    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+    fireEvent.change(await screen.findByLabelText(/your password/i), {
       target: { value: "hunter2hunter2" },
     });
     expect(screen.getByRole("button", { name: /approve and run/i })).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/authentication code/i), {
+    fireEvent.change(screen.getByLabelText(/two-factor code/i), {
       target: { value: "123456" },
     });
     expect(screen.getByRole("button", { name: /approve and run/i })).toBeEnabled();
@@ -140,7 +140,7 @@ describe("McpApprovalDialog", () => {
     renderDialog();
     useMcpApprovalDialog.getState().open(alert);
 
-    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+    fireEvent.change(await screen.findByLabelText(/your password/i), {
       target: { value: "wrong-password" },
     });
     fireEvent.click(screen.getByRole("button", { name: /approve and run/i }));
@@ -148,6 +148,6 @@ describe("McpApprovalDialog", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /approve and run/i })).toBeEnabled(),
     );
-    expect(screen.getByLabelText(/confirm your password/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/your password/i)).toBeInTheDocument();
   });
 });

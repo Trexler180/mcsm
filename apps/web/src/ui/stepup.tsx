@@ -59,6 +59,7 @@ export function StepUpFields({
           value={value.password}
           autoFocus={autoFocus}
           autoComplete="current-password"
+          aria-label="Your password"
           onKeyDown={key}
           onChange={(e) => onChange({ ...value, password: e.target.value })}
         />
@@ -72,6 +73,7 @@ export function StepUpFields({
             placeholder="000000"
             value={value.code}
             autoComplete="one-time-code"
+            aria-label="Two-factor code"
             onKeyDown={key}
             onChange={(e) => onChange({ ...value, code: e.target.value.replace(/\D/g, '') })}
           />

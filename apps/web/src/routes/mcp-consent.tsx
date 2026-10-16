@@ -1,20 +1,12 @@
-import { createRoute, lazyRouteComponent } from '@tanstack/react-router'
+import { createRoute } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
+import { ConsentPage } from '@/pages/consent'
 
-const ConsentPage = lazyRouteComponent(
-  () => import('./mcp-consent.page'),
-  'ConsentPage',
-)
-
-// The OAuth consent screen. A normal authenticated route on purpose: an
-// unauthenticated visitor is sent to login and returned here afterwards, so
-// "there is a live human session" is enforced by the machinery that already
-// guards every other page rather than by anything new.
-//
-// Component code-split, like the other pages: nobody loads this until a client
-// actually asks to connect.
+// The OAuth consent screen. A normal signed-in route on purpose: someone not
+// signed in is sent to sign in and brought back here, so "a person is here"
+// is enforced by what already guards every other page.
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: '/mcp-consent',
-  component: () => <ConsentPage />,
+  component: ConsentPage,
 })

@@ -321,7 +321,9 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .switch[aria-checked="true"]:active::after { transform: translateX(10px); }
 .switch:disabled { opacity: .35; cursor: not-allowed; }
 
-.check { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.check { display: inline-flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+/* Lines up with the first line of a label that wraps. */
+.check > input { margin-top: 1px; }
 .check input { appearance: none; margin: 0; width: 18px; height: 18px; flex: none; border-radius: 6px; background: var(--inset); box-shadow: inset 0 0 0 1.5px var(--line-2); display: grid; place-items: center; cursor: pointer; transition: background .2s, box-shadow .2s, transform .2s var(--spring); }
 .check input:active { transform: scale(.88); }
 .check input:checked, .check input:indeterminate { background: var(--ink); box-shadow: none; }
