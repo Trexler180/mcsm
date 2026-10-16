@@ -22,7 +22,7 @@ import { Sidebar } from './sidebar'
 
 /** Sections already on the new design. Everything else is an older screen,
  *  shown inside the shell until its turn comes. */
-const PORTED = new Set<string>(['home', 'server', 'alerts', 'nodes', 'people', 'audit', 'settings', 'account'])
+const PORTED = new Set<string>(['home', 'server', 'alerts', 'nodes', 'people', 'audit', 'settings', 'account', 'new'])
 
 /** The signed-in panel: sidebar, main area, and everything that can appear
  *  over any page. */

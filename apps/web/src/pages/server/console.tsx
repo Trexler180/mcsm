@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { COMMANDS } from '@/components/console/commands'
 import type { FleetServer, LogProblem, MyServerPermissions, Server } from '@/lib/types'
 import { ServerConsole, subscribeServerMetrics, type WsMessage } from '@/lib/ws'
@@ -278,7 +278,14 @@ function Console({ server, status, perms, view, setView }: { server: Server; sta
   const canRead = allowed(perms, 'files.read')
   const logs = useQuery({ queryKey: ['log-files', server.id], queryFn: () => api.logs.list(server.id), enabled: view === 'files' && canRead, staleTime: 30_000 })
   const fileText = useQuery({ queryKey: ['log-file', server.id, file], queryFn: () => api.logs.read(server.id, file, 2000), enabled: view === 'files' && canRead, staleTime: 15_000 })
-  const problems = useQuery({ queryKey: ['log-problems', server.id], queryFn: () => api.logs.problems(server.id), enabled: canRead, staleTime: 30_000, refetchInterval: view === 'problems' ? 30_000 : false })
+  const problems = useQuery({
+    queryKey: ['log-problems', server.id],
+    // A server that has never started has no log yet, which means no problems.
+    queryFn: () => api.logs.problems(server.id).catch((e) => (e instanceof ApiError && e.status === 404 ? { file: 'latest.log', problems: [] } : Promise.reject(e))),
+    enabled: canRead,
+    staleTime: 30_000,
+    refetchInterval: view === 'problems' ? 30_000 : false,
+  })
 
   const fileLines = useMemo(() => (fileText.data ? parseLines(fileText.data.lines) : []), [fileText.data])
   const source = view === 'files' ? fileLines : stream.lines.filter((l) => l.id > clearedAt)

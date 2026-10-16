@@ -10,7 +10,7 @@ export const paths = {
   audit: '/audit',
   settings: '/settings',
   account: '/account',
-  newServer: '/servers',
+  newServer: '/new',
   /** A server's page; Console is its front page. */
   server: (id: string, tab?: string) => `/s/${encodeURIComponent(id)}${tab && tab !== 'console' ? '/' + tab : ''}`,
 } as const
@@ -32,7 +32,8 @@ export function sectionOf(pathname: string): { section: string; serverId?: strin
     audit: 'audit',
     settings: 'settings',
     account: 'account',
-    servers: 'servers',
+    servers: 'home',
+    new: 'new',
   }
   return { section: map[parts[0]] ?? parts[0] }
 }
