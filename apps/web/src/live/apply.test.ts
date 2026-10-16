@@ -22,6 +22,7 @@ function server(id: string, over: Partial<FleetServer> = {}): FleetServer {
     sampled_at: null,
     players_24h: [],
     last_backup_at: null,
+    backup_failed_at: null,
     backup_overdue: false,
     active_conflict: false,
     mod_updates: null,

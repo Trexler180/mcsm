@@ -96,3 +96,91 @@ func TestFleetSummary(t *testing.T) {
 		}
 	}
 }
+
+// Home's activity says who acted, as far as the viewer may know: an admin
+// sees everyone, anyone else sees their own name and nobody else's.
+func TestFleetActivityNamesActors(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	admin := f.user("admin@example.com", "admin")
+	alice := f.user("alice@example.com", "user")
+	bob := f.user("bob@example.com", "user")
+	shared := f.server(alice, "Alice SMP")
+	if err := f.store.SetServerPermissions(ctx, shared.ID, bob.ID, []string{"view"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.store.LogAction(ctx, alice.ID, shared.ID, "server.start", "", nil)
+	_ = f.store.LogAction(ctx, bob.ID, shared.ID, "server.stop", "", nil)
+
+	h := NewOverviewHandlers(f.store)
+	names := func(u *store.User, role string) map[string]string {
+		rr := httptest.NewRecorder()
+		h.Fleet(rr, as(u, role, http.MethodGet, "/api/v1/fleet", nil))
+		var out struct {
+			Activity []struct {
+				Action    string `json:"action"`
+				ActorName string `json:"actor_name"`
+			} `json:"activity"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, e := range out.Activity {
+			got[e.Action] = e.ActorName
+		}
+		return got
+	}
+	if got := names(alice, "user"); got["server.start"] != "alice@example.com" || got["server.stop"] != "" {
+		t.Fatalf("alice's view of who acted: %v", got)
+	}
+	if got := names(admin, "admin"); got["server.start"] != "alice@example.com" || got["server.stop"] != "bob@example.com" {
+		t.Fatalf("admin's view of who acted: %v", got)
+	}
+}
+
+// Home says when a server's backups are failing, and stops saying so once one
+// succeeds again.
+func TestFleetReportsFailingBackups(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	admin := f.user("admin@example.com", "admin")
+	srv := f.server(admin, "Survival")
+	backup := func(status, reason string, at time.Time) {
+		b, err := f.store.CreateBackup(ctx, &store.Backup{ServerID: srv.ID, Trigger: "manual", Status: "running"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var size *int64
+		if status == "success" {
+			n := int64(10)
+			size = &n
+		}
+		if err := f.store.UpdateBackupResult(ctx, b.ID, status, size, reason); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.ExecContext(ctx, `UPDATE backups SET completed_at = ? WHERE id = ?`, at.UTC().Format("2006-01-02 15:04:05"), b.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewOverviewHandlers(f.store)
+	server := func() fleetServer {
+		rr := httptest.NewRecorder()
+		h.Fleet(rr, as(admin, "admin", http.MethodGet, "/api/v1/fleet", nil))
+		var out fleetResponse
+		if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Servers[0]
+	}
+	now := time.Now()
+	backup("success", "", now.Add(-3*time.Hour))
+	backup("failed", "not enough disk space", now.Add(-2*time.Hour))
+	if s := server(); s.BackupFailedAt == nil || s.BackupError != "not enough disk space" || s.LastBackupAt == nil {
+		t.Fatalf("failing backup not reported: %+v", s)
+	}
+	backup("success", "", now.Add(-time.Hour))
+	if s := server(); s.BackupFailedAt != nil {
+		t.Fatalf("a failure before the latest success is still reported: %+v", s)
+	}
+}

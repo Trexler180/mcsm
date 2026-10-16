@@ -24,24 +24,28 @@ const sampleFreshness = 2 * time.Minute
 const backupStaleAfter = 24 * time.Hour
 
 type fleetServer struct {
-	ID             string           `json:"id"`
-	Name           string           `json:"name"`
-	Status         string           `json:"status"`
-	Platform       string           `json:"platform"`
-	MCVersion      string           `json:"mc_version"`
-	NodeID         string           `json:"node_id"`
-	FolderID       *string          `json:"folder_id"`
-	SortOrder      int              `json:"sort_order"`
-	Port           int              `json:"port"`
-	OnlineSince    *int64           `json:"online_since"`
-	Players        *int             `json:"players"`
-	TPS            *float64         `json:"tps"`
-	CPUPercent     *float64         `json:"cpu_percent"`
-	RAMUsedMB      *int64           `json:"ram_used_mb"`
-	RAMLimitMB     int              `json:"ram_limit_mb"`
-	SampledAt      *time.Time       `json:"sampled_at"`
-	Players24h     []*int           `json:"players_24h"`
-	LastBackupAt   *time.Time       `json:"last_backup_at"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	Status       string     `json:"status"`
+	Platform     string     `json:"platform"`
+	MCVersion    string     `json:"mc_version"`
+	NodeID       string     `json:"node_id"`
+	FolderID     *string    `json:"folder_id"`
+	SortOrder    int        `json:"sort_order"`
+	Port         int        `json:"port"`
+	OnlineSince  *int64     `json:"online_since"`
+	Players      *int       `json:"players"`
+	TPS          *float64   `json:"tps"`
+	CPUPercent   *float64   `json:"cpu_percent"`
+	RAMUsedMB    *int64     `json:"ram_used_mb"`
+	RAMLimitMB   int        `json:"ram_limit_mb"`
+	SampledAt    *time.Time `json:"sampled_at"`
+	Players24h   []*int     `json:"players_24h"`
+	LastBackupAt *time.Time `json:"last_backup_at"`
+	// Set when the server's latest backup failed (and none has succeeded
+	// since), with why.
+	BackupFailedAt *time.Time       `json:"backup_failed_at"`
+	BackupError    string           `json:"backup_error,omitempty"`
 	BackupOverdue  bool             `json:"backup_overdue"`
 	ActiveConflict bool             `json:"active_conflict"`
 	ModUpdates     *int             `json:"mod_updates"`
@@ -78,12 +82,12 @@ type fleetFigures struct {
 }
 
 type fleetResponse struct {
-	GeneratedAt time.Time           `json:"generated_at"`
-	Figures     fleetFigures        `json:"figures"`
-	Servers     []fleetServer       `json:"servers"`
-	Nodes       []fleetNode         `json:"nodes"`
-	Upcoming    []fleetUpcoming     `json:"upcoming"`
-	Activity    []*store.AuditEntry `json:"activity"`
+	GeneratedAt time.Time        `json:"generated_at"`
+	Figures     fleetFigures     `json:"figures"`
+	Servers     []fleetServer    `json:"servers"`
+	Nodes       []fleetNode      `json:"nodes"`
+	Upcoming    []fleetUpcoming  `json:"upcoming"`
+	Activity    []auditPageEntry `json:"activity"`
 	// EventSeq is the event stream position this snapshot reflects; open the
 	// stream with ?since=<event_seq> to receive only what changed after it.
 	EventSeq int64 `json:"event_seq"`
@@ -108,7 +112,7 @@ func (h *OverviewHandlers) Fleet(w http.ResponseWriter, r *http.Request) {
 		Servers:     []fleetServer{},
 		Nodes:       []fleetNode{},
 		Upcoming:    []fleetUpcoming{},
-		Activity:    []*store.AuditEntry{},
+		Activity:    []auditPageEntry{},
 	}
 	if h.bus != nil {
 		out.EventSeq = h.bus.Seq()
@@ -147,6 +151,7 @@ func (h *OverviewHandlers) Fleet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backups, _ := h.store.LatestSuccessfulBackups(ctx)
+	backupFailures, _ := h.store.LatestBackupFailures(ctx)
 	checks, _ := h.store.ModUpdateChecks(ctx)
 	conflicts := map[string]bool{}
 	if list, err := h.store.ListActiveConflicts(ctx); err == nil {
@@ -190,6 +195,10 @@ func (h *OverviewHandlers) Fleet(w http.ResponseWriter, r *http.Request) {
 		}
 		if at, ok := backups[srv.ID]; ok {
 			fs.LastBackupAt = &at
+		}
+		if f, ok := backupFailures[srv.ID]; ok {
+			at := f.At
+			fs.BackupFailedAt, fs.BackupError = &at, f.Reason
 		}
 		fs.BackupOverdue = fs.LastBackupAt == nil || now.Sub(*fs.LastBackupAt) > backupStaleAfter
 		if fs.BackupOverdue {
@@ -245,7 +254,7 @@ func (h *OverviewHandlers) Fleet(w http.ResponseWriter, r *http.Request) {
 		scope = &store.AuditScope{ServerIDs: serverIDs, UserID: claims.UserID}
 	}
 	if entries, _, err := h.store.ListAuditPage(ctx, store.AuditQuery{Scope: scope, Limit: 15}); err == nil {
-		out.Activity = entries
+		out.Activity = withActors(ctx, h.store, isAdmin, claims.UserID, entries)
 	}
 
 	writeJSON(w, http.StatusOK, out)

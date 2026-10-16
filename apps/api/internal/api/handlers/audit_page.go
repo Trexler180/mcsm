@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,11 +11,43 @@ import (
 	"github.com/mcsm/api/internal/store"
 )
 
-// auditPageEntry is one row of the audit log page. actor_email is resolved for
-// admins, and for anyone's own rows; other people stay ids.
+// auditPageEntry is one row of the audit log page (and of Home's recent
+// activity). Who acted is resolved for admins, and for anyone's own rows;
+// other people stay ids.
 type auditPageEntry struct {
 	*store.AuditEntry
 	ActorEmail string `json:"actor_email,omitempty"`
+	// ActorName is the actor's display name, or their email without one.
+	ActorName string `json:"actor_name,omitempty"`
+}
+
+// withActors names who acted on each entry, as far as the viewer may know.
+func withActors(ctx context.Context, st *store.Store, isAdmin bool, viewerID string, entries []*store.AuditEntry) []auditPageEntry {
+	known := map[string]*store.User{}
+	if isAdmin {
+		if users, err := st.ListUsers(ctx); err == nil {
+			for _, u := range users {
+				known[u.ID] = u
+			}
+		}
+	} else if me, err := st.GetUserByID(ctx, viewerID); err == nil {
+		known[me.ID] = me
+	}
+	out := make([]auditPageEntry, 0, len(entries))
+	for _, e := range entries {
+		pe := auditPageEntry{AuditEntry: e}
+		if e.UserID != nil {
+			if u := known[*e.UserID]; u != nil {
+				pe.ActorEmail = u.Email
+				pe.ActorName = u.Email
+				if u.DisplayName != nil && *u.DisplayName != "" {
+					pe.ActorName = *u.DisplayName
+				}
+			}
+		}
+		out = append(out, pe)
+	}
+	return out
 }
 
 type auditPage struct {
@@ -99,23 +132,5 @@ func (h *AuditHandlers) Page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emails := map[string]string{}
-	if isAdmin {
-		if users, err := h.store.ListUsers(ctx); err == nil {
-			for _, u := range users {
-				emails[u.ID] = u.Email
-			}
-		}
-	} else if me, err := h.store.GetUserByID(ctx, claims.UserID); err == nil {
-		emails[me.ID] = me.Email
-	}
-	out := auditPage{Entries: make([]auditPageEntry, 0, len(entries)), NextCursor: next}
-	for _, e := range entries {
-		pe := auditPageEntry{AuditEntry: e}
-		if e.UserID != nil {
-			pe.ActorEmail = emails[*e.UserID]
-		}
-		out.Entries = append(out.Entries, pe)
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, auditPage{Entries: withActors(ctx, h.store, isAdmin, claims.UserID, entries), NextCursor: next})
 }

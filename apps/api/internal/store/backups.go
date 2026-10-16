@@ -150,6 +150,41 @@ func (s *Store) LatestSuccessfulBackups(ctx context.Context) (map[string]time.Ti
 	return out, rows.Err()
 }
 
+// BackupFailure is a server's latest backup when it failed.
+type BackupFailure struct {
+	At     time.Time
+	Reason string
+}
+
+// LatestBackupFailures returns, per server, its most recent finished backup
+// when that one failed: a failure that a later success has made moot is not
+// reported.
+func (s *Store) LatestBackupFailures(ctx context.Context) (map[string]BackupFailure, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT b.server_id, b.completed_at, COALESCE(b.metadata, '') FROM backups b
+		  WHERE b.status = 'failed' AND b.completed_at IS NOT NULL
+		    AND b.completed_at = (SELECT MAX(b2.completed_at) FROM backups b2
+		                           WHERE b2.server_id = b.server_id AND b2.status IN ('success', 'failed'))`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]BackupFailure{}
+	for rows.Next() {
+		var id, meta string
+		var at time.Time
+		if err := rows.Scan(&id, &at, &meta); err != nil {
+			return nil, err
+		}
+		var m struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(meta), &m)
+		out[id] = BackupFailure{At: at, Reason: m.Error}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetBackupTarget(ctx context.Context, id string) (*BackupTarget, error) {
 	var t BackupTarget
 	err := s.db.QueryRowContext(ctx,

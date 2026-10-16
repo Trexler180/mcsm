@@ -631,6 +631,9 @@ export interface FleetServer {
   // where there was no sample.
   players_24h: (number | null)[];
   last_backup_at: string | null;
+  // Set when the latest backup failed and none has succeeded since.
+  backup_failed_at: string | null;
+  backup_error?: string;
   backup_overdue: boolean;
   active_conflict: boolean;
   // From the last mod-update check; null if never checked.
@@ -673,7 +676,7 @@ export interface FleetSummary {
     action: string;
     next_run: string;
   }[];
-  activity: AuditEntry[];
+  activity: AuditEntryWithActor[];
   event_seq: number;
 }
 
@@ -807,8 +810,16 @@ export interface AuditPageQuery {
   limit?: number;
 }
 
+/** An audit row with who acted, as far as the viewer may know: admins see
+ *  everyone, anyone else only themselves. */
+export type AuditEntryWithActor = AuditEntry & {
+  actor_email?: string;
+  /** Display name, or the email without one. */
+  actor_name?: string;
+};
+
 export interface AuditPage {
-  entries: (AuditEntry & { actor_email?: string })[];
+  entries: AuditEntryWithActor[];
   next_cursor?: number;
 }
 

@@ -25,6 +25,20 @@ export function liveHandlers(qc: QueryClient): LiveHandlers {
   }
 }
 
+// What an event changes beyond what it carries (the activity list, backup
+// times) arrives with the next fleet fetch, made once things settle rather
+// than once per event.
+const SETTLE_MS = 1500
+const settleTimers = new WeakMap<QueryClient, ReturnType<typeof setTimeout>>()
+
+function refreshFleetSoon(qc: QueryClient) {
+  clearTimeout(settleTimers.get(qc))
+  settleTimers.set(
+    qc,
+    setTimeout(() => void qc.invalidateQueries({ queryKey: ['fleet'] }), SETTLE_MS),
+  )
+}
+
 export function routeEvent(qc: QueryClient, e: LiveEvent) {
   switch (e.type) {
     case 'notification': {
@@ -37,11 +51,15 @@ export function routeEvent(qc: QueryClient, e: LiveEvent) {
       qc.setQueryData<Server[]>(['servers'], (list) => list?.map((s) => applyToServer(s, e)))
       if (e.server_id) qc.setQueryData<Server>(['server', e.server_id], (s) => s && applyToServer(s, e))
       void qc.invalidateQueries({ queryKey: ['overview'] })
+      refreshFleetSoon(qc)
       return
     case 'server.stats':
     case 'server.players':
+      qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
+      return
     case 'operation.updated':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
+      if (e.data?.status !== 'running') refreshFleetSoon(qc)
       return
     case 'node.status':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
@@ -61,6 +79,7 @@ export function routeEvent(qc: QueryClient, e: LiveEvent) {
       return
     case 'task.run':
       if (e.server_id) void qc.invalidateQueries({ queryKey: ['tasks', e.server_id] })
+      refreshFleetSoon(qc)
       return
   }
 }
