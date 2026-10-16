@@ -21,6 +21,10 @@ function appVersion(): string {
 const apiPort = process.env.VITE_API_PORT ?? '8081'
 const apiHost = process.env.VITE_API_HOST ?? '127.0.0.1'
 const webPort = Number(process.env.PORT ?? '3000')
+// Extra host names the dev and preview servers answer to, comma-separated:
+// say a tunnel's domain (".ngrok-free.app") when testing from another device.
+// Vite refuses unknown hosts otherwise, which is what you want by default.
+const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(',').map((h) => h.trim()).filter(Boolean)
 
 // Base path the app is served from. Defaults to root ('/') so local dev is
 // unaffected; set VITE_BASE=/dashboard/ at build time to host under a subpath
@@ -139,8 +143,10 @@ export default defineConfig({
   // panel shows, what OAuth discovery advertises, and what MCP tokens are bound
   // to. Rewriting Host to the proxy target would make all of those name the API
   // port while the browser and any MCP client are talking to this one.
+  preview: { allowedHosts },
   server: {
     port: webPort,
+    allowedHosts,
     proxy: {
       '/api': {
         target: `http://${apiHost}:${apiPort}`,
