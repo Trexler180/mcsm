@@ -6,21 +6,18 @@ const MAX_ITEMS = 100;
 interface FeedState {
   items: NotificationItem[];
   unread: number;
-  connected: boolean;
   // Replace the feed with a freshly fetched page (on login / manual refresh).
   setInitial: (items: NotificationItem[], unread: number) => void;
   // A live item arrived over the stream.
   pushItem: (item: NotificationItem) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
-  setConnected: (connected: boolean) => void;
   reset: () => void;
 }
 
 export const useNotificationFeed = create<FeedState>()((set) => ({
   items: [],
   unread: 0,
-  connected: false,
   setInitial: (items, unread) => set({ items, unread }),
   pushItem: (item) =>
     set((s) => {
@@ -49,6 +46,5 @@ export const useNotificationFeed = create<FeedState>()((set) => ({
       ),
       unread: 0,
     })),
-  setConnected: (connected) => set({ connected }),
-  reset: () => set({ items: [], unread: 0, connected: false }),
+  reset: () => set({ items: [], unread: 0 }),
 }));

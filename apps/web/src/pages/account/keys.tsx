@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { can, collapsePerms } from '@/lib/permissions'
-import { listPermissions } from '@/lib/server-permissions'
 import type { AccessKey, Server, ServerPermission } from '@/lib/types'
 import { useAuthStore } from '@/store/auth'
 import { Btn, Check, Empty, Field, IconBtn, Select } from '@/ui/controls'
@@ -73,7 +72,7 @@ export function KeysSection() {
   const [token, setToken] = useState<string | null>(null)
   const names = new Map(servers.map((s) => [s.id, s.name]))
   // Only servers you could delegate something on; the API checks too.
-  const usable = admin ? servers : servers.filter((s) => s.permissions?.length && can(listPermissions(s.permissions), 'view'))
+  const usable = admin ? servers : servers.filter((s) => s.permissions?.length && can({ owner: false, global_admin: false, permissions: s.permissions }, 'view'))
   const refresh = () => void qc.invalidateQueries({ queryKey: ['access-keys'] })
 
   const rotate = async (k: AccessKey) => {
