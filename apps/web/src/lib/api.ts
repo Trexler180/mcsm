@@ -1293,7 +1293,7 @@ export const api = {
       post<User>("/users", { email, password, role }),
     update: (
       id: string,
-      data: { display_name?: string | null; role?: string; password?: string },
+      data: { display_name?: string | null; role?: string; password?: string; disable_mfa?: boolean },
     ) => put<User>(`/users/${id}`, data),
     delete: (id: string) => del(`/users/${id}`),
   },

@@ -1,22 +1,23 @@
-import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
-import { Route as rootRoute } from "./__root";
-import { RequireAdmin } from "@/components/layout/require-admin";
+import { createRoute, redirect } from '@tanstack/react-router'
+import { Route as rootRoute } from './__root'
+import { AdminOnly } from '@/shell/admin-only'
+import { PeoplePage } from '@/pages/people'
 
-const UsersPage = lazyRouteComponent(
-  () => import("./users.page"),
-  "UsersPage",
-);
-
-// Component code-split: the page and its heavy imports load on demand,
-// keeping them out of the initial bundle.
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/users",
-  // The API refuses these routes for non-admins; this makes the page say so
-  // rather than render a wall of buttons that 403 on click.
+  path: '/people',
   component: () => (
-    <RequireAdmin title="Users">
-      <UsersPage />
-    </RequireAdmin>
+    <AdminOnly title="People">
+      <PeoplePage />
+    </AdminOnly>
   ),
-});
+})
+
+/** The old address. */
+export const OldUsersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/users',
+  beforeLoad: () => {
+    throw redirect({ to: '/people', replace: true })
+  },
+})

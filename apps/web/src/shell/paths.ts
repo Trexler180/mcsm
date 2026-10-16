@@ -6,7 +6,7 @@ export const paths = {
   home: '/',
   alerts: '/alerts',
   nodes: '/nodes',
-  people: '/users',
+  people: '/people',
   audit: '/audit',
   settings: '/settings',
   account: '/account',

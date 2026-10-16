@@ -7,7 +7,7 @@ import {
   ServerIndexRedirectRoute as serverDetailRedirectRoute,
 } from './routes/servers/$id'
 import { Route as nodesRoute } from './routes/nodes'
-import { Route as usersRoute } from './routes/users'
+import { Route as usersRoute, OldUsersRoute } from './routes/users'
 import { Route as auditRoute } from './routes/audit'
 import { Route as settingsRoute } from './routes/settings'
 import { Route as accountRoute } from './routes/account'
@@ -25,6 +25,7 @@ export const routeTree = rootRoute.addChildren([
   ServerTabRoute,
   nodesRoute,
   usersRoute,
+  OldUsersRoute,
   auditRoute,
   settingsRoute,
   accountRoute,
