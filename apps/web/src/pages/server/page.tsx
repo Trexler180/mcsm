@@ -9,6 +9,7 @@ import { ConsoleTab, type ConsoleView } from './console'
 import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer, useStartupProblem } from './data'
 import { ServerHeader, tabLabel } from './header'
 import { LegacyTab } from './legacy'
+import { PlayersTab } from './players'
 import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
 
 export interface ServerSearch {
@@ -16,6 +17,8 @@ export interface ServerSearch {
   view?: 'files' | 'problems'
   /** A tab's own section (settings: version, properties, access; mods: configs). */
   sub?: string
+  /** Players: the player whose sheet is open. */
+  player?: string
 }
 
 /** A server: its header, its tabs, and the tab that's open. */
@@ -79,6 +82,12 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
         setView={(v) => setSearch({ ...search, view: v === 'live' ? undefined : v })}
       />
     )
+  } else if (tab === 'players') {
+    body = (
+      <TabPage>
+        <PlayersTab server={server} status={status} perms={my} player={search.player} setPlayer={(player) => setSearch({ ...search, player })} />
+      </TabPage>
+    )
   } else {
     body = <LegacyTab key={tab} tab={tab} sub={search.sub} setSub={(sub) => setSearch({ ...search, sub })} server={server} perms={my} />
   }
@@ -106,6 +115,17 @@ function ServerSkeleton() {
         <Sk w={560} h={34} r={999} style={{ marginTop: 18 }} />
       </header>
       <ConsoleSkeleton />
+    </div>
+  )
+}
+
+/** The scrolling page under the header that most tabs sit in. */
+function TabPage({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="scroll">
+      <div className="page" style={{ paddingTop: 22 }}>
+        {children}
+      </div>
     </div>
   )
 }

@@ -55,10 +55,14 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** Milliseconds since the epoch for an API timestamp, or null. */
+// Go writes an unset time as 0001-01-01T00:00:00Z; anything before 2000 is
+// one of those, not a real moment.
+const EARLIEST = Date.UTC(2000, 0, 1)
+
+/** Milliseconds since the epoch for an API timestamp, or null when there
+ *  isn't a real one. */
 export function toMs(t: string | number | null | undefined): number | null {
   if (t == null || t === '') return null
-  if (typeof t === 'number') return t
-  const ms = Date.parse(t)
-  return Number.isNaN(ms) ? null : ms
+  const ms = typeof t === 'number' ? t : Date.parse(t)
+  return Number.isNaN(ms) || ms < EARLIEST ? null : ms
 }

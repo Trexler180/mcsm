@@ -8,6 +8,7 @@ function validateSearch(search: Record<string, unknown>): ServerSearch {
   const out: ServerSearch = {}
   if (search.view === 'files' || search.view === 'problems') out.view = search.view
   if (typeof search.sub === 'string' && search.sub) out.sub = search.sub
+  if (typeof search.player === 'string' && search.player) out.player = search.player
   return out
 }
 
