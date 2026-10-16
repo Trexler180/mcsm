@@ -51,9 +51,11 @@ export function fmtClock(ts: number, secs = false): string {
   return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + (secs ? ':' + pad2(d.getSeconds()) : '')
 }
 
-export function fmtDate(ts: number, withTime = true): string {
+/** "Mar 4, 14:03", with the year when it isn't this one ("Nov 5 2024"). */
+export function fmtDate(ts: number, withTime = true, now = Date.now()): string {
   const d = new Date(ts)
-  const s = MONTHS[d.getMonth()] + ' ' + d.getDate()
+  let s = MONTHS[d.getMonth()] + ' ' + d.getDate()
+  if (d.getFullYear() !== new Date(now).getFullYear()) s += ' ' + d.getFullYear()
   return withTime ? s + ', ' + fmtClock(ts) : s
 }
 

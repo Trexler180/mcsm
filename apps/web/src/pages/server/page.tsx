@@ -9,6 +9,7 @@ import { ConsoleTab, type ConsoleView } from './console'
 import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer, useStartupProblem } from './data'
 import { ServerHeader, tabLabel } from './header'
 import { LegacyTab } from './legacy'
+import { ModsTab, modsViewOf } from './mods'
 import { PlayersTab } from './players'
 import { BackupsTab } from './backups'
 import { SchedulesTab } from './schedules'
@@ -19,7 +20,7 @@ import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
 export interface ServerSearch {
   /** Console: which view (live is the default). */
   view?: 'files' | 'problems'
-  /** A tab's own section (settings: version, properties, access; mods: configs). */
+  /** A tab's own section (settings: version, properties, access; mods: browse, configs). */
   sub?: string
   /** Players: the player whose sheet is open. */
   player?: string
@@ -117,6 +118,12 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
         <StatsTab server={server} />
       </TabPage>
     )
+  } else if (tab === 'mods') {
+    body = (
+      <TabPage>
+        <ModsTab server={server} status={status} perms={my} view={modsViewOf(search.sub)} setView={(v) => setSearch({ ...search, sub: v === 'installed' ? undefined : v })} />
+      </TabPage>
+    )
   } else if (tab === 'schedules') {
     body = (
       <TabPage>
@@ -124,7 +131,7 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
       </TabPage>
     )
   } else {
-    body = <LegacyTab key={tab} tab={tab} sub={search.sub} setSub={(sub) => setSearch({ ...search, sub })} server={server} perms={my} />
+    body = <LegacyTab key={tab} tab={tab} server={server} perms={my} />
   }
 
   return (

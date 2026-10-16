@@ -62,7 +62,12 @@ export function routeEvent(qc: QueryClient, e: LiveEvent) {
       return
     case 'operation.updated':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
-      if (e.data?.status !== 'running') refreshFleetSoon(qc)
+      if (e.data?.status !== 'running') {
+        // A finished job (backup, restore, mod update, version change, fix)
+        // can change anything about its server; what's on screen reloads.
+        if (e.server_id) void qc.invalidateQueries({ predicate: (q) => q.queryKey[1] === e.server_id })
+        refreshFleetSoon(qc)
+      }
       return
     case 'node.status':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
