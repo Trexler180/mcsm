@@ -15,6 +15,8 @@ import { effStatus, groupFleet, useFleet, useFolders } from './fleet'
 import { useGo } from './nav'
 import { paths } from './paths'
 import { useTheme } from './theme'
+import { SERVER_TABS } from '@/pages/server/tabs'
+import { contentLabel } from '@/ui/platforms'
 
 // Search: servers, their pages, pages of the panel, and actions. Ctrl+K from
 // anywhere.
@@ -28,19 +30,6 @@ export interface PaletteItem {
   /** Shown only when searched for, not in the opening list. */
   quiet?: boolean
 }
-
-/** The tabs inside a server, and what each needs. */
-export const SERVER_TABS: { value: string; label: string; perm: ServerPermission }[] = [
-  { value: 'console', label: 'Console', perm: 'console' },
-  { value: 'players', label: 'Players', perm: 'players' },
-  { value: 'mods', label: 'Mods', perm: 'mods' },
-  { value: 'worlds', label: 'Worlds', perm: 'files' },
-  { value: 'files', label: 'Files', perm: 'files' },
-  { value: 'backups', label: 'Backups', perm: 'backups' },
-  { value: 'schedules', label: 'Schedules', perm: 'tasks' },
-  { value: 'stats', label: 'Stats', perm: 'view' },
-  { value: 'settings', label: 'Settings', perm: 'settings' },
-]
 
 export function paletteItems(opts: {
   fleet: FleetSummary | undefined
@@ -63,7 +52,8 @@ export function paletteItems(opts: {
     const may = (p: ServerPermission) => admin || (!!perms && can({ owner: false, global_admin: false, permissions: perms }, p))
     add('Servers', s.name, () => go(paths.server(s.id)), { status: es, hint: STATE[es]?.[0] ?? '' })
     for (const t of SERVER_TABS.slice(1)) {
-      if (may(t.perm)) add('Pages', `${s.name}: ${t.label}`, () => go(paths.server(s.id, t.value)), { quiet: true })
+      const label = t.value === 'mods' ? contentLabel(s.platform) : t.label
+      if (may(t.perm)) add('Pages', `${s.name}: ${label}`, () => go(paths.server(s.id, t.value)), { quiet: true })
     }
     const live = s.status === 'online' || s.status === 'starting'
     if (live) {

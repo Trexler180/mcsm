@@ -12,7 +12,7 @@ export const paths = {
   account: '/account',
   newServer: '/servers',
   /** A server's page; Console is its front page. */
-  server: (id: string, tab?: string) => `/servers/${encodeURIComponent(id)}/${tab ?? 'console'}`,
+  server: (id: string, tab?: string) => `/s/${encodeURIComponent(id)}${tab && tab !== 'console' ? '/' + tab : ''}`,
 } as const
 
 /** Which sidebar entry an address belongs to. */

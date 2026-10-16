@@ -20,6 +20,11 @@ export type ConsoleMessage = {
 } | {
   type: 'reset'
   data: null
+} | {
+  // The socket itself opened or dropped, so a view can say its output is
+  // paused rather than look quiet.
+  type: 'socket'
+  data: { open: boolean }
 }
 
 type Listener = (msg: WsMessage) => void
@@ -47,7 +52,15 @@ export class ServerConsole {
     // fetched on every (re)connect, so single-use on the server is fine.
     const consolePath = `/api/v1/servers/${this.serverId}/console`
     const ticket = (await api.auth.ticket(consolePath).then((t) => t.ticket).catch(() => null))
-    if (this.closed || !ticket) return
+    if (this.closed) return
+    if (!ticket) {
+      // The panel didn't answer: try again later rather than staying down.
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10000)
+        this.connect()
+      }, this.reconnectDelay)
+      return
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
     const resume = this.runId && this.lastSeq > 0
@@ -59,6 +72,7 @@ export class ServerConsole {
 
     this.ws.onopen = () => {
       this.reconnectDelay = 1000
+      this.listeners.forEach((l) => l({ type: 'socket', data: { open: true } }))
     }
 
     this.ws.onmessage = (event) => {
@@ -70,6 +84,7 @@ export class ServerConsole {
     }
 
     this.ws.onclose = () => {
+      this.listeners.forEach((l) => l({ type: 'socket', data: { open: false } }))
       if (!this.closed) {
         this.reconnectTimer = setTimeout(() => {
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10000)

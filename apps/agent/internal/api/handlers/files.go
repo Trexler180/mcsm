@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -69,10 +70,32 @@ func (h *FileHandlers) List(w http.ResponseWriter, r *http.Request) {
 	}
 	listing, err := agentfiles.List(base, path)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)
+}
+
+// writeFileErr answers a failed file operation with what it means for the
+// person asking: a path that isn't there is "not found", one that already
+// exists is a conflict, and a refusal by the operating system is forbidden.
+// The OS error text (with its syscall and path) stays out of the answer.
+func writeFileErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		writeError(w, http.StatusNotFound, "no such file or folder")
+	case errors.Is(err, fs.ErrExist):
+		writeError(w, http.StatusConflict, "something with that name already exists")
+	case errors.Is(err, fs.ErrPermission):
+		writeError(w, http.StatusForbidden, "the server's files don't allow that")
+	default:
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			writeError(w, http.StatusInternalServerError, pe.Op+" failed: "+pe.Err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func atoiDefault(s string, def int) int {
@@ -100,7 +123,7 @@ func (h *FileHandlers) Tree(w http.ResponseWriter, r *http.Request) {
 	max := atoiDefault(r.URL.Query().Get("max"), 0)
 	tree, err := agentfiles.ListTree(base, path, depth, max)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tree)
@@ -138,7 +161,7 @@ func (h *FileHandlers) PutContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := agentfiles.WriteContent(base, path, data); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
@@ -152,7 +175,7 @@ func (h *FileHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Query().Get("path")
 	if err := agentfiles.Delete(base, path); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
@@ -173,7 +196,7 @@ func (h *FileHandlers) Rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := agentfiles.Rename(base, body.From, body.To); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
@@ -223,7 +246,7 @@ func (h *FileHandlers) Mkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := agentfiles.Mkdir(base, body.Path); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeFileErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
@@ -302,7 +325,7 @@ func (h *FileHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 		err = agentfiles.WriteUpload(base, dirPath, fh.Filename, f)
 		f.Close()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeFileErr(w, err)
 			return
 		}
 	}

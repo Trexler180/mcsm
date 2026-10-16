@@ -54,8 +54,11 @@ export function routeEvent(qc: QueryClient, e: LiveEvent) {
       refreshFleetSoon(qc)
       return
     case 'server.stats':
+      qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
+      return
     case 'server.players':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))
+      if (e.server_id) void qc.invalidateQueries({ queryKey: ['players', e.server_id] })
       return
     case 'operation.updated':
       qc.setQueryData<FleetSummary>(['fleet'], (f) => f && applyToFleet(f, e))

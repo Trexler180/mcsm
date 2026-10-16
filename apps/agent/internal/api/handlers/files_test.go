@@ -2,8 +2,13 @@ package handlers
 
 import (
 	"bytes"
+	"errors"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +58,31 @@ func TestMultipartFilesFitUsesAggregateFileSize(t *testing.T) {
 	}
 	if !multipartFilesFit(files, 11) {
 		t.Fatal("expected aggregate file size at limit to be accepted")
+	}
+}
+
+// A path that isn't there is "not found", not a server error, and the OS
+// error (syscall, path) stays out of the answer.
+func TestWriteFileErrMapsFileSystemAnswers(t *testing.T) {
+	dir := t.TempDir()
+	_, missing := os.Stat(filepath.Join(dir, "nope"))
+	exists := os.Mkdir(dir, 0o755)
+	for _, c := range []struct {
+		err    error
+		status int
+		want   string
+	}{
+		{missing, http.StatusNotFound, "no such file or folder"},
+		{exists, http.StatusConflict, "something with that name already exists"},
+		{errors.New("disk on fire"), http.StatusInternalServerError, "disk on fire"},
+	} {
+		rr := httptest.NewRecorder()
+		writeFileErr(rr, c.err)
+		if rr.Code != c.status || !strings.Contains(rr.Body.String(), c.want) {
+			t.Errorf("%v: %d %s, want %d %q", c.err, rr.Code, rr.Body.String(), c.status, c.want)
+		}
+		if strings.Contains(rr.Body.String(), dir) {
+			t.Errorf("%v: the answer leaks the path: %s", c.err, rr.Body.String())
+		}
 	}
 }

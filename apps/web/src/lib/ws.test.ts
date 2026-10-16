@@ -112,4 +112,19 @@ describe('ServerConsole', () => {
     expect(seen.map((m) => m.type)).toEqual(['reset', 'hello', 'line'])
     sc.disconnect()
   })
+
+  it('says when its socket drops, and keeps trying when no ticket can be had', async () => {
+    const sc = new ServerConsole('srv-1')
+    const seen: WsMessage[] = []
+    sc.on((m) => seen.push(m))
+    vi.mocked(api.auth.ticket).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await sc.connect()
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+
+    FakeWebSocket.instances[0].close()
+    expect(seen[seen.length - 1]).toEqual({ type: 'socket', data: { open: false } })
+    sc.disconnect()
+  })
 })
