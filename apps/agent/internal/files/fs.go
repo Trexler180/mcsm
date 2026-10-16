@@ -38,6 +38,21 @@ type Tree struct {
 	Path      string      `json:"path"`
 	Entries   []TreeEntry `json:"entries"`
 	Truncated bool        `json:"truncated"`
+	// Sizes totals the bytes of every file under each of the root's
+	// children (a file at the root counts under its own name), however deep.
+	// Only filled when asked for.
+	Sizes map[string]int64 `json:"sizes,omitempty"`
+}
+
+// TreeOptions shapes a ListTreeWith walk.
+type TreeOptions struct {
+	// MaxDepth limits how deep entries are listed (<=0 means unlimited).
+	MaxDepth int
+	// MaxEntries caps the entries listed (<=0 means unlimited).
+	MaxEntries int
+	// Sizes walks the whole tree to total each child's size, while still
+	// listing only the entries MaxDepth and MaxEntries allow.
+	Sizes bool
 }
 
 func Resolve(base, userPath string) (string, error) {
@@ -214,6 +229,12 @@ func List(base, userPath string) (*Listing, error) {
 // descended (<=0 means unlimited); maxEntries caps the result (<=0 means
 // unlimited) and sets Truncated when hit.
 func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
+	return ListTreeWith(base, userPath, TreeOptions{MaxDepth: maxDepth, MaxEntries: maxEntries})
+}
+
+// ListTreeWith is ListTree with options; see TreeOptions.
+func ListTreeWith(base, userPath string, opts TreeOptions) (*Tree, error) {
+	maxDepth, maxEntries := opts.MaxDepth, opts.MaxEntries
 	root, start, err := openRootPath(base, userPath)
 	if err != nil {
 		return nil, err
@@ -222,6 +243,9 @@ func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
 	start = filepath.ToSlash(start)
 
 	tree := &Tree{Path: userPath, Entries: make([]TreeEntry, 0, 256)}
+	if opts.Sizes {
+		tree.Sizes = map[string]int64{}
+	}
 	err = fs.WalkDir(root.FS(), start, func(name string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Skip unreadable subtrees rather than aborting the whole walk.
@@ -238,15 +262,22 @@ func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
 		depth := strings.Count(rel, "/") + 1
 
 		if d.IsDir() {
-			if maxDepth > 0 && depth >= maxDepth {
+			if maxDepth > 0 && depth >= maxDepth && !opts.Sizes {
 				return filepath.SkipDir
 			}
 			return nil // we only emit files
 		}
 
-		if maxEntries > 0 && len(tree.Entries) >= maxEntries {
+		listed := maxDepth <= 0 || depth <= maxDepth
+		if listed && maxEntries > 0 && len(tree.Entries) >= maxEntries {
 			tree.Truncated = true
-			return filepath.SkipAll
+			if !opts.Sizes {
+				return filepath.SkipAll
+			}
+			listed = false
+		}
+		if !listed && !opts.Sizes {
+			return nil
 		}
 
 		var size int64
@@ -254,6 +285,13 @@ func ListTree(base, userPath string, maxDepth, maxEntries int) (*Tree, error) {
 		if info, err := d.Info(); err == nil {
 			size = info.Size()
 			mod = info.ModTime()
+		}
+		if opts.Sizes {
+			top, _, _ := strings.Cut(rel, "/")
+			tree.Sizes[top] += size
+		}
+		if !listed {
+			return nil
 		}
 		tree.Entries = append(tree.Entries, TreeEntry{
 			Path:     rel,

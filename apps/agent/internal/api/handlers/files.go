@@ -121,7 +121,13 @@ func (h *FileHandlers) Tree(w http.ResponseWriter, r *http.Request) {
 	}
 	depth := atoiDefault(r.URL.Query().Get("depth"), 0)
 	max := atoiDefault(r.URL.Query().Get("max"), 0)
-	tree, err := agentfiles.ListTree(base, path, depth, max)
+	// sizes=1 also totals each child's size; agents from before it ignore
+	// the parameter and the response simply has no sizes.
+	tree, err := agentfiles.ListTreeWith(base, path, agentfiles.TreeOptions{
+		MaxDepth:   depth,
+		MaxEntries: max,
+		Sizes:      r.URL.Query().Get("sizes") == "1",
+	})
 	if err != nil {
 		writeFileErr(w, err)
 		return
