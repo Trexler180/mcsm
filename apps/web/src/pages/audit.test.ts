@@ -45,5 +45,6 @@ describe('auditSentence for panel actions', () => {
   it('marks failures', () => {
     expect(auditSentence(entry({ action: 'mod.autoupdate_failed' })).bad).toBe(true)
     expect(auditSentence(entry({ action: 'node.reboot.denied' })).bad).toBe(true)
+    expect(auditSentence(entry({ action: 'mcp.grant.denied' })).bad).toBe(false)
   })
 })

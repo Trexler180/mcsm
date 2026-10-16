@@ -122,7 +122,8 @@ const SERVER_SUBJECT = new Set(['server.crash', 'server.start_failed'])
 const PANEL_WIDE = /^(folder|auth|node|user|integration|notification|mcp\.grant|mcp\.approval_settings)\./
 
 export function auditSentence(e: AuditEntryWithActor): { who: string; verb: string; obj: string; bad: boolean } {
-  const bad = SERVER_SUBJECT.has(e.action) || /_failed$|\.failed$|\.denied$|reuse_detected$/.test(e.action)
+  // Refusing an agent is a decision, not a failure; a refused reboot is one.
+  const bad = SERVER_SUBJECT.has(e.action) || /_failed$|\.failed$|reuse_detected$/.test(e.action) || e.action === 'node.reboot.denied'
   const verb = TEXT[e.action] || e.action.split('.').slice(1).join(' ').replace(/_/g, ' ')
   if (SERVER_SUBJECT.has(e.action)) return { who: e.server_name || 'A server', verb, obj: '', bad }
   const who = e.actor_name || (e.api_key_id ? 'An access key' : e.user_id ? 'Someone' : 'MCSM')
