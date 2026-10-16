@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { FleetNode, FleetServer, FleetSummary, MCPActionRequest, NotificationItem } from '@/lib/types'
-import { auditSentence, homeIssues } from './home'
+import { homeIssues } from './home'
+import { auditSentence } from './audit-text'
 
 const NOW = Date.parse('2026-10-16T12:00:00Z')
 const HOUR = 3600_000

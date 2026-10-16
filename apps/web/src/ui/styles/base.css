@@ -946,3 +946,8 @@ button.nbt-toggle:hover { color: var(--console-text); background: color-mix(in s
 .items .item.node-row { display: block; padding: 22px 0; }
 .node-facts { margin-top: 12px; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); column-gap: 28px; }
 @media (max-width: 820px) { .node-facts { grid-template-columns: max-content minmax(0, 1fr); } }
+
+/* Audit log */
+.items > .item.audit-row { align-items: flex-start; }
+.audit-time { width: 44px; flex: none; padding-top: 1px; }
+.audit-detail { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--inset); overflow-wrap: anywhere; }

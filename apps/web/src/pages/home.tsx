@@ -10,6 +10,7 @@ import { useNotificationFeed } from '@/store/notification-feed'
 import { useTicker } from '@/shell/banners'
 import { effStatus, groupFleet, useFleet, useFolders } from '@/shell/fleet'
 import { useGo } from '@/shell/nav'
+import { auditSentence } from './audit-text'
 import { paths } from '@/shell/paths'
 import { useServerPerms } from '@/shell/perms'
 import { Btn, Empty, Filters, Meter, Num, STATE, Status, type StatusKey } from '@/ui/controls'
@@ -735,54 +736,6 @@ function NodesWidget({ nodes, onOpen }: { nodes: FleetNode[]; onOpen?: () => voi
   )
 }
 
-/** What an audit action did, phrased to follow who did it. */
-const AUDIT_TEXT: Record<string, string> = {
-  'server.start': 'started',
-  'server.stop': 'stopped',
-  'server.restart': 'restarted',
-  'server.kill': 'killed',
-  'server.crash': 'crashed',
-  'server.start_failed': 'didn’t start',
-  'server.reinstall': 'reinstalled',
-  'server.create': 'created',
-  'server.update': 'changed the settings of',
-  'server.delete': 'deleted',
-  'server.move': 'moved',
-  'folder.create': 'created a folder',
-  'folder.update': 'changed a folder',
-  'folder.delete': 'deleted a folder',
-  'mod.install': 'installed a mod on',
-  'mod.uninstall': 'removed a mod from',
-  'mod.update': 'updated a mod on',
-  'mod.autoupdate': 'ran a safe update on',
-  'mod.autoupdate_reverted': 'rolled back an update on',
-  'backup.create': 'backed up',
-  'backup.restore': 'restored a backup of',
-  'backup.delete': 'deleted a backup of',
-  'player.ban': 'banned a player on',
-  'player.pardon': 'unbanned a player on',
-  'player.op': 'made an operator on',
-  'player.deop': 'removed an operator on',
-  'player.whitelist_add': 'whitelisted a player on',
-  'player.whitelist_remove': 'removed a player from the whitelist on',
-  'player.kick': 'kicked a player from',
-  'file.write': 'edited a file on',
-  'file.delete': 'deleted files on',
-  'world.upload': 'uploaded a world to',
-  'node.reboot': 'rebooted a node',
-  'auth.login': 'signed in',
-  'auth.logout': 'signed out',
-}
-const SERVER_SUBJECT = new Set(['server.crash', 'server.start_failed'])
-
-export function auditSentence(e: AuditEntryWithActor): { who: string; verb: string; obj: string; bad: boolean } {
-  const bad = SERVER_SUBJECT.has(e.action) || e.action.endsWith('_failed')
-  const verb = AUDIT_TEXT[e.action] || e.action.split('.').slice(1).join(' ').replace(/_/g, ' ')
-  if (SERVER_SUBJECT.has(e.action)) return { who: e.server_name || 'A server', verb, obj: '', bad }
-  const who = e.actor_name || (e.api_key_id ? 'An access key' : e.user_id ? 'Someone' : 'MCSM')
-  const panelWide = e.action.startsWith('folder.') || e.action.startsWith('auth.') || e.action.startsWith('node.')
-  return { who, verb, obj: panelWide ? '' : e.server_name || '', bad }
-}
 
 function ActivityMini({ entries }: { entries: AuditEntryWithActor[] }) {
   const shown = entries.filter((e) => e.action !== 'auth.login').slice(0, 6)

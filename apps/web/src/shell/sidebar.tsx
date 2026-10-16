@@ -76,7 +76,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             tip: adminOnly('manage nodes'),
           })}
           {link(paths.people, 'People', 'users', { active: section === 'people', disabled: !admin, tip: adminOnly('manage people') })}
-          {link(paths.audit, 'Audit log', 'scroll', { active: section === 'audit', disabled: !admin, tip: adminOnly('read the audit log') })}
+          {link(paths.audit, 'Audit log', 'scroll', { active: section === 'audit' })}
           {link(paths.settings, 'Settings', 'settings', { active: section === 'settings', disabled: !admin, tip: adminOnly('change panel settings') })}
         </div>
       </nav>
