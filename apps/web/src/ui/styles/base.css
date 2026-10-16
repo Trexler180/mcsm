@@ -941,3 +941,8 @@ button.nbt-toggle:hover { color: var(--console-text); background: color-mix(in s
   .show-sm { display: inline-flex !important; }
   .file-head { padding-left: 8px; }
 }
+
+/* Nodes */
+.items .item.node-row { display: block; padding: 22px 0; }
+.node-facts { margin-top: 12px; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); column-gap: 28px; }
+@media (max-width: 820px) { .node-facts { grid-template-columns: max-content minmax(0, 1fr); } }
