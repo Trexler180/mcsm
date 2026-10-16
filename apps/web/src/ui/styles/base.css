@@ -248,6 +248,12 @@ button.chip:hover, .chip.copy-inline:hover { color: var(--text); }
 .tab.disabled { opacity: .35; cursor: default; }
 
 .filters { position: relative; display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 999px; background: var(--tile); box-shadow: var(--tile-edge); }
+/* On a narrow screen a long row scrolls sideways rather than running off. */
+@media (max-width: 820px) {
+  .filters { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .filters button { flex: none; }
+}
 .filters .slider { border-radius: 999px; }
 .filters button { position: relative; z-index: 1; height: 28px; padding: 0 12px; border-radius: 999px; color: var(--text-2); font-weight: 500; font-size: 13.5px; display: inline-flex; align-items: center; gap: 6px; transition: color .2s; }
 .filters button:hover { color: var(--text); }
