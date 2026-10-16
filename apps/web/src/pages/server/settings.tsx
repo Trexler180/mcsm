@@ -1,21 +1,18 @@
-import { lazy, Suspense } from 'react'
 import type { FleetServer, MyServerPermissions, Server } from '@/lib/types'
-import { ServerPermissionsProvider } from '@/lib/server-permissions'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Empty, type StatusKey } from '@/ui/controls'
 import { deniedTip } from '@/ui/perm'
-import { SkForm } from '@/ui/skeleton'
 import { cx } from '@/ui/util'
 import { allowed } from './data'
 import { GeneralSettings } from './settings-general'
 import { PropertiesSettings } from './settings-properties'
 import { AccessSettings } from './settings-access'
+import { VersionSettings } from './settings-version'
 
 // A server's settings, in four parts down the side: general, version and
 // Java, server.properties, and who has access.
 
-const VersionTab = lazy(() => import('@/components/servers/version-migration').then((m) => ({ default: m.VersionTab })))
 
 export type SettingsSection = 'general' | 'version' | 'properties' | 'access'
 
@@ -68,15 +65,7 @@ export function SettingsTab({
         {section === 'general' && <GeneralSettings server={server} live={live} status={status} perms={perms} />}
         {section === 'properties' && <PropertiesSettings server={server} status={status} perms={perms} />}
         {section === 'access' && (canAccess ? <AccessSettings server={server} /> : <Empty title="Only people who manage access can change this." />)}
-        {section === 'version' && (
-          <ServerPermissionsProvider permissions={perms}>
-            <Suspense fallback={<SkForm />}>
-              <div className="legacy-page" style={{ overflow: 'visible' }}>
-                {section === 'version' && <VersionTab server={server} />}
-              </div>
-            </Suspense>
-          </ServerPermissionsProvider>
-        )}
+        {section === 'version' && <VersionSettings server={server} status={status} perms={perms} />}
       </div>
     </div>
   )
