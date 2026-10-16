@@ -13,6 +13,7 @@ import { PlayersTab } from './players'
 import { BackupsTab } from './backups'
 import { SchedulesTab } from './schedules'
 import { StatsTab } from './stats'
+import { SettingsTab, sectionOf } from './settings'
 import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
 
 export interface ServerSearch {
@@ -95,6 +96,19 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
     body = (
       <TabPage>
         <BackupsTab server={server} status={status} />
+      </TabPage>
+    )
+  } else if (tab === 'settings') {
+    body = (
+      <TabPage>
+        <SettingsTab
+          server={server}
+          live={live}
+          status={status}
+          perms={my}
+          section={sectionOf(search.sub)}
+          setSection={(sec) => setSearch({ ...search, sub: sec === 'general' ? undefined : sec })}
+        />
       </TabPage>
     )
   } else if (tab === 'stats') {

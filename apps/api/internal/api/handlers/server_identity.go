@@ -150,7 +150,8 @@ func parseProperties(body []byte) map[string]string {
 			}
 			return string(rune(n))
 		})
-		v = strings.NewReplacer(`\:`, ":", `\=`, "=", `\\`, `\`).Replace(v)
+		// Java properties escapes; a two-line MOTD is stored with \n.
+		v = strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\t`, "\t", `\:`, ":", `\=`, "=").Replace(v)
 		out[strings.TrimSpace(k)] = v
 	}
 	return out

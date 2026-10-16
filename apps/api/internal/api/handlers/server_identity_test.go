@@ -79,3 +79,14 @@ func TestServerIdentity(t *testing.T) {
 		t.Fatalf("custom address: %q %s", addr, src)
 	}
 }
+
+// A two-line MOTD is stored with Java's \n escape, and read as two lines.
+func TestParsePropertiesDecodesEscapes(t *testing.T) {
+	got := parseProperties([]byte(`motd=\u00A7aTop line\n\u00A77Second \\n line` + "\n" + `key\:x=a\=b` + "\n"))
+	if want := "§aTop line\n§7Second " + `\n` + " line"; got["motd"] != want {
+		t.Fatalf("motd %q, want %q", got["motd"], want)
+	}
+	if got[`key\:x`] != "a=b" {
+		t.Fatalf("value escapes: %v", got)
+	}
+}

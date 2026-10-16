@@ -218,3 +218,41 @@ export function Motd({ text }: { text: string | null | undefined }) {
     </>
   )
 }
+
+/** A block face as a 64×64 PNG, for saving as server-icon.png. */
+export async function blockIconPng(kind: BlockKind, seed = 'icon'): Promise<Uint8Array> {
+  const px = blockPixels(kind, seed)
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('This browser can’t draw images')
+  px.forEach((c, i) => {
+    ctx.fillStyle = c
+    ctx.fillRect((i % 8) * 8, Math.floor(i / 8) * 8, 8, 8)
+  })
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  if (!blob) throw new Error('This browser couldn’t make the PNG')
+  return new Uint8Array(await blob.arrayBuffer())
+}
+
+/** An uploaded image, centre-cropped and scaled to a 64×64 PNG. */
+export async function imageIconPng(file: File): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('This browser can’t draw images')
+    const side = Math.min(bitmap.width, bitmap.height)
+    ctx.imageSmoothingEnabled = side > 64
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 64, 64)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) throw new Error('This browser couldn’t make the PNG')
+    return new Uint8Array(await blob.arrayBuffer())
+  } finally {
+    bitmap.close()
+  }
+}
