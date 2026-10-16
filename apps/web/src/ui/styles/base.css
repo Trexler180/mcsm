@@ -951,3 +951,9 @@ button.nbt-toggle:hover { color: var(--console-text); background: color-mix(in s
 .items > .item.audit-row { align-items: flex-start; }
 .audit-time { width: 44px; flex: none; padding-top: 1px; }
 .audit-detail { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--inset); overflow-wrap: anywhere; }
+
+/* Account */
+.qr { background: #fff; padding: 8px; border-radius: 10px; line-height: 0; flex: none; }
+.recovery-codes { display: grid; grid-template-columns: repeat(2, max-content); gap: 4px 28px; }
+/* Text an agent wrote: shown so a person can judge it, never acted on. */
+.untrusted { margin-top: 8px; padding: 8px 10px; border-left: 2px solid var(--warn); border-radius: 0 6px 6px 0; background: var(--inset); white-space: pre-wrap; overflow-wrap: anywhere; }

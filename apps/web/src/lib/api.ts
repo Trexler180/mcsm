@@ -538,6 +538,8 @@ export const api = {
     ticket: (path: string) =>
       post<{ ticket: string; expires_in: number }>("/auth/ticket", { path }),
     me: () => get<User>("/auth/me"),
+    // What someone can change about themselves: their display name.
+    updateMe: (data: { display_name: string }) => put<User>("/auth/me", data),
   },
 
   // Remote agent connections — the owner's side of MCP over OAuth.

@@ -204,8 +204,9 @@ function MemberDialog({ server, member, existing, onClose, onSaved }: { server: 
   )
 }
 
-/** Each group with its single actions; a group grants everything under it. */
-export function PermissionEditor({ value, onChange }: { value: Perm[]; onChange: (v: Perm[]) => void }) {
+/** Each group with its single actions; a group grants everything under it.
+ *  without leaves out groups that can't be granted here. */
+export function PermissionEditor({ value, onChange, without = [] }: { value: Perm[]; onChange: (v: Perm[]) => void; without?: string[] }) {
   const has = (p: Perm) => value.includes(p)
   const setGroup = (g: PermissionGroupDef, on: boolean) =>
     onChange(on ? [...value.filter((p) => !p.startsWith(g.group + '.')), g.group] : value.filter((p) => p !== g.group && !p.startsWith(g.group + '.')))
@@ -220,7 +221,7 @@ export function PermissionEditor({ value, onChange }: { value: Perm[]; onChange:
   }
   return (
     <div>
-      {PERMISSION_MODEL.map((g) => {
+      {PERMISSION_MODEL.filter((g) => !without.includes(g.group)).map((g) => {
         const all = has(g.group)
         const some = g.leaves.filter((l) => has(l.value)).length
         return (

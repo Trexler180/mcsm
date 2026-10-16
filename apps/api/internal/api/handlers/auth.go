@@ -344,6 +344,41 @@ func (h *AuthHandlers) Me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// UpdateMe changes what the signed-in person can change about themselves:
+// their display name. Email and role stay with an administrator.
+func (h *AuthHandlers) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFrom(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var body struct {
+		DisplayName *string `json:"display_name"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	name, err := cleanDisplayName(body.DisplayName)
+	if err != nil {
+		writeFieldError(w, "display_name", err.Error())
+		return
+	}
+	if name != nil {
+		if _, err := h.store.UpdateUserAdmin(r.Context(), claims.UserID, store.UserAdminUpdate{DisplayName: name}); err != nil {
+			writeServerError(w, r, "update me", err)
+			return
+		}
+		audit(h.store, r, "", "user.update", map[string]any{"user_id": claims.UserID, "changes": map[string]any{"display_name": *name}})
+	}
+	user, err := h.store.GetUserByID(r.Context(), claims.UserID)
+	if err != nil {
+		writeLookupError(w, r, "user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
 // Ticket issues a short-lived, single-use ticket for endpoints that can't carry
 // an Authorization header (file downloads, console/metrics WebSockets). The
 // caller is already authenticated via the Bearer header on this request; the

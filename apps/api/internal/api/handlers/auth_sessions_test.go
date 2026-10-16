@@ -282,3 +282,35 @@ func TestMFASetupRequiresPassword(t *testing.T) {
 		t.Fatalf("setup with password status %d", rr.Code)
 	}
 }
+
+// Someone can rename themselves without ending their sessions; a name that's
+// too long is refused and changes nothing.
+func TestUpdateMeChangesOnlyTheName(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	u := f.user("me@example.com", "user")
+	h := NewAuthHandlers(f.store, "secret", auth.NewTicketStore(), nil)
+	token, _ := login(t, h, u.Email)
+	claims, _ := auth.ParseAccessToken("secret", token)
+
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/me", strings.NewReader(body))
+		req = req.WithContext(auth.WithClaims(req.Context(), claims))
+		rr := httptest.NewRecorder()
+		h.UpdateMe(rr, req)
+		return rr
+	}
+	if rr := put(`{"display_name":"  Ana  ","role":"admin"}`); rr.Code != http.StatusOK {
+		t.Fatalf("update me %d: %s", rr.Code, rr.Body.String())
+	}
+	got, _ := f.store.GetUserByID(ctx, u.ID)
+	if got.DisplayName == nil || *got.DisplayName != "Ana" || got.Role != "user" {
+		t.Fatalf("user after update: %+v", got)
+	}
+	if ok, _ := f.store.SessionActive(ctx, sessionOf(t, token), u.ID); !ok {
+		t.Fatal("renaming yourself must not end your session")
+	}
+	if rr := put(`{"display_name":"` + strings.Repeat("x", 200) + `"}`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("an over-long name got %d", rr.Code)
+	}
+}

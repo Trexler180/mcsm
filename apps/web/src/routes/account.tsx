@@ -1,24 +1,21 @@
-import { createRoute } from '@tanstack/react-router'
+import { createRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { Header } from '@/components/layout/header'
-import { SecuritySection } from '@/components/settings/security'
+import { AccountPage, accountSectionOf } from '@/pages/account'
 
-function AccountPage() {
-  return (
-    <div>
-      <Header
-        title="Account"
-        description="Your sign-in security and active sessions"
-      />
-      <div className="p-4 sm:p-6 max-w-2xl">
-        <SecuritySection />
-      </div>
-    </div>
-  )
+function AccountView() {
+  const { section } = useParams({ strict: false }) as { section?: string }
+  const navigate = useNavigate()
+  return <AccountPage section={accountSectionOf(section)} setSection={(s) => void navigate({ to: s === 'you' ? '/account' : (`/account/${s}` as '/account') })} />
 }
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account',
-  component: AccountPage,
+  component: AccountView,
+})
+
+export const AccountSectionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/$section',
+  component: AccountView,
 })

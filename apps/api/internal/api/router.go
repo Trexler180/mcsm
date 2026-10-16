@@ -306,6 +306,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 			r.Use(machineBoundary)
 
 			r.Get("/auth/me", authH.Me)
+			r.With(requireHuman).Put("/auth/me", authH.UpdateMe)
 			r.With(requireHuman).Post("/auth/password", authH.ChangePassword)
 			// Mint a short-lived ticket for header-less requests (downloads, WS).
 			r.Post("/auth/ticket", authH.Ticket)
