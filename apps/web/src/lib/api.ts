@@ -272,10 +272,17 @@ function xhrUpload(
   formData: FormData,
   onProgress?: (p: UploadProgress) => void,
   retry = true,
+  signal?: AbortSignal,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Upload stopped", "AbortError"));
+      return;
+    }
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.onabort = () => reject(new DOMException("Upload stopped", "AbortError"));
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     if (onProgress) {
@@ -287,7 +294,7 @@ function xhrUpload(
       if (xhr.status === 401 && retry) {
         refreshAccessToken().then((refreshed) => {
           if (refreshed) {
-            xhrUpload(url, formData, onProgress, false).then(resolve, reject);
+            xhrUpload(url, formData, onProgress, false, signal).then(resolve, reject);
           } else {
             sessionEnded();
             resolve(new Response(xhr.responseText, { status: 401 }));
@@ -778,11 +785,14 @@ export const api = {
     tree: (
       serverId: string,
       path: string,
-      opts?: { depth?: number; max?: number },
+      opts?: { depth?: number; max?: number; sizes?: boolean },
     ) => {
       const params = new URLSearchParams({ path });
       if (opts?.depth) params.set("depth", String(opts.depth));
       if (opts?.max) params.set("max", String(opts.max));
+      // Totals each child's size over the whole tree; agents too old to know
+      // it answer without sizes.
+      if (opts?.sizes) params.set("sizes", "1");
       return get<FileTree>(
         `/servers/${serverId}/files/tree?${params.toString()}`,
       );
@@ -881,7 +891,7 @@ export const api = {
     upload: (
       serverId: string,
       file: File,
-      opts: { name: string; overwrite?: boolean },
+      opts: { name: string; overwrite?: boolean; signal?: AbortSignal },
       onProgress?: (p: UploadProgress) => void,
       onUnpack?: (op: Operation) => void,
     ) => {
@@ -893,6 +903,8 @@ export const api = {
         `${BASE}/servers/${serverId}/worlds/upload?${params.toString()}`,
         fd,
         onProgress,
+        true,
+        opts.signal,
       ).then(async (r) => {
         if (!r.ok) {
           let msg = `HTTP ${r.status}`;

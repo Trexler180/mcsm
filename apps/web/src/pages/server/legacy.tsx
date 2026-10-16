@@ -1,13 +1,12 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import type { MyServerPermissions, Server, ServerStatus } from '@/lib/types'
+import type { MyServerPermissions, Server } from '@/lib/types'
 import { ServerPermissionsProvider } from '@/lib/server-permissions'
 import { TabSkeleton, FilesSkeleton } from '@/ui/skeleton'
 
 // Server tabs not yet on the new design: the previous design's screens,
 // shown inside the new server page until each one's turn comes.
 
-const WorldsTab = lazy(() => import('@/components/servers/worlds-tab').then((m) => ({ default: m.WorldsTab })))
 const FileBrowser = lazy(() => import('@/components/files/browser').then((m) => ({ default: m.FileBrowser })))
 const FileEditor = lazy(() => import('@/components/files/editor').then((m) => ({ default: m.FileEditor })))
 const DatViewer = lazy(() => import('@/components/files/dat-viewer').then((m) => ({ default: m.DatViewer })))
@@ -58,12 +57,11 @@ function Files({ serverId }: { serverId: string }) {
   )
 }
 
-export function LegacyTab({ tab, server, perms }: { tab: 'worlds' | 'files'; server: Server; perms: MyServerPermissions | undefined }) {
-  const status = server.status as ServerStatus
+export function LegacyTab({ tab, server, perms }: { tab: 'files'; server: Server; perms: MyServerPermissions | undefined }) {
   return (
     <ServerPermissionsProvider permissions={perms}>
       <Frame fill tab={tab}>
-        {tab === 'worlds' ? <WorldsTab serverId={server.id} status={status} /> : <Files serverId={server.id} />}
+        <Files serverId={server.id} />
       </Frame>
     </ServerPermissionsProvider>
   )

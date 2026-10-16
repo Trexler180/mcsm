@@ -10,6 +10,7 @@ import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer,
 import { ServerHeader, tabLabel } from './header'
 import { LegacyTab } from './legacy'
 import { ModsTab, modsViewOf } from './mods'
+import { WorldsTab } from './worlds'
 import { PlayersTab } from './players'
 import { BackupsTab } from './backups'
 import { SchedulesTab } from './schedules'
@@ -122,6 +123,12 @@ export function ServerPage({ id, tab: rawTab, search, setSearch }: { id: string;
     body = (
       <TabPage>
         <ModsTab server={server} status={status} perms={my} view={modsViewOf(search.sub)} setView={(v) => setSearch({ ...search, sub: v === 'installed' ? undefined : v })} />
+      </TabPage>
+    )
+  } else if (tab === 'worlds') {
+    body = (
+      <TabPage>
+        <WorldsTab server={server} status={status} />
       </TabPage>
     )
   } else if (tab === 'schedules') {

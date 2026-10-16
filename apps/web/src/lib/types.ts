@@ -370,6 +370,8 @@ export interface FileTree {
   path: string;
   entries: FileTreeEntry[];
   truncated: boolean;
+  /** Bytes under each of the root's children, when asked for with `sizes`. */
+  sizes?: Record<string, number>;
 }
 
 /** Outcome of unpacking an uploaded world archive into the server root. */
