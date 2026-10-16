@@ -38,7 +38,8 @@ const pwaSelfDestroy = process.env.VITE_PWA_SELF_DESTROY === '1'
 // baseline and this replaces it in `vite build` output. Notes:
 //  - script-src 'self': the bundle has no inline scripts (SW registration is
 //    in-bundle via virtual:pwa-register).
-//  - style-src 'unsafe-inline': xterm.js and recharts inject <style> elements.
+//  - style-src 'unsafe-inline': components set inline style attributes, and
+//    CodeMirror injects its theme as <style> elements.
 //  - img-src https:: player heads (mc-heads.net) and mod icons come from
 //    third-party CDNs that vary by source.
 //  - connect-src 'self' covers the same-origin API and its WebSockets.
@@ -185,10 +186,7 @@ export default defineConfig({
         // browser can fetch them in parallel. Build-only; no runtime change.
         manualChunks: {
           react: ['react', 'react-dom'],
-          charts: ['recharts'],
-          terminal: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'],
-          editor: ['codemirror', '@codemirror/lang-json', '@codemirror/lang-yaml', '@codemirror/theme-one-dark'],
-          markdown: ['react-markdown'],
+          editor: ['codemirror', '@codemirror/lang-json', '@codemirror/lang-yaml', '@codemirror/language', '@codemirror/view', '@codemirror/state'],
         },
       },
     },

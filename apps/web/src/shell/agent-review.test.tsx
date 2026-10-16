@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { MCPActionAlert } from "@/lib/mcp-action-alert";
 import type { MCPActionRequest } from "@/lib/types";
-import { McpApprovalDialog, useMcpApprovalDialog } from "./mcp-approval-dialog";
+import { McpApprovalDialog, useMcpApprovalDialog } from "./agent-review";
 
 vi.mock("@/store/notifications", () => ({
   useNotifications: () => ({ success: vi.fn(), error: vi.fn() }),

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { defaultServerProperties, parseProperties, serializeProperties } from '@/components/servers/options/properties-schema'
+import { defaultServerProperties, parseProperties, serializeProperties } from '@/pages/server/properties-schema'
 import type { FleetServer, MyServerPermissions, Server } from '@/lib/types'
 import { useAuthStore } from '@/store/auth'
 import { useFolders } from '@/shell/fleet'

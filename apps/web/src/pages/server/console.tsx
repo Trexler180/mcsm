@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
-import { COMMANDS } from '@/components/console/commands'
+import { COMMANDS } from '@/pages/server/commands'
 import type { FleetServer, LogProblem, MyServerPermissions, Server } from '@/lib/types'
 import { ServerConsole, subscribeServerMetrics, type WsMessage } from '@/lib/ws'
 import { useConnection } from '@/live/connection'

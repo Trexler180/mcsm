@@ -15,7 +15,7 @@ import {
   mcpActionToastKey,
   resolvedRequestId,
 } from "./mcp-action-alert";
-import { useMcpApprovalDialog } from "@/components/layout/mcp-approval-dialog";
+import { useMcpApprovalDialog } from "@/shell/agent-review";
 import type { NotificationItem } from "./types";
 
 // Alerts as they arrive. They come over the panel's live event stream

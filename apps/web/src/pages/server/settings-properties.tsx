@@ -10,7 +10,7 @@ import {
   serializeProperties,
   type PropertiesMap,
   type PropertyField,
-} from '@/components/servers/options/properties-schema'
+} from '@/pages/server/properties-schema'
 import type { MyServerPermissions, Server } from '@/lib/types'
 import { useGo } from '@/shell/nav'
 import { paths } from '@/shell/paths'

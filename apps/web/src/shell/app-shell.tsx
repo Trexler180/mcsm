@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { McpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
-import { RebootOverlay } from '@/components/layout/reboot-overlay'
+import { McpApprovalDialog } from '@/shell/agent-review'
+import { RebootOverlay } from '@/shell/reboot-overlay'
 import { seedNotificationFeed } from '@/lib/notify-stream'
 import { useConnection } from '@/live/connection'
 import { startLive, stopLive } from '@/live/events'
@@ -20,17 +20,13 @@ import { Palette } from './palette'
 import { ReauthHost, useSessionEndedPrompt } from './reauth'
 import { Sidebar } from './sidebar'
 
-/** Sections already on the new design. Everything else is an older screen,
- *  shown inside the shell until its turn comes. */
-const PORTED = new Set<string>(['home', 'server', 'alerts', 'nodes', 'people', 'audit', 'settings', 'account', 'new', 'mcp-consent'])
-
 /** The signed-in panel: sidebar, main area, and everything that can appear
  *  over any page. */
 export function AppShell({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
   const navOpen = useUi((s) => s.navOpen)
   const conn = useConnection((s) => s.state)
-  const { pathname, section } = useSection()
+  const { pathname } = useSection()
   const fleet = useFleet()
   useSessionEndedPrompt(true)
 
@@ -57,7 +53,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUi({ navOpen: false })
-    document.querySelectorAll('.scroll, .legacy-page').forEach((el) => {
+    document.querySelectorAll('.scroll').forEach((el) => {
       el.scrollTop = 0
     })
   }, [pathname])
@@ -102,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* Static import on purpose: if the panel's own host is the one
             restarting, a lazily loaded chunk could not load. */}
         <RebootOverlay />
-        {PORTED.has(section) ? children : <div className="legacy-page">{children}</div>}
+        {children}
       </main>
       {navOpen && <div className="sheet-scrim" style={{ zIndex: 74 }} onClick={() => setUi({ navOpen: false })} />}
       <Palette />

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMcpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
+import { useMcpApprovalDialog } from '@/shell/agent-review'
 import { api } from '@/lib/api'
 import { asJoinDeniedAlert, whitelistFromAlert } from '@/lib/join-denied'
 import { actionPhrase } from '@/lib/mcp-action-alert'

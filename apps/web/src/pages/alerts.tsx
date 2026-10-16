@@ -6,7 +6,7 @@ import { asJoinDeniedAlert, canWhitelistOn, whitelistFromAlert } from '@/lib/joi
 import { asMcpActionAlert, resolvedRequestId } from '@/lib/mcp-action-alert'
 import type { NotificationChannel, NotificationEventDef, NotificationItem, NotificationSeverity, NotificationSubscription } from '@/lib/types'
 import { disablePush, enablePush, pushSubscription, pushSupported } from '@/lib/web-push'
-import { useMcpApprovalDialog } from '@/components/layout/mcp-approval-dialog'
+import { useMcpApprovalDialog } from '@/shell/agent-review'
 import { useNotificationFeed } from '@/store/notification-feed'
 import { useFleet } from '@/shell/fleet'
 import { useGo } from '@/shell/nav'
