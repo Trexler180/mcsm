@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { InstalledMod, ModImpact, ModProjectType, ModSearchHit, ModSortIndex, ModSource, ModUpdate, ModVersion, MyServerPermissions, Server, SkippedModVersion } from '@/lib/types'
-import { Btn, Check, Choices, Empty, Field, Notice, Search, Select, Switch, Tabs, TextBtn, type StatusKey } from '@/ui/controls'
+import type { InstalledMod, ModImpact, ModProjectType, ModSource, ModUpdate, ModUpdateRun, ModUpdateStep, ModVersion, MyServerPermissions, Server, SkippedModVersion } from '@/lib/types'
+import { Btn, Check, Choices, Empty, Filters, IconBtn, Search, Switch, Tabs, TextBtn, type StatusKey } from '@/ui/controls'
 import { act } from '@/ui/failure'
-import { fmtCompact, fmtDate, fmtNum, relTime } from '@/ui/format'
-import { Dialog, MenuButton, MenuItem, MenuSep, Sheet } from '@/ui/overlays'
-import { useCan } from '@/ui/perm'
-import { PLATFORMS, contentLabel, platformLabel } from '@/ui/platforms'
+import { fmtDate } from '@/ui/format'
+import { Dialog, MenuButton, MenuItem, MenuSep } from '@/ui/overlays'
+import { PLATFORMS, contentLabel } from '@/ui/platforms'
 import { Loaded, SheetSkeleton, SkItems, SkTable } from '@/ui/skeleton'
 import { toast } from '@/ui/toasts'
 import { cx, plural, toMs } from '@/ui/util'
 import { allowed } from './data'
 import { ConfigsView } from './configs'
-import { InstalledModIcon, ModIcon } from './mod-icon'
+import { Browse, Markdown, ProjectSheet } from './mod-browse'
+import { gameVersions } from './mod-shared'
+import { InstalledModIcon } from './mod-icon'
 
 // Mods, plugins or datapacks: what's installed and how to change it, finding
 // more, and their config files. Changes load the next time the server starts.
@@ -31,6 +32,13 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
   const updates = useQuery({ queryKey: ['mod-updates', server.id], queryFn: () => api.mods.updates(server.id), staleTime: 5 * 60_000, retry: false }).data ?? []
   const [safe, setSafe] = useState(false)
   const [pct, setPct] = useState<number | null>(null)
+  // Browse stays mounted once opened, so its search and filters survive a
+  // look at what's installed.
+  const [browsed, setBrowsed] = useState(view === 'browse')
+  useEffect(() => {
+    if (view === 'browse') setBrowsed(true)
+  }, [view])
+  const [found, setFound] = useState<number | null>(null)
   const upRef = useRef<HTMLInputElement>(null)
   const word = contentLabel(server.platform)
   const pending = updates.filter((u) => u.enabled && !mods.data?.find((m) => m.id === u.mod_id)?.pinned)
@@ -59,7 +67,7 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
           label={word}
           items={[
             { value: 'installed', label: 'Installed', count: mods.data?.length },
-            { value: 'browse', label: 'Browse' },
+            { value: 'browse', label: 'Browse', count: found ?? undefined },
             { value: 'configs', label: 'Configs', disabled: !allowed(perms, 'files') },
           ]}
         />
@@ -90,7 +98,11 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
           {(list) => <Installed server={server} status={status} list={list} updates={updates} />}
         </Loaded>
       )}
-      {view === 'browse' && <Browse server={server} status={status} installed={mods.data ?? []} />}
+      {browsed && (
+        <div hidden={view !== 'browse'}>
+          <Browse server={server} status={status} installed={mods.data ?? []} onTotal={setFound} />
+        </div>
+      )}
       {view === 'configs' && <ConfigsView server={server} />}
       {safe && <SafeUpdateDialog server={server} status={status} updates={pending} onClose={() => setSafe(false)} />}
     </>
@@ -107,6 +119,8 @@ function note(m: InstalledMod): { text: string; warn?: boolean } {
   return { text: m.file_name }
 }
 
+const sourceName = (s: string) => ({ modrinth: 'From Modrinth', curseforge: 'From CurseForge', hangar: 'From Hangar', spigotmc: 'From SpigotMC' })[s] ?? ''
+
 function projectUrl(m: InstalledMod): string | null {
   if (!m.source_id) return null
   if (m.source === 'modrinth') return `https://modrinth.com/project/${m.source_id}`
@@ -115,18 +129,33 @@ function projectUrl(m: InstalledMod): string | null {
   return null
 }
 
+type Show = 'all' | 'updates' | 'on' | 'off'
+
+/** What an installed file is, for looking it up again at its source. */
+function kindOf(m: InstalledMod, platform: string): ModProjectType {
+  if (m.install_path.includes('datapacks')) return 'datapack'
+  return PLATFORMS[platform]?.content === 'plugin' ? 'plugin' : 'mod'
+}
+
 function Installed({ server, status, list, updates }: { server: Server; status: StatusKey; list: InstalledMod[]; updates: ModUpdate[] }) {
   const qc = useQueryClient()
   const [q, setQ] = useState('')
+  const [show, setShow] = useState<Show>('all')
   const [impact, setImpact] = useState<{ mod: InstalledMod; mode: 'uninstall' | 'disable' } | null>(null)
   const [versions, setVersions] = useState<InstalledMod | null>(null)
+  const [about, setAbout] = useState<InstalledMod | null>(null)
   const [checking, setChecking] = useState(false)
   const skipped = useQuery({ queryKey: ['mod-skipped', server.id], queryFn: () => api.mods.skippedVersions(server.id), staleTime: 60_000, retry: false }).data ?? []
   const word = contentLabel(server.platform).toLowerCase()
   const updateOf = (m: InstalledMod) => updates.find((u) => u.mod_id === m.id)
   const skippedOf = (m: InstalledMod) => skipped.filter((v) => v.project_id === m.source_id)
+  const needle = q.trim().toLowerCase()
+  const hasUpdate = (m: InstalledMod) => !!updateOf(m) && !m.pinned
+  const on = list.filter((m) => m.enabled).length
+  const counts: Record<Show, number> = { all: list.length, updates: list.filter(hasUpdate).length, on, off: list.length - on }
   const rows = list
-    .filter((m) => !q || m.name.toLowerCase().includes(q.toLowerCase()))
+    .filter((m) => show === 'all' || (show === 'updates' ? hasUpdate(m) : show === 'on' ? m.enabled : !m.enabled))
+    .filter((m) => !needle || m.name.toLowerCase().includes(needle) || m.file_name.toLowerCase().includes(needle))
     .sort((a, b) => Number(!!updateOf(b) && !b.pinned) - Number(!!updateOf(a) && !a.pinned) || a.name.localeCompare(b.name))
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['mods', server.id] })
@@ -178,15 +207,27 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
   }
   return (
     <>
+      <UpdateRuns server={server} />
       <div className="toolbar">
-        <Search value={q} onChange={setQ} placeholder={`Filter ${word}`} size="sm" style={{ width: 240 }} />
+        <Filters
+          value={show}
+          onChange={setShow}
+          label={`Which ${word}`}
+          options={[
+            { value: 'all', label: 'All', count: counts.all },
+            { value: 'updates', label: 'Updates', count: counts.updates },
+            { value: 'on', label: 'On', count: counts.on },
+            { value: 'off', label: 'Off', count: counts.off },
+          ]}
+        />
+        <Search value={q} onChange={setQ} placeholder={`Filter ${word}`} size="sm" style={{ width: 220 }} />
         <span className="grow" />
         <TextBtn quiet onClick={() => void check()}>
           {checking ? 'Checking…' : 'Check for updates'}
         </TextBtn>
       </div>
       {rows.length === 0 ? (
-        <Empty title={list.length ? 'Nothing matches.' : `No ${word} yet.`}>{!list.length && 'Find some under Browse, or upload a jar.'}</Empty>
+        <Empty title={!list.length ? `No ${word} yet.` : show === 'updates' && !needle ? 'Everything is up to date.' : 'Nothing matches.'}>{!list.length && 'Find some under Browse, or upload a jar.'}</Empty>
       ) : (
         <table className="t mods-t">
           <thead>
@@ -214,6 +255,7 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
                           {m.name}
                         </div>
                         <div className={cx('sub ellipsis', n.warn && 'warn')}>{n.text}</div>
+                        {sourceName(m.source) && <div className="sub t3">{sourceName(m.source)}</div>}
                         {skippedOf(m).map((v) => (
                           <div key={v.version_id} className="sub warn">
                             <span data-tip={v.reason || undefined}>{v.version} is skipped: it stopped the server starting.</span>{' '}
@@ -249,6 +291,9 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
                       label={`More for ${m.name}`}
                       items={(close) => (
                         <>
+                          <MenuItem close={close} disabled={!m.source_id} onClick={() => setAbout(m)}>
+                            About it
+                          </MenuItem>
                           <MenuItem close={close} need="mods.update" disabled={!m.source_id} onClick={() => setVersions(m)}>
                             Other versions
                           </MenuItem>
@@ -279,6 +324,7 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
       )}
       {impact && <ImpactDialog server={server} status={status} target={impact} onClose={() => setImpact(null)} onDone={refresh} />}
       {versions && <VersionDialog server={server} status={status} mod={versions} onClose={() => setVersions(null)} onDone={refresh} />}
+      {about?.source_id && <ProjectSheet server={server} source={about.source as ModSource} kind={kindOf(about, server.platform)} projectId={about.source_id} installed onClose={() => setAbout(null)} />}
     </>
   )
 }
@@ -360,6 +406,16 @@ function VersionDialog({ server, status, mod, onClose, onDone }: { server: Serve
     queryFn: () => api.mods.getVersions(server.id, mod.source_id as string, all ? undefined : server.platform, all ? undefined : server.mc_version, mod.source),
     staleTime: 10 * 60_000,
   })
+  const picked = versions.data?.find((v) => v.id === sel)
+  // Search lists leave changelogs out; the version itself has it.
+  const notes = useQuery({
+    queryKey: ['mod-version', mod.source, mod.source_id, sel],
+    queryFn: () => api.mods.getVersion(server.id, mod.source_id as string, sel, mod.source),
+    enabled: !!picked && !picked.changelog,
+    staleTime: 60 * 60_000,
+    retry: false,
+  })
+  const changelog = picked?.changelog || notes.data?.changelog
   const install = async (list: ModVersion[]) => {
     const v = list.find((x) => x.id === sel)
     if (!v) return
@@ -400,7 +456,7 @@ function VersionDialog({ server, status, mod, onClose, onDone }: { server: Serve
           list.length === 0 ? (
             <Empty title="No versions match.">Show versions for other loaders to see everything it has.</Empty>
           ) : (
-            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <div style={{ maxHeight: changelog ? 260 : 420, overflowY: 'auto' }}>
               <Choices
                 value={sel}
                 onChange={setSel}
@@ -430,23 +486,46 @@ function VersionDialog({ server, status, mod, onClose, onDone }: { server: Serve
           )
         }
       </Loaded>
+      {picked && (changelog || notes.isLoading) && (
+        <div className="changelog">
+          <div className="field-label t2">What’s new in {picked.version_number}</div>
+          {changelog ? <Markdown text={changelog} /> : <p className="t3 small">Loading…</p>}
+        </div>
+      )}
     </Dialog>
   )
 }
 
-/** The Minecraft versions a release is for, short: the server's own when it's
- *  one of many. */
-export function gameVersions(list: string[], mine: string): string {
-  if (list.length <= 3) return list.join(', ') || 'any version'
-  if (list.includes(mine)) return `${mine} and ${plural(list.length - 1, 'other')}`
-  return `${list[0]} to ${list[list.length - 1]}`
-}
+export { gameVersions }
 
 function SafeUpdateDialog({ server, status, updates, onClose }: { server: Server; status: StatusKey; updates: ModUpdate[]; onClose: () => void }) {
   const qc = useQueryClient()
   const [backup, setBackup] = useState(true)
+  const [how, setHow] = useState<'safe' | 'swap'>('safe')
   const up = status === 'online'
+  // Just the files, one after another, with nothing restarted or watched.
+  const swap = async () => {
+    onClose()
+    let done = 0
+    const failed: string[] = []
+    for (const u of updates) {
+      try {
+        await api.mods.update(server.id, u.mod_id, u.latest_version_id)
+        done++
+      } catch {
+        failed.push(u.name)
+      }
+    }
+    void qc.invalidateQueries({ queryKey: ['mods', server.id] })
+    void qc.invalidateQueries({ queryKey: ['mod-updates', server.id] })
+    if (done) toast('ok', `Updated ${plural(done, 'mod')} on ${server.name}`, up ? 'Restart the server to load them.' : 'They load the next time it starts.')
+    if (failed.length) toast('bad', `Couldn’t update ${failed.join(', ')}`, 'Try those one at a time to see why.')
+  }
   const start = () => {
+    if (how === 'swap') {
+      void swap()
+      return
+    }
     onClose()
     void act(`update ${plural(updates.length, 'mod')} on ${server.name}`, async () => {
       // Every job holds the server, so the update waits for the backup.
@@ -474,7 +553,7 @@ function SafeUpdateDialog({ server, status, updates, onClose }: { server: Server
             Cancel
           </Btn>
           <Btn variant="primary" onClick={start}>
-            Update
+            {how === 'safe' ? 'Update safely' : 'Update the files'}
           </Btn>
         </>
       }
@@ -492,384 +571,98 @@ function SafeUpdateDialog({ server, status, updates, onClose }: { server: Server
             ))}
           </tbody>
         </table>
-        <p className="t2">
-          MCSM swaps the files, {up ? 'restarts the server' : 'starts the server once'} and watches it come up. If an update stops it from starting, that update is undone and skipped next time.
-          {up ? ' Anyone online is disconnected for a minute.' : ''}
-        </p>
-        <Check checked={backup} onChange={setBackup} label="Back up first" />
-      </div>
-    </Dialog>
-  )
-}
-
-// ---- finding more -----------------------------------------------------------------------------
-
-const SORTS: { value: ModSortIndex; label: string }[] = [
-  { value: 'relevance', label: 'Best match' },
-  { value: 'downloads', label: 'Most downloaded' },
-  { value: 'follows', label: 'Most followed' },
-  { value: 'updated', label: 'Recently updated' },
-  { value: 'newest', label: 'Newest' },
-]
-const SOURCE_LABEL: Record<ModSource, string> = { modrinth: 'Modrinth', curseforge: 'CurseForge', hangar: 'Hangar', spigotmc: 'SpigotMC' }
-
-// Focusing a field on a phone opens its keyboard over the results.
-const finePointer = () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: fine)').matches
-
-function kindsFor(platform: string): { value: ModProjectType; label: string }[] {
-  const c = PLATFORMS[platform]?.content
-  if (c === 'plugin') return [{ value: 'plugin', label: 'Plugins' }]
-  if (c === 'datapack') return [{ value: 'datapack', label: 'Datapacks' }]
-  return [
-    { value: 'mod', label: 'Mods' },
-    { value: 'modpack', label: 'Modpacks' },
-    { value: 'datapack', label: 'Datapacks' },
-  ]
-}
-
-function Browse({ server, status, installed }: { server: Server; status: StatusKey; installed: InstalledMod[] }) {
-  const plugin = PLATFORMS[server.platform]?.content === 'plugin'
-  const sources = useQuery({ queryKey: ['mod-sources', server.id], queryFn: () => api.mods.sources(server.id), staleTime: 60 * 60_000, retry: false }).data
-  const kinds = kindsFor(server.platform)
-  const [kind, setKind] = useState<ModProjectType>(kinds[0].value)
-  const available: ModSource[] = (plugin ? (['hangar', 'modrinth', 'spigotmc'] as ModSource[]) : (['modrinth', 'curseforge'] as ModSource[])).filter((s) => !sources || sources[s] !== false)
-  const [source, setSource] = useState<ModSource>(available[0] ?? 'modrinth')
-  useEffect(() => {
-    if (!available.includes(source) && available[0]) setSource(available[0])
-  }, [available, source])
-  const [q, setQ] = useState('')
-  const [dq, setDq] = useState('')
-  useEffect(() => {
-    const t = setTimeout(() => setDq(q), 300)
-    return () => clearTimeout(t)
-  }, [q])
-  const [cats, setCats] = useState<string[]>([])
-  const [sort, setSort] = useState<ModSortIndex>('relevance')
-  const [fits, setFits] = useState(true)
-  const [serverOnly, setServerOnly] = useState(false)
-  const [hideMine, setHideMine] = useState(false)
-  const [page, setPage] = useState(0)
-  useEffect(() => setPage(0), [dq, cats, sort, fits, source, kind])
-  useEffect(() => setCats([]), [source, kind])
-  const [detail, setDetail] = useState<ModSearchHit | null>(null)
-  const [install, setInstall] = useState<ModSearchHit | null>(null)
-  const [installing, setInstalling] = useState<string[]>([])
-  const top = useRef<HTMLDivElement>(null)
-  const qc = useQueryClient()
-  const goTo = (n: number) => {
-    setPage(n)
-    // A new page starts at the top, not where the last one was scrolled to.
-    top.current?.scrollIntoView({ block: 'start' })
-  }
-  const categories = useQuery({ queryKey: ['mod-categories', server.id, kind, source], queryFn: () => api.mods.categories(server.id, kind, source), staleTime: 60 * 60_000, retry: false }).data ?? []
-  // Modrinth narrows by every category picked; the others take one.
-  const multiCat = source === 'modrinth'
-  const toggleCat = (id: string) => setCats((c) => (c.includes(id) ? c.filter((x) => x !== id) : multiCat ? [...c, id] : [id]))
-  const loader = kind === 'mod' || kind === 'plugin' || kind === 'modpack' ? server.platform : undefined
-  const results = useQuery({
-    queryKey: ['mod-search', server.id, source, kind, dq, cats, sort, fits, page],
-    queryFn: () =>
-      api.mods.search(server.id, {
-        query: dq,
-        source,
-        loader: fits ? loader : undefined,
-        mcVersion: fits ? server.mc_version : undefined,
-        projectType: kind,
-        categories: cats.length ? cats : undefined,
-        index: sort === 'relevance' && !dq ? 'downloads' : sort,
-        limit: 20,
-        offset: page * 20,
-      }),
-    staleTime: 60_000,
-    placeholderData: (prev) => prev,
-  })
-  const installedIds = new Set(installed.map((m) => m.source_id).filter(Boolean))
-  const catList = categories.filter((c) => c.header === 'categories' || !c.header)
-  // Plugins and data packs never need anything on the player's side.
-  const shown = (hits: ModSearchHit[]) => hits.filter((h) => (!hideMine || !installedIds.has(h.project_id)) && (kind !== 'mod' || !serverOnly || h.client_side !== 'required'))
-  const catLabel = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).replace(/-/g, ' ')
-
-  // Install in one click: the newest version made for this server. A modpack
-  // replaces the server's mods, so it still asks first.
-  const quickInstall = async (h: ModSearchHit) => {
-    if (kind === 'modpack') {
-      setInstall(h)
-      return
-    }
-    setInstalling((x) => [...x, h.project_id])
-    const r = await act(`install ${h.title}`, async () => {
-      const versions = await api.mods.getVersions(server.id, h.project_id, kind === 'datapack' ? undefined : server.platform, server.mc_version, source)
-      if (!versions.length) return null
-      await api.mods.install(server.id, source, h.project_id, versions[0].id, true)
-      return versions[0]
-    })
-    setInstalling((x) => x.filter((id) => id !== h.project_id))
-    if (r === undefined) return
-    if (r === null) {
-      toast('bad', `There’s no ${h.title} for ${platformLabel(server.platform)} ${server.mc_version}`, 'You can still pick a version made for another one.', {
-        actions: [{ label: 'Pick a version', run: () => setInstall(h) }],
-      })
-      return
-    }
-    toast('ok', `Installed ${h.title} ${r.version_number}`, status === 'online' ? 'Restart the server to load it.' : 'It loads the next time the server starts.')
-    void qc.invalidateQueries({ queryKey: ['mods', server.id] })
-  }
-  return (
-    <>
-      <div className="toolbar" ref={top} style={{ scrollMarginTop: 16 }}>
-        <Search value={q} onChange={setQ} placeholder={`Search ${SOURCE_LABEL[source]}`} style={{ flex: '1 1 260px' }} autoFocus={finePointer()} />
-        {available.length > 1 && <Select value={source} onChange={setSource} options={available.map((s) => ({ value: s, label: SOURCE_LABEL[s] }))} style={{ width: 'auto' }} aria-label="Source" />}
-        {kinds.length > 1 && <Select value={kind} onChange={setKind} options={kinds} style={{ width: 'auto' }} aria-label="Kind" />}
-        <Select value={sort} onChange={setSort} options={SORTS} style={{ width: 'auto' }} aria-label="Sort" />
-      </div>
-      {catList.length > 0 && (
-        <div className="mod-cats" role="group" aria-label="Categories">
-          {catList.map((c) => {
-            const id = c.id ?? c.name
-            return (
-              <button key={id} type="button" className="cat-chip" aria-pressed={cats.includes(id)} onClick={() => toggleCat(id)}>
-                {catLabel(c.name)}
-              </button>
-            )
-          })}
-          {cats.length > 0 && (
-            <button type="button" className="link quiet small" onClick={() => setCats([])}>
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-      <div className="row wrap" style={{ gap: '8px 20px', marginBottom: 10 }}>
-        <Check checked={fits} onChange={setFits} label={`Made for ${platformLabel(server.platform)} ${server.mc_version}`} />
-        <Check checked={hideMine} onChange={setHideMine} label="Hide what’s installed" />
-        {/* Judged from what each result says about itself: Modrinth's own
-            side filter returns projects that contradict it. */}
-        {kind === 'mod' && <Check checked={serverOnly} onChange={setServerOnly} label="Hide ones players need too" />}
-      </div>
-      {sources && !plugin && sources.curseforge === false && <p className="small t3" style={{ marginBottom: 8 }}>CurseForge needs an API key in the panel’s settings before it can be searched.</p>}
-      <Loaded query={results} sk={<SkItems rows={6} icons />} what="search results">
-        {(r) =>
-          r.hits.length === 0 ? (
-            <Empty title="Nothing matches.">{fits ? 'Untick “Made for” to see things made for other versions.' : cats.length ? 'Try fewer categories.' : 'Try another search.'}</Empty>
-          ) : (
-            <>
-              <div className="items flush">
-                {shown(r.hits).length === 0 && <p className="t2 small" style={{ padding: '14px 0' }}>Everything on this page is hidden by the boxes above.</p>}
-                {shown(r.hits).map((h) => {
-                  const mine = installedIds.has(h.project_id)
-                  return (
-                    <div key={h.project_id} className="item" style={{ alignItems: 'flex-start', gap: 14 }}>
-                      <button type="button" className="mod-icon-btn" onClick={() => setDetail(h)} aria-label={`About ${h.title}`}>
-                        <ModIcon url={h.icon_url} name={h.title} size={44} />
-                      </button>
-                      <div className="grow">
-                        <button type="button" className="title link" style={{ textDecorationColor: 'transparent' }} onClick={() => setDetail(h)}>
-                          {h.title}
-                        </button>
-                        <div className="t2 small">{h.description}</div>
-                        <div className="meta">
-                          {fmtCompact(h.downloads)} downloads{h.author ? `, by ${h.author}` : ''}
-                          {h.client_side === 'required' ? '. Players need it too.' : ''}
-                        </div>
-                      </div>
-                      {mine ? (
-                        <span className="t3 small" style={{ paddingTop: 4 }}>
-                          Installed
-                        </span>
-                      ) : (
-                        <Btn size="sm" need="mods.install" loading={installing.includes(h.project_id)} onClick={() => void quickInstall(h)}>
-                          Install
-                        </Btn>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-              {r.total_hits > 20 && (
-                <div className="row" style={{ justifyContent: 'center', gap: 12, marginTop: 14 }}>
-                  <Btn size="sm" disabled={page === 0} onClick={() => goTo(page - 1)}>
-                    Previous
-                  </Btn>
-                  <span className="t3 small num">
-                    {page * 20 + 1}–{Math.min(r.total_hits, (page + 1) * 20)} of {fmtNum(r.total_hits)}
-                  </span>
-                  <Btn size="sm" disabled={(page + 1) * 20 >= r.total_hits} onClick={() => goTo(page + 1)}>
-                    Next
-                  </Btn>
-                </div>
-              )}
-            </>
-          )
-        }
-      </Loaded>
-      {detail && (
-        <ProjectSheet
-          server={server}
-          hit={detail}
-          source={source}
-          installed={installedIds.has(detail.project_id)}
-          installing={installing.includes(detail.project_id)}
-          onClose={() => setDetail(null)}
-          onInstall={() => void quickInstall(detail)}
-          onChoose={() => {
-            setInstall(detail)
-            setDetail(null)
-          }}
+        <Choices
+          value={how}
+          onChange={setHow}
+          options={[
+            {
+              value: 'safe',
+              label: 'Update safely',
+              desc: `MCSM swaps the files, ${up ? 'restarts the server' : 'starts the server once'} and watches it come up. If an update stops it from starting, that update is undone and skipped next time.${up ? ' Anyone online is disconnected for a minute.' : ''}`,
+            },
+            { value: 'swap', label: 'Just update the files', desc: up ? 'Nothing restarts; they load the next time you restart it. Nothing checks that it still starts.' : 'They load the next time it starts. Nothing checks that it still does.' },
+          ]}
         />
-      )}
-      {install && <InstallDialog server={server} status={status} hit={install} source={source} kind={kind} onClose={() => setInstall(null)} />}
-    </>
-  )
-}
-
-function ProjectSheet({ server, hit, source, installed, installing, onClose, onInstall, onChoose }: { server: Server; hit: ModSearchHit; source: ModSource; installed: boolean; installing: boolean; onClose: () => void; onInstall: () => void; onChoose: () => void }) {
-  const project = useQuery({ queryKey: ['mod-project', source, hit.project_id], queryFn: () => api.mods.getProject(server.id, hit.project_id, source), staleTime: 60 * 60_000, retry: false })
-  const p = project.data
-  return (
-    <Sheet
-      open
-      onClose={onClose}
-      title={hit.title}
-      sub={`${fmtCompact(hit.downloads)} downloads${p?.updated ? `, updated ${relTime(toMs(p.updated))}` : ''}`}
-      foot={
-        installed ? (
-          <span className="t2">Installed</span>
-        ) : (
-          <>
-            <Btn variant="primary" need="mods.install" loading={installing} onClick={onInstall}>
-              Install
-            </Btn>
-            <TextBtn quiet need="mods.install" onClick={onChoose}>
-              Pick a version
-            </TextBtn>
-          </>
-        )
-      }
-    >
-      <div className="stack" style={{ gap: 16 }}>
-        <div className="row" style={{ gap: 16, alignItems: 'flex-start' }}>
-          <ModIcon url={hit.icon_url} name={hit.title} size={72} />
-          <p className="grow" style={{ fontSize: 15, paddingTop: 2 }}>
-            {p?.description ?? hit.description}
-          </p>
-        </div>
-        <dl className="facts">
-          <dt>Kind</dt>
-          <dd>{(p?.categories ?? hit.categories).filter((c) => !Object.keys(PLATFORMS).includes(c)).join(', ') || '–'}</dd>
-          <dt>Runs on</dt>
-          <dd>{hit.client_side === 'required' ? 'The server and every player’s game' : hit.client_side === 'unsupported' ? 'Just the server' : 'The server, and optionally players’ games'}</dd>
-          <dt>From</dt>
-          <dd>{SOURCE_LABEL[source]}</dd>
-          {p?.followers != null && (
-            <>
-              <dt>Followers</dt>
-              <dd className="num">{fmtNum(p.followers)}</dd>
-            </>
-          )}
-        </dl>
-        {(p?.source_url || p?.issues_url || p?.wiki_url) && (
-          <p className="small row" style={{ gap: 16 }}>
-            {p.source_url && (
-              <a className="link quiet" href={p.source_url} target="_blank" rel="noopener noreferrer">
-                Source
-              </a>
-            )}
-            {p.issues_url && (
-              <a className="link quiet" href={p.issues_url} target="_blank" rel="noopener noreferrer">
-                Issues
-              </a>
-            )}
-            {p.wiki_url && (
-              <a className="link quiet" href={p.wiki_url} target="_blank" rel="noopener noreferrer">
-                Wiki
-              </a>
-            )}
-          </p>
-        )}
-      </div>
-    </Sheet>
-  )
-}
-
-function InstallDialog({ server, status, hit, source, kind, onClose }: { server: Server; status: StatusKey; hit: ModSearchHit; source: ModSource; kind: ModProjectType; onClose: () => void }) {
-  const qc = useQueryClient()
-  const can = useCan()
-  const [sel, setSel] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [anyVersion, setAnyVersion] = useState(false)
-  const loader = kind === 'datapack' ? undefined : server.platform
-  const mc = anyVersion ? undefined : server.mc_version
-  const versions = useQuery({
-    queryKey: ['mod-versions', source, server.id, hit.project_id, loader ?? '', mc ?? ''],
-    queryFn: () => api.mods.getVersions(server.id, hit.project_id, loader, mc, source),
-    staleTime: 10 * 60_000,
-  })
-  useEffect(() => {
-    if (versions.data?.length && !versions.data.some((v) => v.id === sel)) setSel(versions.data[0].id)
-  }, [versions.data, sel])
-  const modpack = kind === 'modpack'
-  const install = async () => {
-    if (!sel) return
-    setBusy(true)
-    const r = await act(`install ${hit.title}`, () => (modpack ? api.mods.installModpack(server.id, hit.project_id, sel) : api.mods.install(server.id, source, hit.project_id, sel, true)).then(() => true))
-    setBusy(false)
-    if (r === undefined) return
-    toast('ok', `Installed ${hit.title}`, status === 'online' ? 'Restart the server to load it.' : 'It loads the next time the server starts.')
-    void qc.invalidateQueries({ queryKey: ['mods', server.id] })
-    onClose()
-  }
-  const options = useMemo(
-    () =>
-      (versions.data ?? []).slice(0, 25).map((v, i) => ({
-        value: v.id,
-        label: `${v.version_number}${v.version_type && v.version_type !== 'release' ? ` (${v.version_type})` : ''}${i === 0 ? ', newest' : ''}${anyVersion ? `, for ${gameVersions(v.game_versions, server.mc_version)}` : ''}`,
-        hint: fmtDate(toMs(v.date_published) ?? 0, false),
-      })),
-    [versions.data, anyVersion, server.mc_version],
-  )
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      title={`Install ${hit.title}`}
-      foot={
-        <>
-          <Btn variant="quiet" onClick={onClose}>
-            Cancel
-          </Btn>
-          <Btn variant="primary" disabled={!sel || !can('mods.install')} loading={busy} onClick={() => void install()}>
-            Install
-          </Btn>
-        </>
-      }
-    >
-      <div className="stack" style={{ gap: 14 }}>
-        <div className="row" style={{ gap: 12 }}>
-          <ModIcon url={hit.icon_url} name={hit.title} size={40} />
-          <p className="t2 small grow">{hit.description}</p>
-        </div>
-        <Loaded query={versions} sk={<SkItems rows={1} />} what="its versions">
-          {(list) =>
-            list.length === 0 ? (
-              <Notice tone="warn">
-                There’s no version of {hit.title} for {platformLabel(server.platform)} {server.mc_version}.
-              </Notice>
-            ) : (
-              <Field label="Version">
-                <Select value={sel} onChange={setSel} options={options} aria-label="Version" />
-              </Field>
-            )
-          }
-        </Loaded>
-        <Check checked={anyVersion} onChange={setAnyVersion} label={`Show versions for other Minecraft versions too`} />
-        {anyVersion && <p className="small warn">One made for another Minecraft version may not load on {server.mc_version}.</p>}
-        {modpack ? (
-          <p className="t2 small">A modpack replaces this server’s mods with its own. Back up first if you might want them back.</p>
-        ) : (
-          <p className="t2 small">Anything it needs is installed with it.</p>
-        )}
-        {hit.client_side === 'required' && <p className="t2 small">Players will need {hit.title} on their side as well.</p>}
+        {how === 'safe' && <Check checked={backup} onChange={setBackup} label="Back up first" />}
       </div>
     </Dialog>
+  )
+}
+
+const PHASE: Record<string, string> = {
+  checking: 'Checking for updates',
+  applying: 'Swapping the files',
+  verifying: 'Starting the server and watching it come up',
+  isolating: 'It didn’t start. Finding the update that broke it',
+  reverting: 'It didn’t start. Undoing the updates',
+  restoring: 'Putting the server back how it was',
+  done: 'Finishing',
+}
+
+const OUTCOME: Record<string, { text: string; tone: '' | 'ok' | 'warn' | 'bad' }> = {
+  success: { text: 'The safe update finished.', tone: 'ok' },
+  no_updates: { text: 'The safe update found nothing to update.', tone: '' },
+  partial: { text: 'The safe update finished, but not everything updated.', tone: 'warn' },
+  reverted: { text: 'An update stopped the server starting, so it was undone and will be skipped.', tone: 'warn' },
+  failed: { text: 'The safe update failed.', tone: 'bad' },
+}
+
+export function stepText(s: ModUpdateStep): string {
+  switch (s.status) {
+    case 'updated':
+      return `${s.from_version} to ${s.to_version}`
+    case 'reverted_skipped':
+      return `${s.to_version} stopped the server starting, so it’s back on ${s.from_version}`
+    case 'failed':
+      return s.error || 'Couldn’t update'
+    default:
+      return `${s.from_version} to ${s.to_version}…`
+  }
+}
+
+/** A safe update while it runs, and how it went for ten minutes after. */
+function UpdateRuns({ server }: { server: Server }) {
+  const qc = useQueryClient()
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const runs = useQuery({
+    queryKey: ['mod-update-runs', server.id],
+    queryFn: () => api.mods.updateRuns(server.id, 5),
+    refetchInterval: (q) => (q.state.data?.some((r) => r.status === 'running') ? 2500 : false),
+    retry: false,
+  }).data
+  const active = runs?.find((r) => r.status === 'running') ?? null
+  const was = useRef<string | null>(null)
+  useEffect(() => {
+    // When the run being watched ends, what's installed and what's offered moved.
+    if (was.current && !active) {
+      for (const key of ['mods', 'mod-updates', 'mod-skipped']) void qc.invalidateQueries({ queryKey: [key, server.id] })
+    }
+    was.current = active?.id ?? null
+  }, [active, qc, server.id])
+  const last = runs?.[0]
+  const recent = !active && last && last.status !== 'running' && last.id !== dismissed && (toMs(last.finished_at) ?? 0) > Date.now() - 10 * 60_000 ? last : null
+  const run: ModUpdateRun | null = active ?? recent
+  if (!run) return null
+  const steps = run.detail?.mods ?? []
+  const outcome = OUTCOME[run.status]
+  return (
+    <div className={cx('notice run-notice', active ? '' : outcome?.tone)} style={{ marginBottom: 14 }} aria-live="polite">
+      <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
+        <div className="grow">
+          <p className="strong">{active ? `${PHASE[run.detail?.phase ?? 'checking'] ?? 'Working'}…` : (outcome?.text ?? 'The safe update finished.')}</p>
+          {run.detail?.message && <p className="small t2">{run.detail.message}</p>}
+          {steps.length > 0 && (
+            <ul className="run-steps small">
+              {steps.map((st) => (
+                <li key={st.mod_id} className={cx(st.status === 'failed' && 'bad', st.status === 'reverted_skipped' && 'warn')}>
+                  <span className="strong">{st.name}</span> <span className="t2">{stepText(st)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {!active && <IconBtn icon="x" label="Dismiss" onClick={() => setDismissed(run.id)} />}
+      </div>
+    </div>
   )
 }
