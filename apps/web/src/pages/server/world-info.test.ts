@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TAG_BYTE, TAG_COMPOUND, TAG_INT, TAG_INT_ARRAY, TAG_LONG, TAG_STRING, type NbtEntry, type NbtTag } from '@/lib/nbt'
-import { parseWorldInfo } from './world-info'
+import { parseWorldInfo, ticksToClock } from './world-info'
 
 const s = (value: string): NbtTag => ({ type: TAG_STRING, value })
 const i = (value: number): NbtTag => ({ type: TAG_INT, value })
@@ -66,5 +66,23 @@ describe('parseWorldInfo', () => {
 
   it('copes with a file that isn’t a level', () => {
     expect(parseWorldInfo(c({}))).toEqual({ gameRules: {} })
+  })
+})
+
+describe('world state', () => {
+  it('reads game mode, cheats, the clock, weather and the data version', () => {
+    const info = parseWorldInfo(level({ GameType: i(1), allowCommands: b(1), DayTime: l(18000n), raining: b(1), thundering: b(0), DataVersion: i(4189) }))
+    expect(info).toMatchObject({ gameMode: 'Creative', cheats: true, clock: '00:00', weather: 'Raining', dataVersion: 4189 })
+  })
+  it('leaves out what the save doesn’t say', () => {
+    const info = parseWorldInfo(level({}))
+    expect(info.gameMode).toBeUndefined()
+    expect(info.weather).toBeUndefined()
+    expect(info.cheats).toBe(false)
+  })
+  it('starts the clock at six in the morning', () => {
+    expect(ticksToClock(0)).toBe('06:00')
+    expect(ticksToClock(6000)).toBe('12:00')
+    expect(ticksToClock(24000 * 3 + 13000)).toBe('19:00')
   })
 })

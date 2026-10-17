@@ -75,11 +75,14 @@ function StatsBody({ server, days, stats, history }: { server: Server; days: Per
         </div>
         <div className="figure">
           <div className="v">{fmtDur(sum.playtime_seconds * 1000, 1)}</div>
-          <div className="l">played in total</div>
+          <div className="l">
+            played in total
+            {sum.longest_session_seconds > 0 && `, the longest stay ${fmtDur(sum.longest_session_seconds * 1000, 1)}${sum.longest_session_player ? ` by ${sum.longest_session_player}` : ''}`}
+          </div>
         </div>
         <div className="figure">
           <div className="v">{up.tracked_since ? `${up.availability_pct.toFixed(1)}%` : '–'}</div>
-          <div className="l">{up.tracked_since ? `up, ${plural(up.crashes, 'crash', 'crashes')}` : 'up time not tracked yet'}</div>
+          <div className="l">{up.tracked_since ? `up, ${plural(up.crashes, 'crash', 'crashes')} and ${plural(up.stops, 'stop')}` : 'up time not tracked yet'}</div>
         </div>
       </div>
 

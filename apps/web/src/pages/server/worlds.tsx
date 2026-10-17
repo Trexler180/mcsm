@@ -307,10 +307,29 @@ function LoadedWorld({ server, w, status, props }: { server: Server; w: WorldRow
               {cap(props.difficulty || 'easy')}
               {props.hardcore === 'true' || info.hardcore ? ', hardcore' : ''}
             </dd>
+            {info.gameMode && (
+              <>
+                <dt>Game mode</dt>
+                <dd>
+                  {info.gameMode}
+                  {info.cheats ? ', cheats on' : ''}
+                </dd>
+              </>
+            )}
             {info.day != null && (
               <>
                 <dt>In-game day</dt>
-                <dd className="num">{info.day.toLocaleString('en-US')}</dd>
+                <dd className="num">
+                  {info.day.toLocaleString('en-US')}
+                  {info.clock ? `, ${info.clock}` : ''}
+                  {info.weather ? `, ${info.weather.toLowerCase()}` : ''}
+                </dd>
+              </>
+            )}
+            {info.dataVersion != null && (
+              <>
+                <dt>Data version</dt>
+                <dd className="num">{info.dataVersion}</dd>
               </>
             )}
           </dl>

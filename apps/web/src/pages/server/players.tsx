@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { usePlayerName } from '@/pages/server/player-name'
 import { enchantLabel, itemLabel, maxDurability } from '@/pages/server/player-items'
 import type { GeyserInfo, ItemStack, MyServerPermissions, Player, PlayerActionKind, PlayerDetail, Server } from '@/lib/types'
-import { Btn, Check, Choices, Copy, Empty, Field, Filters, Search, TextBtn, Tabs, type StatusKey } from '@/ui/controls'
+import { Btn, Check, Choices, Copy, Empty, Field, Filters, Search, Select, TextBtn, Tabs, type StatusKey } from '@/ui/controls'
 import { act } from '@/ui/failure'
 import { fmtClock, fmtDay, fmtDur, fmtNum, relTime } from '@/ui/format'
 import { Dialog, MenuButton, MenuItem, MenuSep, Sheet } from '@/ui/overlays'
@@ -21,6 +21,21 @@ import { allowed } from './data'
 // files while it's stopped.
 
 type Show = 'all' | 'online' | 'ops' | 'banned' | 'bedrock'
+type Sort = 'recent' | 'name' | 'status'
+
+const seen = (p: Player) => toMs(p.last_seen) ?? 0
+/** Online first, then banned, operators, whitelisted, everyone else. */
+const rank = (p: Player) => (p.online ? 0 : p.banned ? 1 : p.op ? 2 : p.whitelisted ? 3 : 4)
+const SORTS: Record<Sort, (a: Player, b: Player) => number> = {
+  recent: (a, b) => Number(b.online) - Number(a.online) || seen(b) - seen(a) || a.name.localeCompare(b.name),
+  name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+  status: (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
+}
+const SORT_OPTIONS: { value: Sort; label: string }[] = [
+  { value: 'recent', label: 'Recently seen' },
+  { value: 'name', label: 'Name' },
+  { value: 'status', label: 'Status' },
+]
 
 const DONE: Record<PlayerActionKind, (n: string) => string> = {
   whitelist_add: (n) => `${n} is on the whitelist`,
@@ -131,6 +146,7 @@ function PlayersBody({
   setOpen: (name: string | undefined) => void
 }) {
   const [show, setShow] = useState<Show>('all')
+  const [sort, setSort] = useState<Sort>('recent')
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
   const [banning, setBanning] = useState<Player | null>(null)
@@ -148,7 +164,7 @@ function PlayersBody({
   const list = roster
     .filter(flt[show])
     .filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()))
-    .sort((a, b) => Number(b.online) - Number(a.online) || (toMs(b.last_seen) ?? 0) - (toMs(a.last_seen) ?? 0) || a.name.localeCompare(b.name))
+    .sort(SORTS[sort])
   const openPlayer = open ? roster.find((p) => p.name.toLowerCase() === open.toLowerCase()) : undefined
   return (
     <>
@@ -166,6 +182,7 @@ function PlayersBody({
           ]}
         />
         <span className="grow" />
+        <Select value={sort} onChange={setSort} options={SORT_OPTIONS} size="sm" style={{ width: 'auto' }} aria-label="Sort players" />
         <Search value={q} onChange={setQ} placeholder="Filter players" size="sm" style={{ width: 200 }} />
         <Btn need="players.whitelist" onClick={() => setAdding(true)}>
           Add a player
@@ -599,8 +616,22 @@ const MODES = ['Survival', 'Creative', 'Adventure', 'Spectator']
 
 function PlayerSheet({ server, player, up, action, onBan, onClose }: { server: Server; player: Player; up: boolean; action: PlayerAction; onBan: () => void; onClose: () => void }) {
   const [tab, setTab] = useState<'inventory' | 'ender' | 'sessions' | 'stats'>('inventory')
+  const qc = useQueryClient()
   const detail = useQuery({ queryKey: ['player-detail', server.id, player.uuid], queryFn: () => api.players.get(server.id, player.uuid as string), retry: false })
   const p = player
+  const [saving, setSaving] = useState(false)
+  // Saved data trails the game by up to a world save; saving now catches it up.
+  const saveNow = async () => {
+    setSaving(true)
+    const r = await act('save the world', async () => {
+      await api.servers.command(server.id, 'save-all flush')
+      // A moment for the files to land before they're read again.
+      await new Promise((ok) => setTimeout(ok, 900))
+      return true
+    })
+    setSaving(false)
+    if (r) void qc.invalidateQueries({ queryKey: ['player-detail', server.id, player.uuid] })
+  }
   return (
     <Sheet
       open
@@ -681,7 +712,7 @@ function PlayerSheet({ server, player, up, action, onBan, onClose }: { server: S
               ]}
             />
             <div style={{ marginTop: 14 }}>
-              {tab === 'inventory' && <Inventory d={d} online={p.online} />}
+              {tab === 'inventory' && <Inventory d={d} online={p.online} onSave={up ? () => void saveNow() : undefined} saving={saving} />}
               {tab === 'ender' && <ItemRows items={d.ender_chest} />}
               {tab === 'sessions' && <Sessions serverId={server.id} name={p.name} />}
               {tab === 'stats' && <Stats d={d} />}
@@ -693,7 +724,7 @@ function PlayerSheet({ server, player, up, action, onBan, onClose }: { server: S
   )
 }
 
-function Inventory({ d, online }: { d: PlayerDetail; online: boolean }) {
+function Inventory({ d, online, onSave, saving }: { d: PlayerDetail; online: boolean; onSave?: () => void; saving: boolean }) {
   // Slots 100-103 are armour, -106 the off hand, 0-8 the hotbar.
   const worn = d.inventory.filter((i) => i.slot >= 100 || i.slot === -106)
   const hotbar = d.inventory.filter((i) => i.slot >= 0 && i.slot < 9)
@@ -715,7 +746,12 @@ function Inventory({ d, online }: { d: PlayerDetail; online: boolean }) {
       <ItemRows items={main} />
       <p className="t3 small" style={{ marginTop: 12 }}>
         {online ? 'From the last world save, which happens every few minutes.' : 'As of when they logged out.'}
-        {saved ? ` Saved ${relTime(saved)}.` : ''}
+        {saved ? ` Saved ${relTime(saved)}.` : ''}{' '}
+        {onSave && (
+          <TextBtn quiet need="console" onClick={onSave}>
+            {saving ? 'Saving…' : 'Save the world now'}
+          </TextBtn>
+        )}
       </p>
     </>
   )

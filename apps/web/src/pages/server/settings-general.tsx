@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { defaultServerProperties, parseProperties, serializeProperties } from '@/pages/server/properties-schema'
 import type { FleetServer, MyServerPermissions, Server } from '@/lib/types'
 import { useAuthStore } from '@/store/auth'
-import { useFolders } from '@/shell/fleet'
+import { useFleet, useFolders } from '@/shell/fleet'
 import { useGo } from '@/shell/nav'
 import { paths } from '@/shell/paths'
 import { BLOCKS, BLOCK_KINDS, type BlockKind } from '@/ui/blocks'
@@ -103,6 +103,9 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
   const admin = useAuthStore((s) => s.user?.role === 'admin')
   const folders = useFolders().data ?? []
   const identity = useIdentity(server.id).data
+  // How much room the node has, to size the heap against.
+  const node = useFleet().data?.nodes.find((n) => n.id === server.node_id)
+  const nodeFree = node?.online && node.memory_mb && node.mem_used_mb != null ? Math.max(0, node.memory_mb - node.mem_used_mb) : null
   const helper = useQuery({ queryKey: ['server', server.id, 'helper-mod'], queryFn: () => api.servers.helperMod(server.id), retry: false }).data
   const view = useQuery({ queryKey: ['server-settings', server.id], queryFn: () => api.servers.settings(server.id), retry: false }).data
   const canFiles = allowed(perms, 'files.write')
@@ -233,7 +236,7 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
           <Field label="Port" error={!(portN >= 1 && portN <= 65535) ? 'A port is 1 to 65535.' : null} hint="Written to server.properties.">
             <input className="input num" inputMode="numeric" value={d.port} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </Field>
-          <Field label="Memory" hint={`At most ${fmtMB(ramMax || 0)} for the Java heap.`} error={!(ramMax >= 256) ? 'At least 256 MB.' : null}>
+          <Field label="Memory" hint={`At most ${fmtMB(ramMax || 0)} for the Java heap.${nodeFree != null ? ` ${fmtMB(nodeFree)} of ${fmtMB(node?.memory_mb ?? 0)} is free on ${node?.name} now.` : ''}`} error={!(ramMax >= 256) ? 'At least 256 MB.' : null}>
             <MemoryInput value={d.ram_mb_max} onChange={(v) => set('ram_mb_max', v)} />
           </Field>
           <Field label="Memory at start" error={!(ramMin >= 128 && ramMin <= ramMax) ? 'Between 128 MB and the memory above.' : null}>
@@ -348,6 +351,12 @@ function MultiplayerSection({
   const upRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const identity = useIdentity(server.id).data
+  // The loaded world keeps a map render of its spawn as icon.png, the same
+  // size a server icon is; offering it saves making one.
+  const propsFile = useQuery({ queryKey: ['file-content', server.id, '/server.properties'], queryFn: () => api.files.readContent(server.id, '/server.properties'), retry: false, enabled: canFiles })
+  const world = parseProperties(propsFile.data ?? '')['level-name']?.trim() || 'world'
+  const worldFiles = useQuery({ queryKey: ['files', server.id, `/${world}`], queryFn: () => api.files.list(server.id, `/${world}`), retry: false, enabled: canFiles && propsFile.isFetched })
+  const worldIcon = worldFiles.data?.entries.some((f) => f.name === 'icon.png') ? `/${world}/icon.png` : null
   const insert = (code: string) => {
     const el = motdRef.current
     const a = el ? el.selectionStart : draft.motd.length
@@ -436,6 +445,11 @@ function MultiplayerSection({
           <Btn size="sm" need="files.write" loading={busy} onClick={() => upRef.current?.click()}>
             Upload an image
           </Btn>
+          {worldIcon && (
+            <Btn size="sm" need="files.write" disabled={busy} tip={`The map of ${world} the game saved`} onClick={() => void setIcon('use the world’s icon', () => api.files.readBytes(server.id, worldIcon))}>
+              Use the world’s icon
+            </Btn>
+          )}
           {identityIcon && (
             <TextBtn quiet need="files.delete" onClick={() => void setIcon('remove the icon', async () => null)}>
               Remove it

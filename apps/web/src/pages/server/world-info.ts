@@ -19,6 +19,15 @@ export interface WorldInfo {
   /** When it was last saved by a running server, as epoch ms. */
   lastPlayed?: number
   hardcore?: boolean
+  /** The game mode new players start in. */
+  gameMode?: string
+  /** Whether commands (cheats) are allowed in single player. */
+  cheats?: boolean
+  /** The time of day on a 24-hour clock, as of the last save. */
+  clock?: string
+  weather?: 'Clear' | 'Raining' | 'Thunderstorm'
+  /** The save format's version number. */
+  dataVersion?: number
   /** Game rules as saved: booleans, numbers, or the raw text. */
   gameRules: Record<string, boolean | number | string>
 }
@@ -111,6 +120,22 @@ function gameRulesOf(data: NbtEntry[]): Record<string, boolean | number | string
   return out
 }
 
+const GAME_MODES = ['Survival', 'Creative', 'Adventure', 'Spectator']
+
+/** The in-game time of day as a 24-hour clock: tick 0 is 06:00. */
+export function ticksToClock(dayTime: number): string {
+  const t = ((dayTime % 24000) + 24000) % 24000
+  const minutes = Math.floor((((t / 1000 + 6) % 24) * 60))
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+function weatherOf(data: NbtEntry[]): WorldInfo['weather'] {
+  const rain = num(field(data, 'raining'))
+  if (num(field(data, 'thundering'))) return 'Thunderstorm'
+  if (rain) return 'Raining'
+  return rain === 0 ? 'Clear' : undefined
+}
+
 export function parseWorldInfo(root: NbtTag): WorldInfo {
   const data = entries(field(entries(root), 'Data'))
   if (!data) return { gameRules: {} }
@@ -119,6 +144,8 @@ export function parseWorldInfo(root: NbtTag): WorldInfo {
   const seed = big(field(gen, 'seed')) ?? big(field(data, 'RandomSeed'))
   const time = num(field(data, 'Time'))
   const last = num(field(data, 'LastPlayed'))
+  const mode = num(field(data, 'GameType'))
+  const dayTime = num(field(data, 'DayTime'))
   return {
     levelName: str(field(data, 'LevelName')),
     version: str(field(version, 'Name')),
@@ -129,6 +156,11 @@ export function parseWorldInfo(root: NbtTag): WorldInfo {
     day: time !== undefined ? Math.floor(time / 24000) : undefined,
     lastPlayed: last && last > 0 ? last : undefined,
     hardcore: num(field(data, 'hardcore')) === 1,
+    gameMode: mode !== undefined ? GAME_MODES[mode] : undefined,
+    cheats: num(field(data, 'allowCommands')) === 1,
+    clock: dayTime !== undefined ? ticksToClock(dayTime) : undefined,
+    weather: weatherOf(data),
+    dataVersion: num(field(data, 'DataVersion')),
     gameRules: gameRulesOf(data),
   }
 }

@@ -640,6 +640,14 @@ function ConsoleAside({ server, live, status, perms }: { server: Server; live: F
                 </span>
               </div>
             )}
+            {up && vitals.data?.chunks != null && (
+              <div className="kv">
+                <span>Chunks loaded</span>
+                <span>
+                  <Num value={vitals.data.chunks} format={fmtNum} />
+                </span>
+              </div>
+            )}
           </>
         ) : (
           <p className="t3 small">Not running.</p>
