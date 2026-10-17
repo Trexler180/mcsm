@@ -434,11 +434,6 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if taken, err := portTaken(r.Context(), h.store, body.NodeID, "", body.Port); err == nil && taken != "" {
-		writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("port %d is already used by %q on this node", body.Port, taken))
-		return
-	}
-
 	// Record import metadata so start runs the existing runtime as-is.
 	if body.ImportExisting {
 		body.Settings = withImportSettings(body.Settings, body.JarFile)
@@ -681,13 +676,9 @@ func (h *ServerHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			respondInvalid(w, err)
 			return
 		}
+		// Servers may share a port; starting one while another runs on it is
+		// what's refused (see lifecycle.PortInUseError).
 		portChanged = *body.Port != existing.Port
-		if portChanged {
-			if taken, err := portTaken(r.Context(), h.store, existing.NodeID, existing.ID, *body.Port); err == nil && taken != "" {
-				writeCodedError(w, http.StatusConflict, "conflict", fmt.Sprintf("port %d is already used by %q on this node", *body.Port, taken))
-				return
-			}
-		}
 		record("port", existing.Port, *body.Port)
 		existing.Port = *body.Port
 	}
@@ -1098,6 +1089,11 @@ func writeLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
 			"details":   map[string]any{"operation": busy.Current},
 			"retryable": true,
 		})
+		return
+	}
+	var portBusy *lifecycle.PortInUseError
+	if errors.As(err, &portBusy) {
+		writeCodedError(w, http.StatusConflict, "port_in_use", err.Error())
 		return
 	}
 	if errors.Is(err, lifecycle.ErrNodeUnreachable) {

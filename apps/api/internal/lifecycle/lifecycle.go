@@ -72,6 +72,34 @@ func (s *Service) Operations() *operations.Manager { return s.ops }
 // ErrNodeUnreachable wraps a failure to reach a server's node.
 var ErrNodeUnreachable = errors.New("the server's node could not be reached")
 
+// PortInUseError refuses a start because another server on the same node is
+// running on the same port. Servers may share a port; only one can run at a time.
+type PortInUseError struct {
+	Port  int
+	Other string // the running server's name
+}
+
+func (e *PortInUseError) Error() string {
+	return fmt.Sprintf("%s is running on port %d; stop it first, or give this server another port", e.Other, e.Port)
+}
+
+// runningStatuses hold a server's port.
+var runningStatuses = map[string]bool{"online": true, "starting": true, "stopping": true}
+
+// portClash reports another server on srv's node that is running on srv's port.
+func (s *Service) portClash(ctx context.Context, srv *store.Server) error {
+	servers, err := s.store.ListServers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, other := range servers {
+		if other.ID != srv.ID && other.NodeID == srv.NodeID && other.Port == srv.Port && runningStatuses[other.Status] {
+			return &PortInUseError{Port: srv.Port, Other: other.Name}
+		}
+	}
+	return nil
+}
+
 // SetStatus records a server's status and announces it.
 func (s *Service) SetStatus(serverID, status string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,6 +129,9 @@ const startTimeout = 30 * time.Minute
 // node has launched the process (after installing a runtime if needed); the
 // boot itself is followed through the server's status.
 func (s *Service) Start(ctx context.Context, srv *store.Server, actor operations.Actor) (*store.Operation, error) {
+	if err := s.portClash(ctx, srv); err != nil {
+		return nil, err
+	}
 	c, err := s.agents(ctx, srv)
 	if err != nil {
 		return nil, err
@@ -132,6 +163,12 @@ func (s *Service) launch(op *operations.Op, c Agent, serverID string, actor oper
 	// Re-read: the record may have changed between the request and now.
 	current, err := s.store.GetServer(op.Context(), serverID)
 	if err != nil {
+		return nil, err
+	}
+	// Checked again here: another server may have started since the request,
+	// and a start inside another operation (a fix) skips Start.
+	if err := s.portClash(op.Context(), current); err != nil {
+		s.SetStatus(serverID, "offline")
 		return nil, err
 	}
 	if err := c.RegisterDir(op.Context(), current.ID, current.DirectoryPath); err != nil {
@@ -192,6 +229,10 @@ func (s *Service) Stop(ctx context.Context, srv *store.Server, actor operations.
 // changed since the last start (the helper mod, say) is applied.
 func (s *Service) Restart(ctx context.Context, srv *store.Server, actor operations.Actor) error {
 	if err := s.ops.Guard(ctx, srv.ID); err != nil {
+		return err
+	}
+	// Restarting a stopped server starts it.
+	if err := s.portClash(ctx, srv); err != nil {
 		return err
 	}
 	c, err := s.agents(ctx, srv)

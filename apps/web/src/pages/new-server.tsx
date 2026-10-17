@@ -99,7 +99,7 @@ function NewServerForm({ nodes }: { nodes: Node[] }) {
   const clash = servers.find((s) => s.node_id === nodeId && s.port === port)
   const errors = {
     name: f.name.trim() ? null : 'Give it a name.',
-    port: !Number.isInteger(port) || port < 1 || port > 65535 ? 'A port is 1 to 65535.' : clash ? `${clash.name} already uses ${port} on ${node?.name}.` : null,
+    port: !Number.isInteger(port) || port < 1 || port > 65535 ? 'A port is 1 to 65535.' : null,
     node: !node?.online ? `${node?.name ?? 'That node'} is offline.` : null,
     folder: mode === 'import' && !dir ? 'Choose the folder to add.' : null,
     version: f.mc_version ? null : 'Choose a version.',
@@ -192,7 +192,7 @@ function NewServerForm({ nodes }: { nodes: Node[] }) {
               .concat(f.mc_version && !versions?.some((v) => v.version === f.mc_version) ? [{ value: f.mc_version, label: f.mc_version }] : [])}
           />
         </Field>
-        <Field label="Port" error={err('port')}>
+        <Field label="Port" error={err('port')} hint={clash ? `${clash.name} uses ${port} too. That’s fine; they just can’t run at the same time.` : undefined}>
           <input className="input num" inputMode="numeric" value={f.port} onChange={(e) => setF({ ...f, port: e.target.value.replace(/\D/g, '') })} aria-label="Port" />
         </Field>
         <Field label="Folder in the sidebar">

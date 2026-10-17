@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,20 +101,6 @@ func validateRAM(minMb, maxMb int, node *store.Node) error {
 		return badField("ram_mb_max", "maximum memory (%d MB) is more than the node has (%d MB)", maxMb, *node.MemoryMb)
 	}
 	return nil
-}
-
-// portTaken reports whether another server on the same node already uses port.
-func portTaken(ctx context.Context, s *store.Store, nodeID, serverID string, port int) (string, error) {
-	servers, err := s.ListServers(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, other := range servers {
-		if other.NodeID == nodeID && other.ID != serverID && other.Port == port {
-			return other.Name, nil
-		}
-	}
-	return "", nil
 }
 
 // validateJarFile accepts only a bare .jar file name: the agent runs

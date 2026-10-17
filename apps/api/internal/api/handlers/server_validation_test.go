@@ -86,8 +86,9 @@ func TestServerPortAndRAMValidation(t *testing.T) {
 	if _, err := f.db.Exec(`UPDATE servers SET port = 25566 WHERE id = ?`, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	if rr := putServer(t, f, owner.ID, "user", a.ID, `{"port":25566}`); rr.Code != http.StatusConflict {
-		t.Fatalf("taking another server's port: status %d, want 409", rr.Code)
+	// Sharing a port is allowed; only running both at once is refused, at start.
+	if rr := putServer(t, f, owner.ID, "user", a.ID, `{"port":25566}`); rr.Code != http.StatusOK {
+		t.Fatalf("sharing another server's port: status %d, want 200", rr.Code)
 	}
 	if rr := putServer(t, f, owner.ID, "user", a.ID, `{"port":70000}`); rr.Code != http.StatusBadRequest {
 		t.Fatalf("out-of-range port: status %d, want 400", rr.Code)
