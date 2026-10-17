@@ -12,10 +12,6 @@ import type { MCPActionAlert } from "@/lib/mcp-action-alert";
 import type { MCPActionRequest } from "@/lib/types";
 import { McpApprovalDialog, useMcpApprovalDialog } from "./agent-review";
 
-vi.mock("@/store/notifications", () => ({
-  useNotifications: () => ({ success: vi.fn(), error: vi.fn() }),
-}));
-
 const alert: MCPActionAlert = {
   requestId: "req-1",
   serverId: "srv-1",
