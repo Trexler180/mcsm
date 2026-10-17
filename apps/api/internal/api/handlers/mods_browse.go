@@ -99,13 +99,23 @@ func (h *ModHandlers) Categories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, modrinthCategoriesFor(cats, projectType))
+}
+
+// modrinthCategoriesFor picks the categories that apply to a project type.
+// Modrinth files plugins under the same categories as mods (there are no
+// plugin-tagged ones), so asking for plugin categories gets the mod ones.
+func modrinthCategoriesFor(cats []modrinth.Category, projectType string) []modrinth.Category {
+	if projectType == "plugin" {
+		projectType = "mod"
+	}
 	out := []modrinth.Category{}
 	for _, c := range cats {
 		if projectType == "" || c.ProjectType == projectType {
 			out = append(out, c)
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out
 }
 
 // Sources reports which mod sources are searchable. CurseForge search works
