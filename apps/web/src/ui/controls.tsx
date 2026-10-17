@@ -119,7 +119,9 @@ export function useSlider<T extends HTMLElement = HTMLDivElement>(selector: stri
   useEffect(() => {
     const id = requestAnimationFrame(() => setReady(true))
     const ro = new ResizeObserver(() => measure())
-    if (ref.current) ro.observe(ref.current)
+    // Children too: a fixed-height list doesn't resize when a group inside it
+    // opens, but everything below that group moves.
+    if (ref.current) for (const el of [ref.current, ...Array.from(ref.current.children)]) ro.observe(el)
     return () => {
       cancelAnimationFrame(id)
       ro.disconnect()
