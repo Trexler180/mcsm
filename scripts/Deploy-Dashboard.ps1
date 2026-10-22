@@ -10,6 +10,15 @@
     rollback, service restart (the api restart auto-applies DB migrations), and
     a health check. Nothing is deployed unless every build step succeeds.
 
+    An api deploy copies the database first, with the API stopped, to
+    /srv/dashboard/db-prev (root-only, last three kept). -Rollback puts that
+    copy back along with the previous binaries, because a new API can migrate
+    the schema and re-encrypt stored secrets in a form the previous one cannot
+    read. The database it replaces is set aside in db-prev, not deleted, so
+    anything written since the deploy can still be recovered by hand.
+    -KeepDatabase rolls back code only, for a release that changed nothing in
+    the database.
+
     Host configuration outside /srv/dashboard — the nginx snippets, systemd
     drop-ins, the polkit reboot grant, the SSH watchdog, server isolation (the
     mcsm-mc user and the mcsm-launch helper, built here) — lives in deploy/ and
@@ -25,7 +34,8 @@
     .\Deploy-Dashboard.ps1 -Part host     # host config only (provision)
     .\Deploy-Dashboard.ps1 -Provision     # deploy everything + converge host config
     .\Deploy-Dashboard.ps1 -Test          # run tests/lint first, then deploy
-    .\Deploy-Dashboard.ps1 -Rollback      # restore previous binaries + web
+    .\Deploy-Dashboard.ps1 -Rollback      # restore previous binaries + web + database
+    .\Deploy-Dashboard.ps1 -Rollback -KeepDatabase  # code only; keep the database as it is
 
 .NOTES
     A new non-secret setting belongs in a deploy/systemd drop-in; a new secret
@@ -38,6 +48,7 @@ param(
     [switch]$Test,
     [switch]$Provision,
     [switch]$Rollback,
+    [switch]$KeepDatabase,
     [string]$RepoPath = 'E:\Coding\ServerManager'
 )
 
@@ -84,7 +95,8 @@ if ($Rollback) {
     Step "Rolling back to previous artifacts"
     Invoke-RemoteCmd "install -d -m 700 $RemoteStage"
     Send-RemoteFile $applyStaged "$RemoteStage/deploy-apply.sh"
-    Invoke-RemoteCmd "bash $RemoteStage/deploy-apply.sh rollback sha:rollback"
+    $keep = if ($KeepDatabase) { ' keepdb' } else { '' }
+    Invoke-RemoteCmd "bash $RemoteStage/deploy-apply.sh rollback$keep sha:rollback"
     Write-Host "`nRollback complete." -ForegroundColor Green
     return
 }
@@ -128,6 +140,9 @@ if ($Test) {
     if (-not $gitBash) { throw "provision tests need Git for Windows' bash.exe" }
     & $gitBash "$ProvisionSrc/provision_test.sh"
     if ($LASTEXITCODE) { throw "provision tests failed" }
+    Step "deploy-apply tests"
+    & $gitBash "$PSScriptRoot/deploy_apply_test.sh"
+    if ($LASTEXITCODE) { throw "deploy-apply tests failed" }
 }
 
 $parts = @()

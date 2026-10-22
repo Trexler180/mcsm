@@ -3,15 +3,24 @@
 # Deploy-Dashboard.ps1 — not meant to be run by hand.
 #
 # Usage: bash deploy-apply.sh [web] [api] [agent] [provision] [rollback]
-#                             [sha:<short>] [base:<web base path>]
+#                             [keepdb] [sha:<short>] [base:<web base path>]
 #
 # - web       : extract web.tgz into web/ via a near-atomic dir swap
 # - api       : install upload-mcsm-api   -> bin/mcsm-api   (keeps .prev)
 # - agent     : install upload-mcsm-agent -> bin/mcsm-agent (keeps .prev)
 # - provision : converge host config (nginx, systemd drop-ins, polkit, SSH
 #               watchdog) to the shipped bundle — see deploy/provision.sh
-# - rollback  : restore bin/*.prev and web_prev, restart services
+# - rollback  : restore bin/*.prev and web_prev, and the database copy taken
+#               before the last api deploy (keepdb leaves the database as it
+#               is), then restart services
 # Restarting mcsm-api also applies any new DB migrations (goose runs on boot).
+#
+# An api deploy copies the database first, with the API stopped, into
+# db-prev/ (root-only; the last three are kept). A new API can migrate the
+# schema and re-encrypt stored secrets in a form the previous one cannot read,
+# so putting the previous binary back without its database leaves a panel that
+# will not start. Rollback therefore restores that copy, setting the database
+# it replaces aside in db-prev/ rather than deleting it.
 #
 # Every deploy ships the provisioning bundle and reports host-config drift,
 # whether or not `provision` was asked for.
@@ -23,7 +32,12 @@
 # would let any of them swap a file between upload and apply.
 set -euo pipefail
 
-ROOT=/srv/dashboard
+# Overridable only so deploy_apply_test.sh can run this against a fake host.
+ROOT=${DEPLOY_ROOT:-/srv/dashboard}
+PROC=${DEPLOY_PROC:-/proc}
+DOMAIN_FILE=${DEPLOY_DOMAIN_FILE:-/root/.test_domain}
+HEALTH_WAIT=${DEPLOY_HEALTH_WAIT:-2}
+DB_KEEP=3
 STAGE=$(cd "$(dirname "$0")" && pwd)
 case "$STAGE" in
   "$ROOT"|"$ROOT"/*)
@@ -32,7 +46,7 @@ case "$STAGE" in
 esac
 cd "$ROOT"
 
-do_web=0; do_api=0; do_agent=0; do_provision=0; rollback=0; SHA="unknown"; BASE=/dashboard/
+do_web=0; do_api=0; do_agent=0; do_provision=0; rollback=0; keepdb=0; SHA="unknown"; BASE=/dashboard/
 for a in "$@"; do
   case "$a" in
     web) do_web=1 ;;
@@ -40,6 +54,7 @@ for a in "$@"; do
     agent) do_agent=1 ;;
     provision) do_provision=1 ;;
     rollback) rollback=1 ;;
+    keepdb) keepdb=1 ;;
     sha:*) SHA="${a#sha:}" ;;
     base:*) BASE="${a#base:}" ;;
   esac
@@ -51,6 +66,76 @@ install_bin() { # $1 = binary name
   [ -f "bin/$n" ] && cp -a "bin/$n" "bin/$n.prev"
   mv "bin/$n.new" "bin/$n"
   rm -f "$STAGE/upload-$n"
+}
+
+# The API's database, as the running API was told: DATABASE_PATH from its
+# environment, relative to its working directory. Falls back to the default
+# location when the API isn't running.
+api_db_path() {
+  local pid v cwd
+  pid=$(systemctl show mcsm-api -p MainPID --value 2>/dev/null || echo 0)
+  if [ -n "$pid" ] && [ "$pid" != 0 ]; then
+    v=$(tr '\0' '\n' < "$PROC/$pid/environ" 2>/dev/null | sed -n 's/^DATABASE_PATH=//p' | tail -n 1)
+    if [ -n "$v" ]; then
+      case "$v" in
+        /*) echo "$v"; return ;;
+        *) cwd=$(readlink -f "$PROC/$pid/cwd" 2>/dev/null || echo "$ROOT/data"); echo "$cwd/$v"; return ;;
+      esac
+    fi
+  fi
+  echo "$ROOT/data/mcsm.db"
+}
+
+# Copies the database with the API stopped (so its WAL is checkpointed and the
+# three files agree) into db-prev/<time>-<sha>/, and names it in
+# db-prev/LATEST. The API is left stopped: the deploy restarts it on the new
+# binary.
+snapshot_db() {
+  local db snap name f
+  db=$(api_db_path)
+  if [ ! -f "$db" ]; then
+    echo "[db] no database at $db; nothing to copy"
+    return 0
+  fi
+  systemctl stop mcsm-api
+  install -d -m 700 -o root -g root "$ROOT/db-prev"
+  name="$(date -u +%Y%m%dT%H%M%SZ)-$SHA"
+  snap="$ROOT/db-prev/$name"
+  (umask 077 && mkdir "$snap")
+  for f in "$db" "$db-wal" "$db-shm"; do
+    [ -f "$f" ] && cp -a "$f" "$snap/"
+  done
+  echo "$db" > "$snap/PATH"
+  echo "$name" > "$ROOT/db-prev/LATEST"
+  # Keep the newest few pre-deploy copies; databases set aside by a rollback
+  # are kept until someone removes them.
+  ls -1d "$ROOT"/db-prev/2*/ 2>/dev/null | sort -r | tail -n +$((DB_KEEP + 1)) | xargs -r rm -rf
+  echo "[db] copied $(basename "$db") to db-prev/$name"
+}
+
+# Puts back the copy the last api deploy took, setting the current database
+# aside. The copy is used once: a second rollback leaves the database alone.
+restore_db() {
+  local snap db aside f
+  if [ ! -f "$ROOT/db-prev/LATEST" ] || [ ! -d "$ROOT/db-prev/$(cat "$ROOT/db-prev/LATEST")" ]; then
+    echo "  no database copy from a deploy to restore; database left as it is"
+    return 0
+  fi
+  snap="$ROOT/db-prev/$(cat "$ROOT/db-prev/LATEST")"
+  db=$(cat "$snap/PATH")
+  systemctl stop mcsm-api
+  aside="$ROOT/db-prev/rolled-back-$(date -u +%Y%m%dT%H%M%SZ)"
+  (umask 077 && mkdir "$aside")
+  for f in "$db" "$db-wal" "$db-shm"; do
+    [ -f "$f" ] && mv "$f" "$aside/"
+  done
+  for f in "$snap"/*; do
+    [ "$(basename "$f")" = PATH ] && continue
+    cp -a "$f" "$(dirname "$db")/"
+  done
+  rm -f "$ROOT/db-prev/LATEST"
+  echo "  database restored to the copy taken at deploy $(basename "$snap")"
+  echo "  the database it replaced is in db-prev/$(basename "$aside")"
 }
 
 # Deploys before the root-only staging dir uploaded here; retire those copies
@@ -76,9 +161,14 @@ if [ "$rollback" = 1 ]; then
     rm -rf web_bad; mv web web_bad; cp -a web_prev web; rm -rf web_bad
     echo "  web rolled back"
   fi
+  if [ "$keepdb" = 1 ]; then
+    echo "  database left as it is (keepdb)"
+  else
+    restore_db
+  fi
   systemctl restart mcsm-agent mcsm-api
 else
-  [ "$do_api"   = 1 ] && { install_bin mcsm-api;   echo "[deploy] api binary updated"; }
+  [ "$do_api"   = 1 ] && { snapshot_db; install_bin mcsm-api; echo "[deploy] api binary updated"; }
   [ "$do_agent" = 1 ] && { install_bin mcsm-agent; echo "[deploy] agent binary updated"; }
   if [ "$do_web" = 1 ]; then
     rm -rf web_new; mkdir web_new
@@ -111,8 +201,8 @@ fi
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sha=$SHA web=$do_web api=$do_api agent=$do_agent provision=$do_provision rollback=$rollback" >> data/DEPLOYED.txt
 
 # --- Health checks ---
-sleep 2
-D=$(cat /root/.test_domain)
+sleep "$HEALTH_WAIT"
+D=$(cat "$DOMAIN_FILE")
 fail=0
 http_check() { # $1 label  $2 url  $3 expect
   local code

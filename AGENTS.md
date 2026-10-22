@@ -53,6 +53,7 @@ of hand-written SSH or upload commands:
 .\scripts\Deploy-Dashboard.ps1 -Part host
 .\scripts\Deploy-Dashboard.ps1 -Provision
 .\scripts\Deploy-Dashboard.ps1 -Rollback
+.\scripts\Deploy-Dashboard.ps1 -Rollback -KeepDatabase
 ```
 
 The default deployment includes web, API, and agent. `-Test` is expected for
@@ -65,6 +66,11 @@ never by hand on the server, and keep `bash deploy/provision_test.sh` passing.
 Every deploy prints a `[config]` drift report; treat drift as something to
 reconcile, not ignore. New non-secret settings go in a `deploy/systemd`
 drop-in; secrets stay in `secrets.env`, which provisioning never touches.
+
+An api deploy copies the database to `/srv/dashboard/db-prev` before the new
+API starts, and `-Rollback` restores it: a newer API can leave the database in a
+form the older one cannot start on. Keep `bash scripts/deploy_apply_test.sh`
+passing when changing `deploy-apply.sh`.
 
 The wrapper protects machine-local connection details and performs upload,
 service restart, rollback preparation, and basic health checks. Do not print or

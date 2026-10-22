@@ -457,6 +457,18 @@ Back up both together so metadata and files stay in sync (see README).
 4. Restart the services; goose migrations run on API boot.
 5. Confirm `/api/v1/health` returns `{"status":"ok"}` and the node is online.
 
+Going back to an older release means going back to its database too. On first
+boot a release can migrate the schema and re-encrypt stored secrets in a form
+the older API cannot read, and that API then refuses to start. Restore the
+database copy from step 2 (with the encryption key it was written with) along
+with the older binaries.
+
+`scripts/Deploy-Dashboard.ps1` does this for the hosted instance: every api
+deploy copies the database, with the API stopped, to `/srv/dashboard/db-prev`
+(root-only, the last three kept), and `-Rollback` restores that copy with the
+previous binaries, setting the replaced database aside in the same directory.
+`-Rollback -KeepDatabase` rolls back code only.
+
 ## TLS
 
 Terminate TLS at the reverse proxy in front of the web bundle / API. With the
