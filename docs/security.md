@@ -519,6 +519,10 @@ gated at three layers:
   code); the server returns `mfa_required` after a correct password to drive the
   two-step prompt. Failed codes count against the login throttle; the expected
   "need a code" step does not.
+- A code is accepted once (RFC 6238 §5.2): the time step of the last accepted
+  code is kept per user, and that step or an earlier one is refused at login,
+  enrollment and step-up, so a code read off a screen can't be reused while
+  it is still current.
 - Starting enrollment, disabling MFA, and generating new recovery codes each
   need a step-up: the current password plus a current code (or a recovery code).
   Wrong attempts spend from the login throttle. An admin can clear a locked-out
@@ -588,6 +592,10 @@ gated at three layers:
 - Outbound webhooks are signed over the delivery time and the body
   (`X-MCSM-Timestamp`, `X-MCSM-Signature-256: t=…,v1=…`), so a captured
   delivery cannot be replayed later.
+- Webhooks and mod downloads only connect to public addresses, checked on the
+  resolved address at dial time (so DNS rebinding doesn't help). Loopback,
+  private, link-local, CGNAT and reserved ranges are refused, and NAT64 and
+  6to4 addresses are judged by the IPv4 address they carry.
 
 ## Production Startup Guards
 

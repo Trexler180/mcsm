@@ -111,4 +111,9 @@ cd apps/agent && go test ./...
 cd apps/web && pnpm lint && pnpm test && pnpm build
 ```
 
+`cd apps/web && pnpm e2e` drives a throwaway panel, agent and Paper server
+through the main flows in Chromium (needs Go, Java and network access; a few
+minutes). `E2E_SOAK_MINUTES=30 pnpm e2e soak` adds a long run that watches
+memory and errors while a server cycles.
+
 See `docs/` for architecture, deployment, security, and operations notes.
