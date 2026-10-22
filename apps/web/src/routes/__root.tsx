@@ -1,10 +1,15 @@
 import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { AppShell, BootScreen } from '@/shell/app-shell'
 import { TipHost } from '@/ui/overlays'
 import { Toasts } from '@/ui/toasts'
 import { useAuthStore } from '@/store/auth'
 import { rememberReturnTo } from '@/lib/return-to'
+
+// Pages load on first visit; this holds their place for the moment that takes.
+function PageLoading() {
+  return <div className="scroll" aria-busy="true" />
+}
 
 function RootLayout() {
   const { isAuthenticated, isLoading, init } = useAuthStore()
@@ -35,7 +40,9 @@ function RootLayout() {
   if (!isAuthenticated) {
     return (
       <>
-        <Outlet />
+        <Suspense fallback={<PageLoading />}>
+          <Outlet />
+        </Suspense>
         <Toasts />
         <TipHost />
       </>
@@ -44,7 +51,9 @@ function RootLayout() {
 
   return (
     <AppShell>
-      <Outlet />
+      <Suspense fallback={<PageLoading />}>
+        <Outlet />
+      </Suspense>
     </AppShell>
   )
 }

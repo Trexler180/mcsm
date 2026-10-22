@@ -1,6 +1,7 @@
+import { lazy } from 'react'
 import { createRoute } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { AuditPage } from '@/pages/audit'
+const AuditPage = lazy(() => import('@/pages/audit').then((m) => ({ default: m.AuditPage })))
 
 // Open to everyone: the API shows each person what they're allowed to see.
 export const Route = createRoute({

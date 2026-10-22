@@ -1,6 +1,9 @@
+import { lazy } from 'react'
 import { createRoute, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { ServerPage, type ServerSearch } from '@/pages/server/page'
+import type { ServerSearch } from '@/pages/server/page'
+
+const ServerPage = lazy(() => import('@/pages/server/page').then((m) => ({ default: m.ServerPage })))
 
 // A server's pages: /s/<id> is its console, /s/<id>/<tab> the rest.
 

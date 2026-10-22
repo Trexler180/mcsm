@@ -15,6 +15,24 @@ export const SERVER_TABS: { value: ServerTab; label: string; perm: ServerPermiss
 
 export type ServerTab = 'console' | 'players' | 'mods' | 'worlds' | 'files' | 'backups' | 'schedules' | 'stats' | 'settings'
 
+export type ModsView = 'installed' | 'browse' | 'configs'
+
+export function modsViewOf(sub: string | undefined): ModsView {
+  return sub === 'browse' || sub === 'configs' ? sub : 'installed'
+}
+
+export type SettingsSection = 'general' | 'version' | 'properties' | 'access'
+
+export function sectionOf(sub: string | undefined): SettingsSection {
+  return sub === 'version' || sub === 'properties' || sub === 'access' ? sub : 'general'
+}
+
+/** The folder a path is in ("/" for the root). */
+export function parentOf(p: string): string {
+  const i = p.replace(/\/$/, '').lastIndexOf('/')
+  return i <= 0 ? '/' : p.slice(0, i)
+}
+
 export const isServerTab = (v: string | undefined): v is ServerTab => !!v && SERVER_TABS.some((t) => t.value === v)
 
 /** Where an address from the previous design's server page now lands. */

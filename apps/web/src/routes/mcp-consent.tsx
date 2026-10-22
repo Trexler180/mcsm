@@ -1,6 +1,7 @@
+import { lazy } from 'react'
 import { createRoute } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { ConsentPage } from '@/pages/consent'
+const ConsentPage = lazy(() => import('@/pages/consent').then((m) => ({ default: m.ConsentPage })))
 
 // The OAuth consent screen. A normal signed-in route on purpose: someone not
 // signed in is sent to sign in and brought back here, so "a person is here"

@@ -1,7 +1,8 @@
+import { lazy } from 'react'
 import { createRoute, redirect } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
 import { AdminOnly } from '@/shell/admin-only'
-import { PeoplePage } from '@/pages/people'
+const PeoplePage = lazy(() => import('@/pages/people').then((m) => ({ default: m.PeoplePage })))
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,

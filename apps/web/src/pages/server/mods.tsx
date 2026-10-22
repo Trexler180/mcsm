@@ -20,11 +20,8 @@ import { InstalledModIcon } from './mod-icon'
 // more, and their config files. Changes load the next time the server starts.
 
 
-export type ModsView = 'installed' | 'browse' | 'configs'
-
-export function modsViewOf(sub: string | undefined): ModsView {
-  return sub === 'browse' || sub === 'configs' ? sub : 'installed'
-}
+import type { ModsView } from './tabs'
+export { modsViewOf, type ModsView } from './tabs'
 
 export function ModsTab({ server, status, perms, view, setView }: { server: Server; status: StatusKey; perms: MyServerPermissions | undefined; view: ModsView; setView: (v: ModsView) => void }) {
   const qc = useQueryClient()

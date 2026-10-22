@@ -1,7 +1,8 @@
+import { lazy } from 'react'
 import { createRoute, redirect } from '@tanstack/react-router'
 import { Route as rootRoute } from '../__root'
 import { AdminOnly } from '@/shell/admin-only'
-import { NewServerPage } from '@/pages/new-server'
+const NewServerPage = lazy(() => import('@/pages/new-server').then((m) => ({ default: m.NewServerPage })))
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,

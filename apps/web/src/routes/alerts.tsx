@@ -1,6 +1,9 @@
+import { lazy } from 'react'
 import { createRoute, redirect, useNavigate, useParams } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { AlertsPage, type AlertsTab } from '@/pages/alerts'
+import type { AlertsTab } from '@/pages/alerts'
+
+const AlertsPage = lazy(() => import('@/pages/alerts').then((m) => ({ default: m.AlertsPage })))
 
 // Alerts: /alerts is the inbox, /alerts/rules and /alerts/delivery the rest.
 // The old /notifications address lands on the inbox.

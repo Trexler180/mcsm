@@ -44,10 +44,8 @@ export function join(dir: string, name: string): string {
   return (dir === '/' ? '' : dir.replace(/\/$/, '')) + '/' + name
 }
 
-export function parentOf(p: string): string {
-  const i = p.replace(/\/$/, '').lastIndexOf('/')
-  return i <= 0 ? '/' : p.slice(0, i)
-}
+import { parentOf } from './tabs'
+export { parentOf }
 
 /** A name a file or folder can have. */
 export function entryNameError(name: string, taken: string[]): string | null {

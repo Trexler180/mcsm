@@ -14,11 +14,8 @@ import { VersionSettings } from './settings-version'
 // Java, server.properties, and who has access.
 
 
-export type SettingsSection = 'general' | 'version' | 'properties' | 'access'
-
-export function sectionOf(sub: string | undefined): SettingsSection {
-  return sub === 'version' || sub === 'properties' || sub === 'access' ? sub : 'general'
-}
+import type { SettingsSection } from './tabs'
+export { sectionOf, type SettingsSection } from './tabs'
 
 export function SettingsTab({
   server,

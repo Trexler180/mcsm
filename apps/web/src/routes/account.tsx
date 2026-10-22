@@ -1,6 +1,9 @@
+import { lazy } from 'react'
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { Route as rootRoute } from './__root'
-import { AccountPage, accountSectionOf } from '@/pages/account'
+import { accountSectionOf } from '@/pages/account/sections'
+
+const AccountPage = lazy(() => import('@/pages/account').then((m) => ({ default: m.AccountPage })))
 
 function AccountView() {
   const { section } = useParams({ strict: false }) as { section?: string }

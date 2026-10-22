@@ -7,7 +7,8 @@ import { YouSection } from './you'
 // made, and the AI agents you've connected. Everything here belongs to you,
 // whatever your role.
 
-export type AccountSection = 'you' | 'keys' | 'agents'
+import type { AccountSection } from './sections'
+export { accountSectionOf, type AccountSection } from './sections'
 
 const SECTIONS: { value: AccountSection; label: string }[] = [
   { value: 'you', label: 'You' },
@@ -15,9 +16,6 @@ const SECTIONS: { value: AccountSection; label: string }[] = [
   { value: 'agents', label: 'AI agents' },
 ]
 
-export function accountSectionOf(s: string | undefined): AccountSection {
-  return s === 'keys' || s === 'agents' ? s : 'you'
-}
 
 export function AccountPage({ section, setSection }: { section: AccountSection; setSection: (s: AccountSection) => void }) {
   return (

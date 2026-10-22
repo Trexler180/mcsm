@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { ApiError } from '@/lib/api'
 import { useGo } from '@/shell/nav'
 import { paths } from '@/shell/paths'
@@ -8,15 +9,17 @@ import { ConsoleSkeleton, LoadError, Sk } from '@/ui/skeleton'
 import { ConsoleTab, type ConsoleView } from './console'
 import { allowed, failedStatus, statusOf, useFleetServer, useMyPerms, useServer, useStartupProblem } from './data'
 import { ServerHeader, tabLabel } from './header'
-import { FilesTab, parentOf } from './files'
-import { ModsTab, modsViewOf } from './mods'
-import { WorldsTab } from './worlds'
-import { PlayersTab } from './players'
-import { BackupsTab } from './backups'
-import { SchedulesTab } from './schedules'
-import { StatsTab } from './stats'
-import { SettingsTab, sectionOf } from './settings'
-import { SERVER_TABS, isServerTab, type ServerTab } from './tabs'
+import { SERVER_TABS, isServerTab, modsViewOf, parentOf, sectionOf, type ServerTab } from './tabs'
+
+// Every tab but the console (the one a server opens on) loads on first visit.
+const FilesTab = lazy(() => import('./files').then((x) => ({ default: x.FilesTab })))
+const ModsTab = lazy(() => import('./mods').then((x) => ({ default: x.ModsTab })))
+const WorldsTab = lazy(() => import('./worlds').then((x) => ({ default: x.WorldsTab })))
+const PlayersTab = lazy(() => import('./players').then((x) => ({ default: x.PlayersTab })))
+const BackupsTab = lazy(() => import('./backups').then((x) => ({ default: x.BackupsTab })))
+const SchedulesTab = lazy(() => import('./schedules').then((x) => ({ default: x.SchedulesTab })))
+const StatsTab = lazy(() => import('./stats').then((x) => ({ default: x.StatsTab })))
+const SettingsTab = lazy(() => import('./settings').then((x) => ({ default: x.SettingsTab })))
 
 export interface ServerSearch {
   /** Console: which view (live is the default). */
@@ -167,7 +170,7 @@ export function ServerPage({
   return (
     <PermScope perms={my ?? null}>
       <ServerHeader server={server} live={live} status={status} nodeName={nodeName} perms={my} tab={tab} crashedAt={crashedAt} />
-      {body}
+      <Suspense fallback={<div className="scroll" aria-busy="true" />}>{body}</Suspense>
     </PermScope>
   )
 }
