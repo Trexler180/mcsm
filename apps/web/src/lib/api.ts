@@ -110,13 +110,16 @@ export class ApiError extends Error {
   }
 }
 
-const OPERATION_KIND_LABELS: Record<string, string> = {
+export const OPERATION_KIND_LABELS: Record<string, string> = {
   start: "starting",
   reinstall: "reinstalling",
   restore: "restoring a backup",
   backup: "taking a backup",
   migrate: "changing version",
   auto_update: "updating mods",
+  world_upload: "loading a new world",
+  delete: "being deleted",
+  fix: "fixing what stopped it starting",
 };
 
 // Describes the operation that is holding a busy server, for error toasts.

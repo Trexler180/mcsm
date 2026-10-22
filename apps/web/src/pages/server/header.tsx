@@ -261,7 +261,7 @@ function ServerProgress({ live }: { live: FleetServer | undefined }) {
   )
 }
 
-const OPERATION_TEXT: Record<string, string> = {
+export const OPERATION_TEXT: Record<string, string> = {
   start: 'Starting',
   reinstall: 'Reinstalling',
   restore: 'Restoring a backup. It stays stopped until it’s done',
@@ -270,6 +270,7 @@ const OPERATION_TEXT: Record<string, string> = {
   auto_update: 'Updating mods safely',
   fix: 'Fixing what stopped it starting',
   world_upload: 'Loading the new world',
+  delete: 'Deleting',
 }
 
 function operationText(kind: string, message: string, phase: string): string {
