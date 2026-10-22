@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -189,6 +190,11 @@ func (h *ModHandlers) GetProject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	project, err := h.sourceFor(r.URL.Query().Get("source")).GetProject(ctx, projectID)
+	if errors.Is(err, modrinth.ErrNotFound) {
+		// Taken down or deleted upstream: there is nothing to retry.
+		writeCodedError(w, http.StatusNotFound, "not_found", "that project is no longer on the mod site")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

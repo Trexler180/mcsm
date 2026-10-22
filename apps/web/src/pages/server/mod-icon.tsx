@@ -29,9 +29,15 @@ export function ModIcon({ url, name, size = 32, style }: { url?: string | null; 
         ...style,
       }}
     >
-      {(name.trim()[0] ?? '?').toUpperCase()}
+      {modInitial(name)}
     </span>
   )
+}
+
+/** The letter a mod's tile shows: its first letter or digit, so a name like
+ *  "[1.21] Lithium" doesn't come out as "[". */
+export function modInitial(name: string): string {
+  return (name.match(/[\p{L}\p{N}]/u)?.[0] ?? '?').toUpperCase()
 }
 
 /** An installed mod's icon, looked up from its project once and cached. */

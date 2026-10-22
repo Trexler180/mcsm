@@ -2,6 +2,7 @@ package hangar
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -277,5 +278,19 @@ func TestGetCategories(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("want no categories for mods, got %d", len(empty))
+	}
+}
+
+// A project the site says is gone is reported as such, so the panel answers 404
+// instead of a retryable "bad gateway" for something retrying can't bring back.
+func TestGetProjectGone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	_, err := testClient(srv.URL).GetProject(context.Background(), "gone")
+	if !errors.Is(err, modrinth.ErrNotFound) {
+		t.Fatalf("err = %v, want modrinth.ErrNotFound", err)
 	}
 }

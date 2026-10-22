@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -313,6 +314,11 @@ func (c *Client) GetProjects(ctx context.Context, ids []string) ([]Project, erro
 	return out, nil
 }
 
+// ErrNotFound marks a project the mod site says doesn't exist (taken down or
+// deleted). The other sources wrap it too, so callers can tell "gone" from "the
+// site didn't answer".
+var ErrNotFound = errors.New("not found on the mod site")
+
 func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/project/"+projectID, nil)
 	if err != nil {
@@ -326,6 +332,9 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("modrinth returned 404: %w", ErrNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("modrinth returned %d", resp.StatusCode)
 	}

@@ -35,7 +35,7 @@ const (
 
 // errNotFound marks a Spiget 404, which on the search endpoints means "no
 // results" rather than an error.
-var errNotFound = fmt.Errorf("spiget returned 404")
+var errNotFound = fmt.Errorf("spiget returned 404: %w", modrinth.ErrNotFound)
 
 type Client struct {
 	http    *http.Client
