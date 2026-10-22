@@ -194,33 +194,51 @@ func ShareDir(dir string, gid int) error {
 		if d.IsDir() && path != dir && skipShare[d.Name()] {
 			return filepath.SkipDir
 		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
+		if !d.IsDir() && !d.Type().IsRegular() {
+			return nil // devices, sockets, FIFOs: not the agent's to share
 		}
-		st, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || int(st.Uid) != me {
-			return nil
-		}
-		if int(st.Gid) != gid {
-			if err := os.Lchown(path, -1, gid); err != nil {
-				return err
-			}
-		}
-		mode := info.Mode()
-		want := mode.Perm() | 0o060
-		if d.IsDir() {
-			want |= 0o010
-		}
-		newMode := want
-		if d.IsDir() {
-			newMode |= os.ModeSetgid
-		}
-		if mode.Perm() != want || (d.IsDir() && mode&os.ModeSetgid == 0) {
-			if err := os.Chmod(path, newMode); err != nil {
-				return err
-			}
-		}
-		return nil
+		return shareEntry(path, d.IsDir(), me, gid)
 	})
+}
+
+// shareEntry gives the group access to one entry the agent owns. It works on an
+// open descriptor rather than the path: the server's code can rename entries in
+// its directory, and a symlink swapped in between a check and a path-based
+// chmod would hand the group whatever the link pointed at (the panel's
+// secrets). O_NOFOLLOW refuses a link outright, and the checks and changes then
+// all apply to the one file that was opened.
+func shareEntry(path string, dir bool, me, gid int) error {
+	flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	if dir {
+		flags |= unix.O_DIRECTORY
+	}
+	fd, err := unix.Open(path, flags, 0)
+	if err != nil {
+		return nil // gone, swapped for a link, or unreadable: leave it
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil
+	}
+	isDir := st.Mode&unix.S_IFMT == unix.S_IFDIR
+	if isDir != dir || (!isDir && st.Mode&unix.S_IFMT != unix.S_IFREG) || int(st.Uid) != me {
+		return nil
+	}
+	if int(st.Gid) != gid {
+		if err := unix.Fchown(fd, -1, gid); err != nil {
+			return err
+		}
+	}
+	perm := uint32(st.Mode) & 0o7777
+	want := perm | 0o060
+	if isDir {
+		want |= 0o010 | unix.S_ISGID
+	}
+	if want != perm {
+		if err := unix.Fchmod(fd, want); err != nil {
+			return err
+		}
+	}
+	return nil
 }

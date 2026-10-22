@@ -15,7 +15,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,14 +40,29 @@ const maxDecompressed = 64 << 20
 // maxScan bounds how much of a plain log is read from its end.
 const maxScan = 32 << 20
 
-func logsDir(serverDir string) string { return filepath.Join(serverDir, "logs") }
+// openLogs opens the server's logs directory through a root on the server
+// directory, so a logs/ the server's code replaced with a symlink can't lead
+// outside it, to another server's console logs or anywhere else.
+func openLogs(serverDir string) (*os.Root, error) {
+	server, err := os.OpenRoot(serverDir)
+	if err != nil {
+		return nil, err
+	}
+	defer server.Close()
+	return server.OpenRoot("logs")
+}
 
 // List returns the server's log files, newest first.
 func List(serverDir string) ([]LogFile, error) {
-	entries, err := os.ReadDir(logsDir(serverDir))
+	root, err := openLogs(serverDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return []LogFile{}, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +90,7 @@ func open(serverDir, name string) (io.ReadCloser, error) {
 	if !nameRe.MatchString(name) {
 		return nil, ErrBadName
 	}
-	root, err := os.OpenRoot(logsDir(serverDir))
+	root, err := openLogs(serverDir)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +157,7 @@ func Tail(serverDir, name string, n int) (lines []string, truncated bool, err er
 }
 
 func tailPlain(serverDir, name string, n int) ([]string, bool, error) {
-	root, err := os.OpenRoot(logsDir(serverDir))
+	root, err := openLogs(serverDir)
 	if err != nil {
 		return nil, false, err
 	}

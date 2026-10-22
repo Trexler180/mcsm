@@ -292,3 +292,42 @@ func TestWorldExists(t *testing.T) {
 		t.Errorf("WorldExists(notes.txt) = %v, %v; want false", ok, err)
 	}
 }
+
+// With isolation on, a server's own code can rename entries inside its
+// directory, so a staging folder there could be swapped for a symlink to the
+// panel's data while the agent writes into it. Staging happens beside the
+// server directory instead; nothing appears inside it until the final swap.
+func TestExtractWorldStagesOutsideTheServerDirectory(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "srv")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := makeZip(t, map[string]string{
+		"world/level.dat":        "dat",
+		"world/region/r.0.0.mca": "chunks",
+		"world/data/raids.dat":   "raids",
+	})
+	arc, err := InspectWorldZip(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var during []string
+	progress := func(done, total int64) {
+		entries, _ := os.ReadDir(base)
+		for _, e := range entries {
+			during = append(during, e.Name())
+		}
+	}
+	if err := ExtractWorldProgress(base, zipPath, arc, "Imported", progress); err != nil {
+		t.Fatal(err)
+	}
+	if len(during) != 0 {
+		t.Fatalf("the server directory held %v while the world was unpacking", during)
+	}
+	if _, err := os.Stat(filepath.Join(base, "Imported", "level.dat")); err != nil {
+		t.Fatalf("world not installed: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(base), ".srv-world-*")); len(left) != 0 {
+		t.Fatalf("staging left behind: %v", left)
+	}
+}

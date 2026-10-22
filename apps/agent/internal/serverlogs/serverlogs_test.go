@@ -88,3 +88,23 @@ func TestProblemsGroupAndIgnoreChat(t *testing.T) {
 		t.Fatalf("the two lag warnings were not grouped: %+v", lag)
 	}
 }
+
+// A logs/ the server's code replaced with a symlink must not lead the agent
+// outside the server directory.
+func TestLogsSymlinkOutOfTheServerIsRefused(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "latest.log"), []byte("someone else's console\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "logs")); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if files, err := List(dir); err == nil && len(files) > 0 {
+		t.Fatalf("listed logs through a symlink: %v", files)
+	}
+	if r, err := open(dir, "latest.log"); err == nil {
+		r.Close()
+		t.Fatal("opened a log through a symlinked logs directory")
+	}
+}

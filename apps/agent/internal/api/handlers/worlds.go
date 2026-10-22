@@ -117,9 +117,15 @@ func (h *WorldHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer part.Close()
 
-	// Staged inside the server directory so it lands on the same filesystem the
-	// world unpacks to, which is the one the space check measured.
-	tmp, err := os.CreateTemp(base, ".mcsm-world-upload-*.zip")
+	// Staged beside the server directory: on the same filesystem the world
+	// unpacks to (the one the space check measured), but where the server's own
+	// code can't replace the archive between its inspection and the unpack.
+	stageDir, err := agentfiles.UploadStagingDir(base)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create upload staging file: "+err.Error())
+		return
+	}
+	tmp, err := os.CreateTemp(stageDir, "."+filepath.Base(base)+"-world-upload-*.zip")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create upload staging file: "+err.Error())
 		return

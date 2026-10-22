@@ -189,6 +189,17 @@ func CleanWorldName(name string) (string, error) {
 	return n, nil
 }
 
+// UploadStagingDir is where an uploaded world archive waits before it is
+// unpacked: beside the server directory, not in it, so the server's own code
+// can't swap the archive for another between the checks and the unpack.
+func UploadStagingDir(base string) (string, error) {
+	cleanBase, err := secureBase(base)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(cleanBase), nil
+}
+
 // WorldExists reports whether a directory of this name already sits in the
 // server root, so callers can require an explicit replace.
 func WorldExists(base, name string) (bool, error) {
@@ -241,7 +252,13 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 	}
 	defer zr.Close()
 
-	staging, err := os.MkdirTemp(cleanBase, ".mcsm-world-new-")
+	// Staged beside the server directory, not in it. With isolation on, the
+	// server's own code can rename entries inside its directory, so a staging
+	// folder there could be swapped for a symlink to the panel's data while
+	// this writes into it as the agent. The parent is the agent's alone; backup
+	// restore stages there for the same reason.
+	parent := filepath.Dir(cleanBase)
+	staging, err := os.MkdirTemp(parent, "."+filepath.Base(cleanBase)+"-world-new-*")
 	if err != nil {
 		return fmt.Errorf("create staging directory: %w", err)
 	}
@@ -252,6 +269,13 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 			os.RemoveAll(staging)
 		}
 	}()
+	// Every entry is written through this handle, so nothing in the archive can
+	// land outside the staging folder.
+	root, err := os.OpenRoot(staging)
+	if err != nil {
+		return fmt.Errorf("open staging directory: %w", err)
+	}
+	defer root.Close()
 
 	var written int64
 	for _, f := range zr.File {
@@ -266,21 +290,23 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 		if rel == "" {
 			continue
 		}
-		dest := filepath.Join(staging, filepath.FromSlash(rel))
-		if !withinBase(staging, dest) {
+		dest := filepath.FromSlash(rel)
+		if !withinBase(staging, filepath.Join(staging, dest)) {
 			return fmt.Errorf("unsafe path in archive: %s", f.Name)
 		}
 
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(dest, 0755); err != nil {
+			if err := root.MkdirAll(dest, 0755); err != nil {
 				return fmt.Errorf("create %s: %w", rel, err)
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-			return fmt.Errorf("create %s: %w", path.Dir(rel), err)
+		if dir := filepath.Dir(dest); dir != "." {
+			if err := root.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("create %s: %w", path.Dir(rel), err)
+			}
 		}
-		if err := writeZipEntry(f, dest); err != nil {
+		if err := writeZipEntry(f, root, dest); err != nil {
 			return err
 		}
 		if progress != nil {
@@ -289,12 +315,18 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 		}
 	}
 
+	// Done writing. The handle has to go before the rename: Windows won't move a
+	// directory something still has open.
+	if err = root.Close(); err != nil {
+		return fmt.Errorf("close staging directory: %w", err)
+	}
+
 	// Swap: move any existing world aside, put the new one in place, then drop
 	// the old copy. Renames are within one directory, so they're atomic and
 	// can't half-succeed.
 	var parked string
 	if _, statErr := os.Lstat(target); statErr == nil {
-		parked, err = os.MkdirTemp(cleanBase, ".mcsm-world-old-")
+		parked, err = os.MkdirTemp(parent, "."+filepath.Base(cleanBase)+"-world-old-*")
 		if err != nil {
 			return fmt.Errorf("prepare replacement: %w", err)
 		}
@@ -324,14 +356,14 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 // archive declared for it. Permissions come from us, not the archive: zips made
 // on Windows carry meaningless modes, and a 0000 file would leave the server
 // unable to read its own world.
-func writeZipEntry(f *zip.File, dest string) error {
+func writeZipEntry(f *zip.File, root *os.Root, dest string) error {
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("read %s from archive: %w", path.Base(f.Name), err)
 	}
 	defer rc.Close()
 
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	out, err := root.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", filepath.Base(dest), err)
 	}
