@@ -283,6 +283,22 @@ func (svc *Service) authorize(ctx context.Context, p *Principal, serverID string
 	return srv, nil
 }
 
+// authorizeAll is authorize for an action that needs several exact
+// permissions: the principal must hold every one of them.
+func (svc *Service) authorizeAll(ctx context.Context, p *Principal, serverID string, scope store.MCPScope, permissions []store.ServerPermission) (*store.Server, error) {
+	if len(permissions) == 0 {
+		return nil, errForbidden
+	}
+	var srv *store.Server
+	for _, permission := range permissions {
+		var err error
+		if srv, err = svc.authorize(ctx, p, serverID, scope, permission, false); err != nil {
+			return nil, err
+		}
+	}
+	return srv, nil
+}
+
 // Server builds the MCP server for one authenticated request.
 //
 // Tools are registered only when the grant carries their capability. That is

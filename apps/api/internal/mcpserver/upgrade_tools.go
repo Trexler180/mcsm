@@ -39,7 +39,9 @@ func (svc *Service) planVersionUpgrade(p *Principal) mcp.ToolHandlerFor[versionU
 
 func (svc *Service) requestVersionUpgrade(p *Principal) mcp.ToolHandlerFor[versionUpgradeInput, actionRequestOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in versionUpgradeInput) (*mcp.CallToolResult, actionRequestOutput, error) {
-		srv, err := svc.authorize(ctx, p, in.ServerID, store.MCPScopeActionsRequest, store.ServerPermissionSettings, false)
+		// Everything the dashboard's /migrate route asks for, not just
+		// "settings": the run stops, starts, rewrites mods and can restore.
+		srv, err := svc.authorizeAll(ctx, p, in.ServerID, store.MCPScopeActionsRequest, store.VersionChangePermissions)
 		if err != nil {
 			return nil, actionRequestOutput{}, err
 		}

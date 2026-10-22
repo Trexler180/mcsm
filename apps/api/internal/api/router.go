@@ -482,6 +482,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					backupsCreate := requireServerPermission(s, store.ServerPermissionBackupsCreate)
 					backupsRestore := requireServerPermission(s, store.ServerPermissionBackupsRestore)
 					backupsDelete := requireServerPermission(s, store.ServerPermissionBackupsDelete)
+					// A version change needs every permission it exercises; the same set
+					// gates an agent's upgrade request (store.VersionChangePermissions).
+					versionChangeAccess := make([]func(http.Handler) http.Handler, 0, len(store.VersionChangePermissions))
+					for _, p := range store.VersionChangePermissions {
+						versionChangeAccess = append(versionChangeAccess, requireServerPermission(s, p))
+					}
 
 					r.With(viewAccess).Get("/", serverH.Get)
 					r.With(viewAccess).Get("/identity", serverH.Identity)
@@ -510,7 +516,7 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 					// the way to their goal need every permission they exercise, so
 					// "settings" cannot be used to borrow power or restore rights.
 					r.With(settingsAccess, stopAccess).Post("/reinstall", serverH.Reinstall)
-					r.With(settingsAccess, stopAccess, startAccess, modsUpdate, backupsCreate, backupsRestore).Post("/migrate", migrateH.Migrate)
+					r.With(versionChangeAccess...).Post("/migrate", migrateH.Migrate)
 					r.With(viewAccess).Get("/migrations", migrateH.List)
 					r.With(viewAccess).Get("/migrations/{runId}", migrateH.Get)
 					r.With(stopAccess).Post("/stop", serverH.Stop)

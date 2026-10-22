@@ -11,8 +11,10 @@ func TestMCPUpgradeActionValidationAndPermission(t *testing.T) {
 		if got, ok := ParseMCPUpgradeAction(action); !ok || got != target {
 			t.Fatalf("ParseMCPUpgradeAction(%q) = %q, %v", action, got, ok)
 		}
-		if permission, ok := MCPActionPermission(action); !ok || permission != ServerPermissionSettings {
-			t.Fatalf("upgrade permission = %q, %v", permission, ok)
+		// An upgrade stops, starts, rewrites mods, backs up and may restore:
+		// it needs everything the dashboard's /migrate route needs.
+		if perms, ok := MCPActionPermissions(action); !ok || len(perms) != len(VersionChangePermissions) {
+			t.Fatalf("upgrade permissions = %v, %v; want %v", perms, ok, VersionChangePermissions)
 		}
 	}
 	for _, target := range []string{"", "../26.3", "26.3?x=1", "26.3:restore"} {

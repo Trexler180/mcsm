@@ -815,12 +815,12 @@ func TestScopeNormalizationIsClosed(t *testing.T) {
 // do must be unreachable from a delegation.
 func TestOnlyLifecycleActionsAreRequestable(t *testing.T) {
 	for _, action := range []string{"start", "stop", "restart"} {
-		if _, ok := MCPActionPermission(action); !ok {
+		if _, ok := MCPActionPermissions(action); !ok {
 			t.Fatalf("%q should be requestable", action)
 		}
 	}
 	for _, action := range []string{"kill", "reinstall", "restore", "delete", "command", "", "START"} {
-		if _, ok := MCPActionPermission(action); ok {
+		if _, ok := MCPActionPermissions(action); ok {
 			t.Fatalf("%q must not be requestable", action)
 		}
 	}

@@ -52,7 +52,7 @@ const pendingNote = "Nothing has happened yet. A human must approve this in the 
 func (svc *Service) requestServerAction(p *Principal) mcp.ToolHandlerFor[requestActionInput, actionRequestOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in requestActionInput) (*mcp.CallToolResult, actionRequestOutput, error) {
 		action := strings.ToLower(strings.TrimSpace(in.Action))
-		permission, ok := store.MCPActionPermission(action)
+		permissions, ok := store.MCPActionPermissions(action)
 		if !ok {
 			// Naming the three supported actions is safe and useful: the tool
 			// description already says them, and a model that guessed "kill"
@@ -68,7 +68,7 @@ func (svc *Service) requestServerAction(p *Principal) mcp.ToolHandlerFor[request
 		if err != nil {
 			return nil, actionRequestOutput{}, err
 		}
-		if _, err := svc.authorize(ctx, p, in.ServerID, store.MCPScopeActionsRequest, permission, false); err != nil {
+		if _, err := svc.authorizeAll(ctx, p, in.ServerID, store.MCPScopeActionsRequest, permissions); err != nil {
 			return nil, actionRequestOutput{}, err
 		}
 
@@ -352,11 +352,11 @@ func (svc *Service) ExecuteApprovedAction(ctx context.Context, requestID, userID
 		Scopes:     grant.Scopes,
 		ServerIDs:  grant.ServerIDs,
 	}
-	permission, ok := store.MCPActionPermission(req.Action)
+	permissions, ok := store.MCPActionPermissions(req.Action)
 	if !ok {
 		return svc.failAction(ctx, req, deciderID, ip, "unsupported action")
 	}
-	srv, err := svc.authorize(ctx, principal, req.ServerID, store.MCPScopeActionsRequest, permission, false)
+	srv, err := svc.authorizeAll(ctx, principal, req.ServerID, store.MCPScopeActionsRequest, permissions)
 	if err != nil {
 		return svc.failAction(ctx, req, deciderID, ip,
 			"the delegation or the owner's permission no longer covers this action")

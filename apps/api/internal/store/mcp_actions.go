@@ -109,7 +109,7 @@ func scanMCPAction(scan func(dest ...any) error, extra ...any) (*MCPActionReques
 // deadline.
 func (s *Store) CreateMCPActionRequest(ctx context.Context, grantID, userID, serverID, action, reason string) (*MCPActionRequest, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
-	if _, ok := MCPActionPermission(action); !ok {
+	if _, ok := MCPActionPermissions(action); !ok {
 		return nil, ErrMCPActionUnsupported
 	}
 	reason = truncateRunes(strings.TrimSpace(reason), mcpActionReasonMax)

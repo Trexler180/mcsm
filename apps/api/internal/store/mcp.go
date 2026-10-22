@@ -283,22 +283,37 @@ func MCPScopeRequirement(scope string) (permission ServerPermission, group bool,
 	return req.permission, req.group, true
 }
 
-// MCPActionPermission maps a requestable action onto the exact power leaf it
-// needs. Only start, stop, and restart are requestable in this phase — kill,
-// reinstall, restore, and everything else is deliberately unreachable.
-func MCPActionPermission(action string) (ServerPermission, bool) {
+// VersionChangePermissions is every permission a version change exercises: it
+// stops and starts the server, rewrites its mods, takes a restore point and may
+// put it back. The dashboard's /migrate route and an agent's upgrade request
+// both need all of them, so "settings" cannot be used to borrow power, mod or
+// restore rights.
+var VersionChangePermissions = []ServerPermission{
+	ServerPermissionSettings,
+	ServerPermissionPowerStop,
+	ServerPermissionPowerStart,
+	ServerPermissionModsUpdate,
+	ServerPermissionBackupsCreate,
+	ServerPermissionBackupsRestore,
+}
+
+// MCPActionPermissions maps a requestable action onto every permission it
+// needs, all of which the requester must hold. Start, stop and restart need
+// their power leaf; a version upgrade needs VersionChangePermissions. Kill,
+// reinstall, restore and everything else are deliberately unreachable.
+func MCPActionPermissions(action string) ([]ServerPermission, bool) {
 	if _, ok := ParseMCPUpgradeAction(action); ok {
-		return ServerPermissionSettings, true
+		return VersionChangePermissions, true
 	}
 	switch action {
 	case "start":
-		return ServerPermissionPowerStart, true
+		return []ServerPermission{ServerPermissionPowerStart}, true
 	case "stop":
-		return ServerPermissionPowerStop, true
+		return []ServerPermission{ServerPermissionPowerStop}, true
 	case "restart":
-		return ServerPermissionPowerRestart, true
+		return []ServerPermission{ServerPermissionPowerRestart}, true
 	}
-	return "", false
+	return nil, false
 }
 
 func MCPUpgradeAction(target string) (string, bool) {

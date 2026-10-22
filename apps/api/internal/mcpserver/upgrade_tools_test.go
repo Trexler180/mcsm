@@ -137,3 +137,45 @@ func TestNewestUpgradeRunIsSanitizedToo(t *testing.T) {
 		t.Errorf("newest upgrade run leaked a credential:\n%s", out.Result)
 	}
 }
+
+// A version upgrade stops, starts, rewrites mods, backs up and may restore, so
+// an agent may only ask for one on behalf of someone holding every permission
+// the dashboard's /migrate route needs. "settings" plus one power leaf used to
+// be enough, which let a collaborator borrow stop, mod and restore rights.
+func TestVersionUpgradeNeedsEveryPermissionItExercises(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	fake := &fakeMigrationStarter{}
+	e.svc.migrations = fake
+	setPerms := func(perms ...store.ServerPermission) {
+		t.Helper()
+		out := make([]string, len(perms))
+		for i, p := range perms {
+			out[i] = string(p)
+		}
+		if err := e.store.SetServerPermissions(ctx, e.serverA, e.otherID, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := principalFor(e.mkGrant(t, e.otherID, []string{e.serverA}, store.AllMCPScopes()...))
+	in := versionUpgradeInput{ServerID: e.serverA, TargetVersion: "1.21.5", Reason: "compatibility reviewed"}
+
+	setPerms(store.ServerPermissionView, store.ServerPermissionSettings, store.ServerPermissionPowerStart)
+	if _, _, err := e.svc.requestVersionUpgrade(p)(ctx, nil, in); err == nil {
+		t.Fatal("settings plus one power leaf filed an upgrade request")
+	}
+
+	setPerms(append([]store.ServerPermission{store.ServerPermissionView}, store.VersionChangePermissions...)...)
+	_, out, err := e.svc.requestVersionUpgrade(p)(ctx, nil, in)
+	if err != nil {
+		t.Fatalf("the full set could not file an upgrade: %v", err)
+	}
+
+	// Losing one of them before approval stops the run.
+	setPerms(store.ServerPermissionView, store.ServerPermissionSettings, store.ServerPermissionPowerStart,
+		store.ServerPermissionPowerStop, store.ServerPermissionModsUpdate, store.ServerPermissionBackupsCreate)
+	_, _ = e.svc.ExecuteApprovedAction(ctx, out.RequestID, e.otherID, e.otherID, "127.0.0.1")
+	if fake.calls != 0 {
+		t.Fatal("the upgrade ran for someone who can no longer restore backups")
+	}
+}
