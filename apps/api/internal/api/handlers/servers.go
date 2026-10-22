@@ -421,6 +421,9 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "directory_path", err.Error())
 		return
 	}
+	if !body.ImportExisting && strings.TrimSpace(body.DirectoryPath) == "" {
+		directoryPath = freeServerDirectory(r.Context(), agent.New(node.Scheme, node.FQDN, node.Port, node.Token), directoryPath)
+	}
 
 	// Never let two servers manage the same directory, or one inside another's —
 	// that's how an import (or a name collision) would "step on" an existing
@@ -500,6 +503,37 @@ func (h *ServerHandlers) Create(w http.ResponseWriter, r *http.Request) {
 
 	audit(h.store, r, created.ID, "server.create", map[string]any{"name": created.Name, "platform": created.Platform, "imported": body.ImportExisting})
 	writeJSON(w, http.StatusCreated, viewServer(created, h.isAdmin(r)))
+}
+
+// freeServerDirectory gives a new server a folder of its own. The folder named
+// after it can already hold a server: one deleted with its files kept, say.
+// Created there, the new server would silently take over that world, its
+// plugins and its server.properties; adopting a folder is what "An existing
+// folder" is for. So when the node reports a server in dir, the next free
+// "<dir>-2", "<dir>-3"… is used instead. If the node can't be asked, dir is
+// kept, as before.
+func freeServerDirectory(ctx context.Context, c *agent.Client, dir string) string {
+	scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	found, err := c.ScanImports(scanCtx)
+	if err != nil {
+		return dir
+	}
+	taken := map[string]bool{}
+	for _, f := range found {
+		taken[strings.ToLower(f.Directory)] = true
+	}
+	parent, base := filepath.Dir(dir), filepath.Base(dir)
+	if !taken[strings.ToLower(base)] {
+		return dir
+	}
+	for n := 2; n < 1000; n++ {
+		next := fmt.Sprintf("%s-%d", base, n)
+		if !taken[strings.ToLower(next)] {
+			return filepath.Join(parent, next)
+		}
+	}
+	return dir
 }
 
 // dirsOverlap reports whether two server directories are the same or one
