@@ -23,6 +23,7 @@ describe('alertLink', () => {
     expect(alertLink(alert('mod.update_failed'))).toEqual({ label: 'Mods', to: '/s/s1/mods' })
     expect(alertLink(alert('backup.failed'))?.to).toBe('/s/s1/backups')
     expect(alertLink(alert('schedule.failed'))?.to).toBe('/s/s1/schedules')
+    expect(alertLink(alert('server.version_change_failed'))).toEqual({ label: 'Version', to: '/s/s1/settings?sub=version' })
     expect(alertLink(alert('node.offline', null))?.label).toBe('Nodes')
     expect(alertLink(alert('auth.new_device', null))?.label).toBe('Sessions')
   })

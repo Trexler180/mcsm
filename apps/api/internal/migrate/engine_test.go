@@ -16,6 +16,8 @@ import (
 
 	"github.com/mcsm/api/internal/agent"
 	"github.com/mcsm/api/internal/mods/modrinth"
+	"github.com/mcsm/api/internal/notify"
+	"github.com/mcsm/api/internal/notify/channels"
 	"github.com/mcsm/api/internal/store"
 	"github.com/mcsm/api/migrations"
 )
@@ -355,13 +357,36 @@ func TestMigrateRollback(t *testing.T) {
 	}}
 	f := newFixture(t, fa, source)
 	modA := f.addMod(t, "projA", "vA1", "1.0", "a-1.0.jar")
+	ctx := context.Background()
+	f.engine.SetNotifier(notify.NewEngine(f.store, notify.NewHub(), notify.NewDispatcher(f.store, channels.NewWebhookSender(), nil)))
+	if _, err := f.store.UpsertSubscription(ctx, &store.NotificationSubscription{
+		UserID: f.server.OwnerID, EventType: notify.EventVersionChangeFailed, MinSeverity: notify.SeverityInfo,
+		Channels: []string{"inapp"}, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	run := f.migrateAndWait(t, "1.21.5")
 	if run.Status != "reverted" {
 		t.Fatalf("status = %q (%s), want reverted", run.Status, run.Detail)
 	}
 
-	ctx := context.Background()
+	// The owner hears about it: nothing else would tell them.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		feed, err := f.store.ListNotifications(ctx, f.server.OwnerID, false, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(feed) == 1 && feed[0].EventType == notify.EventVersionChangeFailed && feed[0].Severity == notify.SeverityWarning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("want one warning-level version-change alert, got %+v", feed)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	srv, _ := f.store.GetServer(ctx, f.server.ID)
 	if srv.MCVersion != "1.21.4" {
 		t.Fatalf("server version = %q, want restored 1.21.4", srv.MCVersion)

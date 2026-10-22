@@ -325,6 +325,69 @@ func TestJoinDeniedSubscriptionBackfill(t *testing.T) {
 	}
 }
 
+// Migration 038 backfills alerts for a version change that did not land, the
+// same way 023 did for whitelist rejections: everyone who predates the alert
+// gets it, and an existing rule (an opt-out included) is left alone.
+func TestVersionChangeFailedSubscriptionBackfill(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)&_time_format=datetime&_timezone=UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	goose.SetBaseFS(FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 37); err != nil {
+		t.Fatal(err)
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u1','a@e.com','x','admin')`)
+	mustExec(`INSERT INTO users (id, email, password_hash, role) VALUES ('u2','b@e.com','x','user')`)
+	mustExec(`INSERT INTO notification_subscriptions (id, user_id, event_type, server_id, channels, enabled)
+	          VALUES ('sub-existing','u2','server.version_change_failed',NULL,'[]',0)`)
+
+	if err := goose.Up(db, "."); err != nil {
+		t.Fatal(err)
+	}
+
+	var channels string
+	var enabled int
+	if err := db.QueryRow(`SELECT channels, enabled FROM notification_subscriptions
+	                        WHERE user_id='u1' AND event_type='server.version_change_failed'`).
+		Scan(&channels, &enabled); err != nil {
+		t.Fatalf("u1 should have been backfilled: %v", err)
+	}
+	if channels != `["inapp"]` || enabled != 1 {
+		t.Errorf("backfilled rule = %s/%d, want [\"inapp\"] enabled", channels, enabled)
+	}
+	var id string
+	if err := db.QueryRow(`SELECT id FROM notification_subscriptions
+	                        WHERE user_id='u2' AND event_type='server.version_change_failed'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != "sub-existing" {
+		t.Errorf("u2's own rule was replaced (id %s); an opt-out must survive the upgrade", id)
+	}
+
+	if err := goose.Down(db, "."); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notification_subscriptions WHERE event_type='server.version_change_failed'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("rollback left %d version-change rules behind", n)
+	}
+}
+
 // Migration 018 must remove duplicate managed-mod rows (keeping the oldest per
 // project+dir) and then reject new duplicates via the unique index.
 func TestModProjectUniqueMigrationDedupes(t *testing.T) {

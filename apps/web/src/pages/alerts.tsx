@@ -64,6 +64,7 @@ export function alertLink(item: NotificationItem): { label: string; to: string }
   if (t.startsWith('mod.') && s) return { label: 'Mods', to: paths.server(s, 'mods') }
   if (t.startsWith('backup.') && s) return { label: 'Backups', to: paths.server(s, 'backups') }
   if (t === 'schedule.failed' && s) return { label: 'Schedules', to: paths.server(s, 'schedules') }
+  if (t === 'server.version_change_failed' && s) return { label: 'Version', to: paths.server(s, 'settings') + '?sub=version' }
   if (t === 'node.offline' || t === 'node.disk_low') return { label: 'Nodes', to: paths.nodes }
   if (t === 'auth.new_device') return { label: 'Sessions', to: paths.account }
   return null

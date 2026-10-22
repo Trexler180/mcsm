@@ -23,6 +23,7 @@ import (
 	"github.com/mcsm/api/internal/mods/hangar"
 	"github.com/mcsm/api/internal/mods/modrinth"
 	"github.com/mcsm/api/internal/mods/spigotmc"
+	"github.com/mcsm/api/internal/notify"
 	"github.com/mcsm/api/internal/operations"
 	"github.com/mcsm/api/internal/store"
 )
@@ -75,6 +76,8 @@ type Engine struct {
 	actors sync.Map
 	// ops, when set, makes every migration an operation holding its server.
 	ops *operations.Manager
+	// notifier, when set, alerts people when a version change does not land.
+	notifier *notify.Engine
 
 	// Tunables (overridden in tests).
 	pollInterval time.Duration
@@ -166,6 +169,18 @@ type health struct {
 
 // SetOperations makes migrations operations under the shared per-server lock.
 func (e *Engine) SetOperations(ops *operations.Manager) { e.ops = ops }
+
+// SetNotifier wires in alerts for a version change that fails or is put back.
+func (e *Engine) SetNotifier(n *notify.Engine) { e.notifier = n }
+
+// alertFailed tells people a version change did not land. Nothing else does: the
+// trial boot's crash happens inside the run, so no crash alert goes out for it.
+func (e *Engine) alertFailed(srv *store.Server, fromMC, toMC, reason string, putBack bool) {
+	if e.notifier == nil {
+		return
+	}
+	e.notifier.Emit(notify.VersionChangeFailed(srv.ID, srv.Name, fromMC, toMC, reason, putBack))
+}
 
 // ── Public API ───────────────────────────────────────────────────────
 
@@ -275,6 +290,9 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		save("failed", true)
 		log.Error("migrate: run failed", "message", msg)
 		e.audit(srv.ID, "server.migrate_failed", map[string]any{"run_id": runID, "message": msg})
+		// Every failure here comes before the version changes, so the server is
+		// as it was.
+		e.alertFailed(srv, d.FromMC, d.ToMC, msg, true)
 	}
 
 	c := e.newAgent(node)
@@ -530,6 +548,7 @@ func (e *Engine) rollback(ctx context.Context, c agentAPI, srv *store.Server, pr
 		save("failed", true)
 		log.Error("migrate: restore failed", "error", err)
 		e.audit(srv.ID, "server.migrate_failed", map[string]any{"reason": reason, "restore_error": err.Error(), "backup_id": backupID})
+		e.alertFailed(srv, prevMC, d.ToMC, reason, false)
 		return
 	}
 
@@ -559,6 +578,7 @@ func (e *Engine) rollback(ctx context.Context, c agentAPI, srv *store.Server, pr
 	d.Message = reason + " — reverted to " + prevMC
 	save("reverted", true)
 	e.audit(srv.ID, "server.migrate_reverted", map[string]any{"reason": reason, "from": prevMC})
+	e.alertFailed(srv, prevMC, d.ToMC, reason, true)
 }
 
 func (e *Engine) finishHealthy(d *migrationDetail, save func(string, bool)) {

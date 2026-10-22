@@ -266,6 +266,33 @@ func ModUpdateReverted(serverID, serverName, mod, version, reason string) Event 
 	}
 }
 
+// VersionChangeFailed reports a version change that did not land. putBack says
+// whether the server was restored to fromMC; when it was not, the restore
+// itself failed and someone has to look, so the alert is critical.
+func VersionChangeFailed(serverID, serverName, fromMC, toMC, reason string, putBack bool) Event {
+	ev := Event{
+		Type: EventVersionChangeFailed, ServerID: serverID, ServerName: serverName,
+		Title: fmt.Sprintf("%s didn't move to %s", display(serverName, serverID), toMC),
+		Data:  map[string]any{"from": fromMC, "to": toMC, "reason": reason, "put_back": putBack},
+	}
+	if putBack {
+		ev.Body = fmt.Sprintf("%s. The server was put back on %s, as it was.", sentence(reason), fromMC)
+	} else {
+		ev.Severity = SeverityCritical
+		ev.Body = fmt.Sprintf("%s. It could not be put back on its own; its backup is still there to restore.", sentence(reason))
+	}
+	return ev
+}
+
+// sentence capitalises a lower-case engine message for an alert body.
+func sentence(s string) string {
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "."))
+	if s == "" {
+		return "It didn't work"
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // NewDeviceLogin warns an account owner of a sign-in from a device the
 // account has not used before. Sent only to that person.
 func NewDeviceLogin(ip, device string) Event {

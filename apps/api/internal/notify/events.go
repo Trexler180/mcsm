@@ -38,28 +38,29 @@ const (
 // Event type identifiers. Keep these stable — they are persisted in
 // subscriptions and notifications rows.
 const (
-	EventServerCrash        = "server.crash"
-	EventServerOffline      = "server.offline"
-	EventServerOnline       = "server.online"
-	EventServerStartFailed  = "server.start_failed"
-	EventModConflict        = "mod.conflict"
-	EventModUpdateAvailable = "mod.update_available"
-	EventModUpdateApplied   = "mod.update_applied"
-	EventModUpdateFailed    = "mod.update_failed"
-	EventBackupSuccess      = "backup.success"
-	EventBackupFailed       = "backup.failed"
-	EventNodeOffline        = "node.offline"
-	EventNodeOnline         = "node.online"
-	EventNodeDiskLow        = "node.disk_low"
-	EventServerPerformance  = "server.performance"
-	EventPlayerJoinDenied   = "player.join_denied"
-	EventMCPActionRequested = "mcp.action_requested"
-	EventMCPActionResolved  = "mcp.action_resolved"
-	EventTaskFailed         = "schedule.failed"
-	EventOperationAborted   = "operation.interrupted"
-	EventServerTPSLow       = "server.tps_low"
-	EventModUpdateReverted  = "mod.update_reverted"
-	EventAuthNewDevice      = "auth.new_device"
+	EventServerCrash         = "server.crash"
+	EventServerOffline       = "server.offline"
+	EventServerOnline        = "server.online"
+	EventServerStartFailed   = "server.start_failed"
+	EventModConflict         = "mod.conflict"
+	EventModUpdateAvailable  = "mod.update_available"
+	EventModUpdateApplied    = "mod.update_applied"
+	EventModUpdateFailed     = "mod.update_failed"
+	EventBackupSuccess       = "backup.success"
+	EventBackupFailed        = "backup.failed"
+	EventNodeOffline         = "node.offline"
+	EventNodeOnline          = "node.online"
+	EventNodeDiskLow         = "node.disk_low"
+	EventServerPerformance   = "server.performance"
+	EventPlayerJoinDenied    = "player.join_denied"
+	EventMCPActionRequested  = "mcp.action_requested"
+	EventMCPActionResolved   = "mcp.action_resolved"
+	EventTaskFailed          = "schedule.failed"
+	EventOperationAborted    = "operation.interrupted"
+	EventServerTPSLow        = "server.tps_low"
+	EventModUpdateReverted   = "mod.update_reverted"
+	EventAuthNewDevice       = "auth.new_device"
+	EventVersionChangeFailed = "server.version_change_failed"
 )
 
 // EventDef is the static description of an event type, surfaced to the frontend
@@ -96,6 +97,7 @@ var Catalog = []EventDef{
 	{EventServerPerformance, "Server under sustained load", "CPU or memory stayed above the alert threshold for several consecutive samples.", SeverityWarning, ScopeServer, false},
 	{EventServerTPSLow, "Server running slowly", "The helper mod reported fewer than 18 ticks per second for several minutes, so the game is lagging.", SeverityWarning, ScopeServer, false},
 	{EventModUpdateReverted, "Mod update reverted", "A safe update broke the server's boot, so the mod was put back to its previous version and the new one skipped.", SeverityWarning, ScopeServer, false},
+	{EventVersionChangeFailed, "Version change didn't work", "Moving a server to another Minecraft version failed or broke its boot, so the server was put back the way it was.", SeverityWarning, ScopeServer, true},
 	{EventAuthNewDevice, "Sign-in from a new device", "Your account signed in from a browser or device it has not used before.", SeverityWarning, ScopeGlobal, true},
 	{EventNodeOffline, "Node offline", "An agent node stopped responding to heartbeats.", SeverityWarning, ScopeNode, false},
 	{EventNodeOnline, "Node online", "An agent node started responding again.", SeverityInfo, ScopeNode, false},
