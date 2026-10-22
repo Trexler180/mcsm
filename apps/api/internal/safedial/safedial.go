@@ -52,14 +52,47 @@ func IsPublicIP(ip net.IP) bool {
 	}
 	if v4 := ip.To4(); v4 != nil {
 		// IsPrivate misses these IPv4 ranges that are still non-public.
-		if v4[0] == 0 { // 0.0.0.0/8 "this host"
+		switch {
+		case v4[0] == 0: // 0.0.0.0/8 "this host"
+			return false
+		case v4[0] == 100 && v4[1]&0xc0 == 64: // 100.64.0.0/10 carrier-grade NAT
+			return false
+		case v4[0] == 192 && v4[1] == 0 && v4[2] == 0: // 192.0.0.0/24 protocol assignments
+			return false
+		case v4[0] == 198 && v4[1]&0xfe == 18: // 198.18.0.0/15 benchmarking
+			return false
+		case v4[0] >= 240: // 240.0.0.0/4 reserved, and broadcast
 			return false
 		}
-		if v4[0] == 100 && v4[1]&0xc0 == 64 { // 100.64.0.0/10 carrier-grade NAT
-			return false
-		}
+		return true
+	}
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return false
+	}
+	// Addresses that carry an IPv4 address inside them reach it through a
+	// translator or relay: judge them by the address they carry.
+	switch {
+	case isPrefix(ip16, nat64, 96), isPrefix(ip16, nat64Local, 48):
+		return IsPublicIP(net.IP(ip16[12:16]))
+	case ip16[0] == 0x20 && ip16[1] == 0x02: // 2002::/16 6to4
+		return IsPublicIP(net.IP(ip16[2:6]))
+	case ip16[0] == 0xfe && ip16[1]&0xc0 == 0xc0: // fec0::/10 site-local
+		return false
+	case isPrefix(ip16, make(net.IP, 16), 96): // ::a.b.c.d, IPv4-compatible
+		return false
 	}
 	return true
+}
+
+var (
+	nat64      = net.ParseIP("64:ff9b::")   // 64:ff9b::/96 well-known NAT64
+	nat64Local = net.ParseIP("64:ff9b:1::") // 64:ff9b:1::/48 local-use NAT64
+)
+
+// isPrefix reports whether ip (16 bytes) starts with the first bits of prefix.
+func isPrefix(ip, prefix net.IP, bits int) bool {
+	return net.IP.Mask(ip, net.CIDRMask(bits, 128)).Equal(net.IP.Mask(prefix, net.CIDRMask(bits, 128)))
 }
 
 // ValidateHTTPURL rejects anything that isn't a well-formed http(s) URL with a
