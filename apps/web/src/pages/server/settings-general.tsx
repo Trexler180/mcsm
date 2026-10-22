@@ -66,6 +66,18 @@ function newId() {
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 }
 
+// One public id per server for a pack not yet set up, kept for the session so
+// every refresh of the server agrees on it.
+const freshPackIds = new Map<string, string>()
+function freshPackId(serverId: string): string {
+  let id = freshPackIds.get(serverId)
+  if (!id) {
+    id = newId()
+    freshPackIds.set(serverId, id)
+  }
+  return id
+}
+
 /** The server's resource pack as a draft. A server that has never had one gets
  *  freshId for its public address: the caller keeps that stable, because a new
  *  random one on every refresh would read as an unsaved change. */
@@ -114,7 +126,6 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
   const canFiles = allowed(perms, 'files.write')
   const up = status === 'online'
 
-  const freshPackId = useMemo(() => newId(), [server.id])
   const source = useMemo<Draft>(
     () => ({
       name: server.name,
@@ -130,9 +141,9 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
       connect_address: view?.values.connect_address ?? '',
       helper_mod: helper?.enabled ?? false,
       motd: identity?.motd ?? '',
-      pack: packOf(server, freshPackId),
+      pack: packOf(server, freshPackId(server.id)),
     }),
-    [server, view, helper, identity, freshPackId],
+    [server, view, helper, identity],
   )
   const [d, setD] = useState<Draft>(source)
   // A fresh copy from the server replaces the draft only while nothing is edited.
