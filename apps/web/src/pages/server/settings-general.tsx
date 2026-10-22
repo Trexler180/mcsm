@@ -66,12 +66,15 @@ function newId() {
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 }
 
-function packOf(server: Server): Pack {
+/** The server's resource pack as a draft. A server that has never had one gets
+ *  freshId for its public address: the caller keeps that stable, because a new
+ *  random one on every refresh would read as an unsaved change. */
+export function packOf(server: Server, freshId: string): Pack {
   const s = (server.settings?.resource_pack ?? {}) as Partial<Pack>
   return {
     enabled: s.enabled ?? false,
     path: s.path ?? '',
-    public_id: s.public_id ?? newId(),
+    public_id: s.public_id ?? freshId,
     sha1: s.sha1 ?? '',
     file_name: s.file_name ?? '',
     source: s.source ?? (s.path?.toLowerCase().endsWith('/resources.zip') ? 'world' : 'uploaded'),
@@ -111,6 +114,7 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
   const canFiles = allowed(perms, 'files.write')
   const up = status === 'online'
 
+  const freshPackId = useMemo(() => newId(), [server.id])
   const source = useMemo<Draft>(
     () => ({
       name: server.name,
@@ -126,9 +130,9 @@ export function GeneralSettings({ server, live, status, perms }: { server: Serve
       connect_address: view?.values.connect_address ?? '',
       helper_mod: helper?.enabled ?? false,
       motd: identity?.motd ?? '',
-      pack: packOf(server),
+      pack: packOf(server, freshPackId),
     }),
-    [server, view, helper, identity],
+    [server, view, helper, identity, freshPackId],
   )
   const [d, setD] = useState<Draft>(source)
   // A fresh copy from the server replaces the draft only while nothing is edited.
