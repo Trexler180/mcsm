@@ -569,6 +569,8 @@ func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "install restore: "+err.Error())
 		return
 	}
+	// The files a crashed run left behind are gone; so is its crash.
+	h.mgr.ForgetExited(id)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": backupID})
 }

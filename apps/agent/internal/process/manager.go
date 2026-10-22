@@ -136,6 +136,19 @@ func (m *Manager) Stop(id string, graceful bool, timeout time.Duration) error {
 	return inst.stop(graceful, timeout)
 }
 
+// ForgetExited drops the record of a server whose process has already exited,
+// so its status reads offline again. A restore calls it: a crash or startup
+// failure on the record happened on files that were just replaced, and the
+// panel would otherwise keep showing it long after the server is fine. A live
+// process is left alone.
+func (m *Manager) ForgetExited(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[id]; ok && inst.exited() {
+		delete(m.instances, id)
+	}
+}
+
 func (m *Manager) Kill(id string) error {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
