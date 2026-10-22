@@ -103,15 +103,23 @@ function BackupsBody({ server, status, list }: { server: Server; status: StatusK
     const at = toMs(b.started_at) ?? 0
     const ok = await ask({
       title: `Restore ${server.name} to ${fmtDay(at).toLowerCase() === 'today' ? 'today' : fmtDate(at, false)} at ${fmtClock(at)}?`,
-      body: `Everything in its folder is replaced with this backup, so anything built since then is lost. A backup of how it is now is made first.${live ? ' The server is stopped first and started again afterwards.' : ''}`,
+      body: `Everything in its folder is replaced with this backup, so anything built since then is lost. A backup of how it is now is made first.${live ? ' The server is stopped first, and stays stopped afterwards so you can look before starting it.' : ''}`,
       confirm: 'Restore',
       danger: true,
     })
     if (!ok) return
+    const when = `${fmtDay(at).toLowerCase() === 'today' ? 'today' : fmtDate(at, false)} at ${fmtClock(at)}`
     const r = await act(`restore ${server.name}`, () => api.backups.restore(server.id, b.id))
     if (r === undefined) return
     toast('info', `Restoring ${server.name}`, 'It stays stopped until it’s done.')
     refresh()
+    // Say when it's done, or why it isn't: otherwise the progress just ends.
+    const done = await act(`restore ${server.name}`, () => api.operations.wait(server.id, r.operation))
+    refresh()
+    if (done === undefined) return
+    toast('ok', `Restored ${server.name}`, `It’s back to how it was ${when}.`, {
+      actions: live ? [{ label: 'Start it', run: () => void act(`start ${server.name}`, () => api.servers.start(server.id)) }] : undefined,
+    })
   }
   const remove = async (b: Backup) => {
     const at = toMs(b.started_at) ?? 0
@@ -139,7 +147,7 @@ function BackupsBody({ server, status, list }: { server: Server; status: StatusK
             {ok.length > 0 && (
               <>
                 {' '}
-                {plural(ok.length, 'backup')} use {fmtBytes(total)}.
+                {plural(ok.length, 'backup')} {ok.length === 1 ? 'uses' : 'use'} {fmtBytes(total)}.
               </>
             )}{' '}
             <TextBtn quiet need="backups.delete" onClick={() => setKeepOpen(true)}>
