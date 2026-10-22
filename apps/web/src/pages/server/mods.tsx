@@ -29,7 +29,8 @@ export function modsViewOf(sub: string | undefined): ModsView {
 export function ModsTab({ server, status, perms, view, setView }: { server: Server; status: StatusKey; perms: MyServerPermissions | undefined; view: ModsView; setView: (v: ModsView) => void }) {
   const qc = useQueryClient()
   const mods = useQuery({ queryKey: ['mods', server.id], queryFn: () => api.mods.list(server.id) })
-  const updates = useQuery({ queryKey: ['mod-updates', server.id], queryFn: () => api.mods.updates(server.id), staleTime: 5 * 60_000, retry: false }).data ?? []
+  const updatesQ = useQuery({ queryKey: ['mod-updates', server.id], queryFn: () => api.mods.updates(server.id), staleTime: 5 * 60_000, retry: false })
+  const updates = updatesQ.data ?? []
   const [safe, setSafe] = useState(false)
   const [pct, setPct] = useState<number | null>(null)
   // Browse stays mounted once opened, so its search and filters survive a
@@ -41,7 +42,14 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
   const [found, setFound] = useState<number | null>(null)
   const upRef = useRef<HTMLInputElement>(null)
   const word = contentLabel(server.platform)
-  const pending = updates.filter((u) => u.enabled && !mods.data?.find((m) => m.id === u.mod_id)?.pinned)
+  const installedById = new Map((mods.data ?? []).map((m) => [m.id, m]))
+  // The safe update leaves turned-off and pinned mods alone. Names come from the
+  // installed list, which the rescan keeps as project titles; the update list
+  // can be older than that and still carry a version's name.
+  const pending = updates
+    .filter((u) => u.enabled && !installedById.get(u.mod_id)?.pinned)
+    .map((u) => ({ ...u, name: installedById.get(u.mod_id)?.name ?? u.name }))
+  const offWithUpdates = updates.filter((u) => !u.enabled && !installedById.get(u.mod_id)?.pinned).length
   const upload = async (files: File[]) => {
     const bad = files.find((f) => !/\.(jar|zip)$/i.test(f.name))
     if (bad) {
@@ -88,14 +96,19 @@ export function ModsTab({ server, status, perms, view, setView }: { server: Serv
           {pct !== null ? `Uploading ${pct}%` : 'Upload .jar'}
         </Btn>
         {pending.length > 0 && (
-          <Btn variant="primary" need="mods.update" onClick={() => setSafe(true)}>
+          <Btn
+            variant="primary"
+            need="mods.update"
+            tip={offWithUpdates ? `${plural(offWithUpdates, 'turned-off ' + word.toLowerCase().replace(/s$/, ''))} with an update ${offWithUpdates === 1 ? 'is' : 'are'} left as ${offWithUpdates === 1 ? 'it is' : 'they are'}` : undefined}
+            onClick={() => setSafe(true)}
+          >
             Update {pending.length}
           </Btn>
         )}
       </div>
       {view === 'installed' && (
         <Loaded query={mods} sk={<SkTable rows={8} icons />} what={`${word.toLowerCase()} on ${server.name}`}>
-          {(list) => <Installed server={server} status={status} list={list} updates={updates} />}
+          {(list) => <Installed server={server} status={status} list={list} updates={updates} updatesPending={updatesQ.isPending} />}
         </Loaded>
       )}
       {browsed && (
@@ -137,7 +150,7 @@ function kindOf(m: InstalledMod, platform: string): ModProjectType {
   return PLATFORMS[platform]?.content === 'plugin' ? 'plugin' : 'mod'
 }
 
-function Installed({ server, status, list, updates }: { server: Server; status: StatusKey; list: InstalledMod[]; updates: ModUpdate[] }) {
+function Installed({ server, status, list, updates, updatesPending }: { server: Server; status: StatusKey; list: InstalledMod[]; updates: ModUpdate[]; updatesPending: boolean }) {
   const qc = useQueryClient()
   const [q, setQ] = useState('')
   const [show, setShow] = useState<Show>('all')
@@ -215,7 +228,9 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
           label={`Which ${word}`}
           options={[
             { value: 'all', label: 'All', count: counts.all },
-            { value: 'updates', label: 'Updates', count: counts.updates },
+            // Until the first check answers there is no count to give: "0" would
+            // read as "everything is current".
+            { value: 'updates', label: 'Updates', count: updatesPending ? undefined : counts.updates },
             { value: 'on', label: 'On', count: counts.on },
             { value: 'off', label: 'Off', count: counts.off },
           ]}
@@ -223,11 +238,11 @@ function Installed({ server, status, list, updates }: { server: Server; status: 
         <Search value={q} onChange={setQ} placeholder={`Filter ${word}`} size="sm" style={{ width: 220 }} />
         <span className="grow" />
         <TextBtn quiet onClick={() => void check()}>
-          {checking ? 'Checking…' : 'Check for updates'}
+          {checking || updatesPending ? 'Checking…' : 'Check for updates'}
         </TextBtn>
       </div>
       {rows.length === 0 ? (
-        <Empty title={!list.length ? `No ${word} yet.` : show === 'updates' && !needle ? 'Everything is up to date.' : 'Nothing matches.'}>{!list.length && 'Find some under Browse, or upload a jar.'}</Empty>
+        <Empty title={!list.length ? `No ${word} yet.` : show === 'updates' && !needle ? (updatesPending ? 'Checking for updates…' : 'Everything is up to date.') : 'Nothing matches.'}>{!list.length && 'Find some under Browse, or upload a jar.'}</Empty>
       ) : (
         <table className="t mods-t">
           <thead>
