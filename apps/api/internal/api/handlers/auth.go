@@ -130,7 +130,12 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 	if cfg.Enabled {
 		switch {
 		case body.TOTPCode != "":
-			if !auth.ValidateTOTP(cfg.Secret, body.TOTPCode, time.Now()) {
+			ok, err := acceptTOTP(r.Context(), h.store, user.ID, cfg.Secret, body.TOTPCode)
+			if err != nil {
+				writeServerError(w, r, "login: totp", err)
+				return
+			}
+			if !ok {
 				failAuth("bad_totp", user.ID)
 				writeError(w, http.StatusUnauthorized, "invalid authentication code")
 				return

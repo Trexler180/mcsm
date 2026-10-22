@@ -51,7 +51,7 @@ func (s *Store) SetUserTOTPSecret(ctx context.Context, userID, secret string) er
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE users SET totp_secret = ?, totp_enabled = 0, totp_recovery = NULL WHERE id = ?`,
+		`UPDATE users SET totp_secret = ?, totp_enabled = 0, totp_recovery = NULL, totp_last_step = NULL WHERE id = ?`,
 		enc, userID)
 	return err
 }
@@ -75,11 +75,25 @@ func (s *Store) EnableUserTOTP(ctx context.Context, userID string, recoveryHashe
 	return nil
 }
 
+// UseTOTPStep records that a code for time step was accepted for the user,
+// and reports false when that step, or a later one, already was: the code
+// has been used and must not be accepted again.
+func (s *Store) UseTOTPStep(ctx context.Context, userID string, step int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET totp_last_step = ? WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)`,
+		step, userID, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // DisableUserTOTP clears all MFA state for a user (self-service with a verified
 // code, or an admin reset for a locked-out user).
 func (s *Store) DisableUserTOTP(ctx context.Context, userID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_recovery = NULL WHERE id = ?`,
+		`UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_recovery = NULL, totp_last_step = NULL WHERE id = ?`,
 		userID)
 	return err
 }

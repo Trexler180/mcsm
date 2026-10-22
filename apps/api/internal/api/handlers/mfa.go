@@ -3,7 +3,6 @@ package handlers
 import (
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/mcsm/api/internal/auth"
 	"github.com/mcsm/api/internal/store"
@@ -122,7 +121,12 @@ func (h *MFAHandlers) Enable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "run setup first")
 		return
 	}
-	if !auth.ValidateTOTP(cfg.Secret, body.Code, time.Now()) {
+	ok, err := acceptTOTP(r.Context(), h.store, uid, cfg.Secret, body.Code)
+	if err != nil {
+		writeServerError(w, r, "mfa enable: totp", err)
+		return
+	}
+	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid code")
 		return
 	}

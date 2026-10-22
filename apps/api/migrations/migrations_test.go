@@ -376,7 +376,7 @@ func TestVersionChangeFailedSubscriptionBackfill(t *testing.T) {
 		t.Errorf("u2's own rule was replaced (id %s); an opt-out must survive the upgrade", id)
 	}
 
-	if err := goose.Down(db, "."); err != nil {
+	if err := goose.DownTo(db, ".", 37); err != nil {
 		t.Fatal(err)
 	}
 	var n int

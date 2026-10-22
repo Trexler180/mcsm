@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -98,7 +99,12 @@ func stepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, acct *au
 	if cfg.Enabled {
 		switch {
 		case totpCode != "":
-			if !auth.ValidateTOTP(cfg.Secret, totpCode, time.Now()) {
+			ok, err := acceptTOTP(r.Context(), s, userID, cfg.Secret, totpCode)
+			if err != nil {
+				writeServerError(w, r, label+": totp", err)
+				return false
+			}
+			if !ok {
 				fail()
 				return false
 			}
@@ -121,4 +127,15 @@ func stepUp(w http.ResponseWriter, r *http.Request, s *store.Store, ip, acct *au
 	ip.Reset(ipKey)
 	acct.Reset(acctKey)
 	return true
+}
+
+// acceptTOTP checks an authenticator code and spends it: a code is good once,
+// so one read over a shoulder or out of a log can't be replayed while it is
+// still current (RFC 6238 §5.2).
+func acceptTOTP(ctx context.Context, s *store.Store, userID, secret, code string) (bool, error) {
+	step, ok := auth.MatchTOTP(secret, code, time.Now())
+	if !ok {
+		return false, nil
+	}
+	return s.UseTOTPStep(ctx, userID, step)
 }

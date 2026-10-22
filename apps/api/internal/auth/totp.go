@@ -53,22 +53,29 @@ func TOTPProvisioningURI(secret, issuer, account string) string {
 // ValidateTOTP reports whether code is valid for secret at time t, accepting the
 // adjacent windows to tolerate drift. The comparison is constant-time.
 func ValidateTOTP(secret, code string, t time.Time) bool {
+	_, ok := MatchTOTP(secret, code, t)
+	return ok
+}
+
+// MatchTOTP is ValidateTOTP that also says which time step the code belongs
+// to, so a caller can refuse the same code twice (RFC 6238 §5.2).
+func MatchTOTP(secret, code string, t time.Time) (step int64, ok bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != totpDigits {
-		return false
+		return 0, false
 	}
 	key, err := base32NoPad.DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 	if err != nil {
-		return false
+		return 0, false
 	}
-	counter := uint64(t.Unix()) / uint64(totpPeriod.Seconds())
+	counter := int64(t.Unix()) / int64(totpPeriod.Seconds())
 	for delta := -totpSkew; delta <= totpSkew; delta++ {
-		want := hotp(key, counter+uint64(delta))
+		want := hotp(key, uint64(counter+int64(delta)))
 		if subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
-			return true
+			return counter + int64(delta), true
 		}
 	}
-	return false
+	return 0, false
 }
 
 func hotp(key []byte, counter uint64) string {
