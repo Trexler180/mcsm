@@ -16,7 +16,7 @@ import { ask } from '@/ui/store'
 import { toast } from '@/ui/toasts'
 import { cx, plural } from '@/ui/util'
 import { CodeEditor } from './code-editor'
-import { isLiveStatus } from './data'
+import { isLiveStatus, okToOverwrite } from './data'
 import { NbtTree } from './nbt-view'
 
 // The server's folder: browse, upload, rename and delete, and open a file
@@ -495,6 +495,7 @@ function TextPane({ server, status, path, name, onDirty, onClose }: { server: Se
     if (!dirty || saving || !can('files.write')) return
     const content = text as string
     setSaving(true)
+    if (!(await okToOverwrite(server.id, path, original, content))) return setSaving(false)
     const r = await act(`save ${name}`, () => api.files.writeContent(server.id, path, content).then(() => true))
     setSaving(false)
     if (!r) return

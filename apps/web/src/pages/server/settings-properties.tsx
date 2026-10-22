@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import {
@@ -6,7 +6,9 @@ import {
   defaultServerPropertiesFor,
   parseProperties,
   propertyCategories,
+  propertyEdits,
   propertyFields,
+  rebaseProperties,
   serializeProperties,
   type PropertiesMap,
   type PropertyField,
@@ -69,10 +71,18 @@ function Editor({ server, status, perms, text }: { server: Server; status: Statu
   const [d, setD] = useState<PropertiesMap>(source)
   const [q, setQ] = useState('')
   const [nonDefaultOnly, setNonDefaultOnly] = useState(false)
-  useEffect(() => setD(source), [source])
+  // A fresher copy of the file (someone else saved, or the server rewrote it)
+  // comes in under the edits made here rather than replacing them.
+  const loaded = useRef(source)
+  useEffect(() => {
+    if (loaded.current === source) return
+    const prev = loaded.current
+    loaded.current = source
+    setD((draft) => rebaseProperties(prev, draft, source))
+  }, [source])
   const canEdit = allowed(perms, 'files.write')
   const live = status === 'online' || status === 'starting'
-  const changed = Object.keys(d).filter((k) => d[k] !== source[k])
+  const changed = Object.keys(propertyEdits(source, d))
   const nonDefault = (k: string) => DEFAULTS[k] !== undefined && (d[k] ?? '') !== DEFAULTS[k]
 
   // Known keys first, then anything else the file has, under Other.
@@ -89,7 +99,10 @@ function Editor({ server, status, perms, text }: { server: Server; status: Statu
   const invalid = fields.filter((f) => f.type === 'number' && d[f.key] != null && d[f.key] !== '' && !numberOk(f, d[f.key]))
   const save = async () => {
     if (invalid.length) throw new Error('Some numbers are out of range.')
-    await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, d))
+    // Only what was edited here, onto the file as it is now: writing back the
+    // whole copy this page loaded would undo anything saved since.
+    const now = await api.files.readContent(server.id, '/server.properties')
+    await api.files.writeContent(server.id, '/server.properties', serializeProperties(now, propertyEdits(source, d)))
     toast('ok', `Saved ${plural(changed.length, 'change')}`, live ? 'They take effect after a restart.' : undefined, {
       actions: live ? [{ label: 'Restart now', run: () => void act(`restart ${server.name}`, () => api.servers.restart(server.id)) }] : undefined,
     })

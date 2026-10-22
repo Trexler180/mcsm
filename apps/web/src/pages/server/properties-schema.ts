@@ -581,6 +581,21 @@ export function serializeProperties(original: string, values: PropertiesMap): st
   return [...lines, ...missing].join("\n");
 }
 
+/** The keys a draft changed from the file it was loaded from. */
+export function propertyEdits(loaded: PropertiesMap, draft: PropertiesMap): PropertiesMap {
+  const out: PropertiesMap = {};
+  for (const k of Object.keys(draft)) if (draft[k] !== loaded[k]) out[k] = draft[k];
+  return out;
+}
+
+/**
+ * A draft moved onto a newer copy of the file: someone else's changes come in,
+ * and the keys this draft edited keep the values typed here.
+ */
+export function rebaseProperties(loaded: PropertiesMap, draft: PropertiesMap, next: PropertiesMap): PropertiesMap {
+  return { ...next, ...propertyEdits(loaded, draft) };
+}
+
 export function getPropertyGroups(values: PropertiesMap) {
   const knownKeys = new Set(propertyFields.map((field) => field.key));
   const customFields: PropertyField[] = Object.keys(values)

@@ -12,6 +12,7 @@ import { FilesSkeleton } from '@/ui/skeleton'
 import { toast } from '@/ui/toasts'
 import { cx, plural } from '@/ui/util'
 import { CodeEditor } from './code-editor'
+import { okToOverwrite } from './data'
 
 // Mod and plugin config files as forms: every option with the comment that
 // explains it, edited in place so comments and formatting survive, with the
@@ -215,9 +216,14 @@ function ConfigEditor({ server, path, target, onBack }: { server: Server; path: 
   const [rev, setRev] = useState(0)
   const [, setTick] = useState(0)
 
-  // Start over whenever the file's text arrives.
+  // Start over whenever the file's text arrives, unless that would throw away
+  // edits: then saving asks first (see okToOverwrite).
+  const dirtyNow = useRef(false)
+  dirtyNow.current = dirty
+  const opened = useRef('')
   useEffect(() => {
-    if (content.data === undefined) return
+    if (content.data === undefined || dirtyNow.current) return
+    opened.current = content.data
     const p = parseConfig(name, content.data)
     setBase(content.data)
     setRaw(content.data)
@@ -254,9 +260,11 @@ function ConfigEditor({ server, path, target, onBack }: { server: Server; path: 
     if (!dirty || saving) return
     const next = text()
     setSaving(true)
+    if (!(await okToOverwrite(server.id, path, opened.current, next))) return setSaving(false)
     const r = await act(`save ${name}`, () => api.files.writeContent(server.id, path, next).then(() => true))
     setSaving(false)
     if (!r) return
+    opened.current = next
     qc.setQueryData(['file-content', server.id, path], next)
     setDirty(false)
     toast('ok', `Saved ${name}`, 'Most mods read their config when the server starts.')

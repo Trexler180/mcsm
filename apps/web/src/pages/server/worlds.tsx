@@ -98,8 +98,9 @@ export function WorldsTab({ server, status }: { server: Server; status: StatusKe
 
   const load = (w: WorldRow) =>
     void act(`load ${w.folder}`, async () => {
-      const text = propsFile.data ?? defaultServerPropertiesFor(server.port)
-      await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { ...parseProperties(text), 'level-name': w.folder }))
+      // The file as it is now, not as this page loaded it: only level-name changes.
+      const text = await api.files.readContent(server.id, '/server.properties').catch(() => defaultServerPropertiesFor(server.port))
+      await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { 'level-name': w.folder }))
       return true
     }).then((r) => {
       if (r === undefined) return
@@ -184,7 +185,6 @@ export function WorldsTab({ server, status }: { server: Server; status: StatusKe
           worlds={worlds.map((w) => w.folder)}
           folders={(root.data?.entries ?? []).filter((e) => e.type === 'dir').map((e) => e.name)}
           loaded={loadedName}
-          propsText={propsFile.data}
           onClose={() => setUpload(null)}
           onDone={(name) => refresh(name)}
         />
@@ -449,7 +449,6 @@ function WorldUploadDialog({
   worlds,
   folders,
   loaded,
-  propsText,
   onClose,
   onDone,
 }: {
@@ -459,7 +458,6 @@ function WorldUploadDialog({
   worlds: string[]
   folders: string[]
   loaded: string
-  propsText: string | undefined
   onClose: () => void
   onDone: (name: string) => void
 }) {
@@ -513,8 +511,8 @@ function WorldUploadDialog({
       )
       const makeLoaded = loadIt && !isLoaded
       if (makeLoaded) {
-        const text = propsText ?? (await api.files.readContent(server.id, '/server.properties').catch(() => defaultServerPropertiesFor(server.port)))
-        await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { ...parseProperties(text), 'level-name': result.name }))
+        const text = await api.files.readContent(server.id, '/server.properties').catch(() => defaultServerPropertiesFor(server.port))
+        await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { 'level-name': result.name }))
       }
       toast(
         'ok',

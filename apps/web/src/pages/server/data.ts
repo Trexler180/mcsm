@@ -4,6 +4,7 @@ import { can } from '@/lib/permissions'
 import type { FleetServer, MyServerPermissions, Server, ServerPermission } from '@/lib/types'
 import { effStatus, useFleet } from '@/shell/fleet'
 import type { StatusKey } from '@/ui/controls'
+import { ask } from '@/ui/store'
 
 // What a server's pages read. Each is one query, shared by key with the rest
 // of the panel, so the header, the console and the tabs never disagree.
@@ -52,4 +53,22 @@ export function allowed(perms: MyServerPermissions | undefined, need: ServerPerm
 /** Why a server didn't start, when it didn't. */
 export function useStartupProblem(id: string, enabled: boolean) {
   return useQuery({ queryKey: ['startup-problem', id], queryFn: () => api.servers.startupProblem(id), enabled, staleTime: 15_000, retry: false })
+}
+
+/**
+ * Whether saving over a file is fine: true when the file is still what the
+ * editor opened (or already what it would write), otherwise the person is
+ * asked. A config the server rewrote on start, or a save from another tab,
+ * would else be overwritten without anyone seeing it.
+ */
+export async function okToOverwrite(serverId: string, path: string, opened: string, next: string): Promise<boolean> {
+  const now = await api.files.readContent(serverId, path).catch(() => null)
+  if (now === null || now === opened || now === next) return true
+  const name = path.split('/').pop() ?? path
+  return ask({
+    title: `${name} changed since you opened it`,
+    body: 'Someone else saved it, or the server rewrote it. Saving now replaces that with your version.',
+    confirm: 'Save mine anyway',
+    danger: true,
+  })
 }

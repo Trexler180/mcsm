@@ -106,7 +106,7 @@ test.afterAll(async () => {
   await expect
     .poll(async () => (await api<{ status: string }>('GET', `/servers/${serverId}`)).status, { timeout: 90_000 })
     .toMatch(/offline|stopped|crashed/)
-  await api('DELETE', `/servers/${serverId}?delete_files=true&delete_backups=true`)
+  await api('DELETE', `/servers/${serverId}?files=true&backups=true`)
 })
 
 /**
