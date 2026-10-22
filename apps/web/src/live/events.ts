@@ -1,4 +1,4 @@
-import { ApiError, api } from '@/lib/api'
+import { ApiError, SESSION_ENDED, api } from '@/lib/api'
 import { INITIAL_CONNECTION, useConnection, type Connection } from './connection'
 import type { LiveEvent } from './apply'
 
@@ -114,7 +114,10 @@ export class LiveEvents {
     } catch (e) {
       if (gen !== this.generation) return
       this.panelSilent = unreachable(e)
-      this.lost()
+      // The session is over: every try would fail the same way until the
+      // person signs in again, which reconnects (reconnectLive). Wait for that
+      // instead of asking the panel every 15 seconds behind the sign-in prompt.
+      this.lost(e instanceof ApiError && e.code === SESSION_ENDED)
       return
     }
     if (gen !== this.generation || !this.running) return
@@ -171,13 +174,18 @@ export class LiveEvents {
     if (was.state !== 'up' && was.since != null) this.handlers.onBack(this.deps.now() - was.since)
   }
 
-  /** The stream is gone (or never came up): say so and schedule a try. */
-  private lost() {
+  /** The stream is gone (or never came up): say so and schedule a try, unless
+   *  it's waiting for the person to sign in again. */
+  private lost(waitForSignIn = false) {
     if (!this.running) return
     const now = this.deps.now()
     const c = this.conn
     if (c.state === 'up') {
       this.set({ state: 'reconnecting', since: now, attempt: 0, nextAt: null, checkedAt: now })
+    }
+    if (waitForSignIn) {
+      this.set({ ...this.conn, nextAt: null })
+      return
     }
     this.schedule()
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError } from '@/lib/api'
+import { ApiError, SESSION_ENDED } from '@/lib/api'
 import type { Connection } from './connection'
 import { DOWN_AFTER, LiveEvents, RETRY_MS, type LiveDeps } from './events'
 import type { LiveEvent } from './apply'
@@ -62,6 +62,26 @@ function harness(ticket: () => Promise<string> = async () => 't') {
 }
 
 describe('LiveEvents', () => {
+  // A deleted account or a signed-out session fails every ticket the same way;
+  // retrying every 15 s behind the sign-in prompt only fills the log.
+  it('waits for a sign-in instead of retrying when the session is over', async () => {
+    let ended = true
+    const h = harness(async () => {
+      if (ended) throw new ApiError(401, 'Your session ended.', { code: SESSION_ENDED })
+      return 't'
+    })
+    h.live.start(0)
+    await h.flush()
+    await h.advance(60_000)
+    expect(h.sockets).toHaveLength(0)
+    expect(h.last().nextAt).toBeNull()
+
+    ended = false
+    h.live.tryNow() // what signing in again does
+    await h.flush()
+    expect(h.sockets).toHaveLength(1)
+  })
+
   it('connects with a ticket and resumes from the sequence it was given', async () => {
     const h = harness()
     h.live.start(42)
