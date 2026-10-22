@@ -21,6 +21,7 @@ import (
 
 func (h *ModHandlers) InstallModpack(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 	var body struct {
 		ProjectID string `json:"project_id"`
 		VersionID string `json:"version_id"`

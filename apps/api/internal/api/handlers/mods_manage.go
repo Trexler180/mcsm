@@ -18,6 +18,7 @@ const disabledSuffix = ".disabled"
 // row's file_name is updated to match so uninstall/update keep working.
 func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 	modID := chi.URLParam(r, "modId")
 	var body struct {
 		Enabled bool `json:"enabled"`
@@ -123,6 +124,7 @@ func (h *ModHandlers) SetEnabled(w http.ResponseWriter, r *http.Request) {
 // enabled flag on any matching DB-tracked mods so the panel stays consistent.
 func (h *ModHandlers) DisableConflict(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 
 	var body struct {
 		ModIDs []string `json:"mod_ids"`
@@ -215,6 +217,7 @@ func (h *ModHandlers) RecordConflict(w http.ResponseWriter, r *http.Request) {
 
 func (h *ModHandlers) Uninstall(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 	modID := chi.URLParam(r, "modId")
 
 	mod, err := h.store.GetMod(r.Context(), modID)

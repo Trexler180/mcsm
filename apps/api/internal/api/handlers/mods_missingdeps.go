@@ -75,6 +75,7 @@ var uninstallableModIDs = map[string]bool{
 // it found and the operator confirms — so it is safe under mods:read.
 func (h *ModHandlers) ResolveMissingDeps(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 
 	var body struct {
 		ModIDs []string `json:"mod_ids"`

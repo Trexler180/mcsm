@@ -72,9 +72,30 @@ func (h *ModHandlers) reconcileFromDisk(ctx context.Context, serverID string) {
 
 		tracked := map[string]*store.InstalledMod{} // lowercase filename -> row
 		for _, m := range mods {
-			if samePath(m.InstallPath, dir) {
-				tracked[strings.ToLower(m.FileName)] = m
+			if !samePath(m.InstallPath, dir) {
+				continue
 			}
+			key := strings.ToLower(m.FileName)
+			prev, dup := tracked[key]
+			if !dup {
+				tracked[key] = m
+				continue
+			}
+			// Two rows for one jar: left by a rescan that adopted a jar while
+			// an install was recording it. Keep one, preferring a known project
+			// over "custom", then the older row.
+			keep, drop := prev, m
+			if (keep.Source == "custom") != (drop.Source == "custom") {
+				if keep.Source == "custom" {
+					keep, drop = drop, keep
+				}
+			} else if drop.InstalledAt.Before(keep.InstalledAt) {
+				keep, drop = drop, keep
+			}
+			if _, err := h.store.DeleteMod(ctx, drop.ID); err != nil {
+				continue
+			}
+			tracked[key] = keep
 		}
 
 		for _, e := range listing.Entries {

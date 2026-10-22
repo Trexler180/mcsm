@@ -34,6 +34,33 @@ type modRescans struct {
 	last     map[string]time.Time
 }
 
+// modLocks serializes the changes to one server's mod jars and rows: an
+// install, toggle, update or removal, and the rescan that reconciles rows with
+// the disk. Without it a rescan that lists the folder while an install is
+// between writing the jar and recording it adopts the jar as a second row for
+// the same file, and one that lists it mid-rename prunes the row of a mod
+// being turned off.
+type modLocks struct {
+	mu sync.Mutex
+	m  map[string]*sync.Mutex
+}
+
+// lockMods holds the server's mod lock until the returned func is called.
+func (h *ModHandlers) lockMods(serverID string) (unlock func()) {
+	h.modLocks.mu.Lock()
+	if h.modLocks.m == nil {
+		h.modLocks.m = map[string]*sync.Mutex{}
+	}
+	l, ok := h.modLocks.m[serverID]
+	if !ok {
+		l = &sync.Mutex{}
+		h.modLocks.m[serverID] = l
+	}
+	h.modLocks.mu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
 // rescanState is reported on GET /mods in X-Mods-Rescan.
 const (
 	rescanFresh   = "fresh"
@@ -85,7 +112,7 @@ func (h *ModHandlers) rescan(serverID string, done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), modRescanBudget)
 	defer cancel()
 
-	h.reconcileFromDisk(ctx, serverID)
+	h.reconcileLocked(ctx, serverID)
 	mods, err := h.store.ListMods(ctx, serverID)
 	if err != nil {
 		slog.Warn("mods rescan: list", "server_id", serverID, "error", err)
@@ -97,6 +124,20 @@ func (h *ModHandlers) rescan(serverID string, done chan struct{}) {
 		h.bus.Publish(events.Event{Type: events.ServerUpdated, ServerID: serverID,
 			Data: map[string]any{"what": "mods"}})
 	}
+}
+
+// reconcileLocked reconciles under the server's mod lock, and not at all while
+// an operation (a version change, an update run, a restore) is rewriting the
+// server's files: those change jars and rows in steps a listing must not see
+// half done. The next rescan picks up whatever they leave.
+func (h *ModHandlers) reconcileLocked(ctx context.Context, serverID string) {
+	defer h.lockMods(serverID)()
+	if h.ops != nil {
+		if err := h.ops.Guard(ctx, serverID); err != nil {
+			return
+		}
+	}
+	h.reconcileFromDisk(ctx, serverID)
 }
 
 // List returns the server's mods as the panel last saw them. When that view

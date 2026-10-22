@@ -24,6 +24,7 @@ import (
 
 func (h *ModHandlers) Install(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 
 	var body struct {
 		Source    string `json:"source"`
@@ -70,6 +71,7 @@ const customModUploadLimit = 512 << 20
 // directory and records them in installed_mods so the panel can manage them.
 func (h *ModHandlers) UploadCustom(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 
 	srv, c, ok := serverAgent(w, r, h.store, serverID)
 	if !ok {

@@ -427,6 +427,7 @@ func (h *ModHandlers) UnskipVersion(w http.ResponseWriter, r *http.Request) {
 // old jar on the agent, uploads the new one, and updates the DB row in place.
 func (h *ModHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
+	defer h.lockMods(serverID)()
 	modID := chi.URLParam(r, "modId")
 
 	var body struct {
