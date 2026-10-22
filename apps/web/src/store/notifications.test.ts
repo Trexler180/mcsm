@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useNotifications } from "./notifications";
+import { ttlFor, useNotifications } from "./notifications";
 
 const toasts = () => useNotifications.getState().toasts;
 
@@ -60,6 +60,28 @@ describe("useNotifications", () => {
     vi.advanceTimersByTime(3000); // t=6s — original timer would have fired
     expect(toasts()).toHaveLength(1);
     vi.advanceTimersByTime(1000); // t=7s — re-armed timer fires
+    expect(toasts()).toHaveLength(0);
+  });
+
+  // Something that went wrong has to be read: four seconds is not enough.
+  it("keeps an error up longer, and a long one longer still", () => {
+    useNotifications.getState().error("Couldn't start Spigot Server");
+    vi.advanceTimersByTime(9_000);
+    expect(toasts()).toHaveLength(1);
+    vi.advanceTimersByTime(1_000);
+    expect(toasts()).toHaveLength(0);
+    expect(ttlFor({ title: "x".repeat(40), description: "y".repeat(120), variant: "error" })).toBeGreaterThan(10_000);
+    expect(ttlFor({ title: "x".repeat(400), variant: "error" })).toBe(20_000);
+  });
+
+  it("holds a toast while the pointer is on it", () => {
+    useNotifications.getState().success("Hovered");
+    const id = toasts()[0].id;
+    useNotifications.getState().hold(id);
+    vi.advanceTimersByTime(30_000);
+    expect(toasts()).toHaveLength(1);
+    useNotifications.getState().release(id);
+    vi.advanceTimersByTime(4_000);
     expect(toasts()).toHaveLength(0);
   });
 

@@ -38,10 +38,12 @@ export function Toasts() {
   const toasts = useNotifications((s) => s.toasts)
   const remove = useNotifications((s) => s.remove)
   const runAction = useNotifications((s) => s.runAction)
+  const hold = useNotifications((s) => s.hold)
+  const release = useNotifications((s) => s.release)
   return (
     <div className="toasts" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={cx('toast', t.variant === 'error' && 'bad')} role="status">
+        <div key={t.id} className={cx('toast', t.variant === 'error' && 'bad')} role="status" onMouseEnter={() => hold(t.id)} onMouseLeave={() => release(t.id)}>
           <span className="toast-text">
             {t.title}
             {t.count > 1 && <span className="toast-sub num">×{t.count}</span>}

@@ -39,6 +39,10 @@ interface NotificationState {
   toasts: Toast[]
   add: (t: Omit<Toast, 'id' | 'count'>) => void
   remove: (id: string) => void
+  /** Stops a toast's countdown while it's being read (the pointer is on it). */
+  hold: (id: string) => void
+  /** Starts the countdown again, from the top. */
+  release: (id: string) => void
   removeByKey: (key: string) => void
   runAction: (id: string, which?: 'action' | 'secondary') => Promise<void>
   success: (title: string, description?: string) => void
@@ -50,23 +54,21 @@ let counter = 0
 const TTL = 4000
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
+/** How long a toast stays up. A success can go in four seconds; something that
+ *  went wrong, or asks for a click, has to be read first, so it stays longer,
+ *  and longer still the more it has to say. */
+export function ttlFor(t: Pick<Toast, 'title' | 'description' | 'variant' | 'action'>): number {
+  const base = t.variant === 'error' ? 10_000 : t.variant === 'warning' || t.action ? 7_000 : TTL
+  if (base === TTL) return TTL
+  const chars = t.title.length + (t.description?.length ?? 0)
+  return Math.min(20_000, base + Math.max(0, chars - 60) * 40)
+}
+
 export const useNotifications = create<NotificationState>()((set, get) => ({
   toasts: [],
   add: (t) => {
     // Reset the auto-dismiss timer for a toast id. Sticky toasts have none.
-    const arm = (id: string) => {
-      const existing = timers.get(id)
-      if (existing) clearTimeout(existing)
-      timers.delete(id)
-      if (t.sticky) return
-      timers.set(
-        id,
-        setTimeout(() => {
-          timers.delete(id)
-          set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) }))
-        }, TTL),
-      )
-    }
+    const arm = (id: string) => armTimer(id, t.sticky ? null : ttlFor(t), set)
 
     // Merge rule: same title AND variant collapses into one card with a
     // bumped count, so spammy repeats (bulk installs) stack while an error
@@ -92,6 +94,15 @@ export const useNotifications = create<NotificationState>()((set, get) => ({
     const id = String(++counter)
     set((s) => ({ toasts: [...s.toasts, { ...t, id, count: 1 }] }))
     arm(id)
+  },
+  hold: (id) => {
+    const existing = timers.get(id)
+    if (existing) clearTimeout(existing)
+    timers.delete(id)
+  },
+  release: (id) => {
+    const t = get().toasts.find((x) => x.id === id)
+    if (t) armTimer(id, t.sticky ? null : ttlFor(t), set)
   },
   remove: (id) => {
     const existing = timers.get(id)
@@ -133,3 +144,18 @@ export const useNotifications = create<NotificationState>()((set, get) => ({
   warning: (title, description) =>
     get().add({ title, description, variant: 'warning' }),
 }))
+
+/** (Re)starts a toast's dismiss timer; null leaves it up until closed. */
+function armTimer(id: string, ms: number | null, set: (fn: (s: NotificationState) => Partial<NotificationState>) => void) {
+  const existing = timers.get(id)
+  if (existing) clearTimeout(existing)
+  timers.delete(id)
+  if (ms === null) return
+  timers.set(
+    id,
+    setTimeout(() => {
+      timers.delete(id)
+      set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) }))
+    }, ms),
+  )
+}
