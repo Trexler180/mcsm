@@ -32,6 +32,14 @@ const WHEN: { value: When; label: string }[] = [
   { value: 'custom', label: 'A cron expression' },
 ]
 
+/** The name a schedule gets when it's left blank: what it does and how often,
+ *  like "Nightly backup". */
+export function suggestedName(action: string, when: When): string {
+  const what: Record<string, string> = { command: 'command', restart: 'restart', stop: 'stop', start: 'start', backup: 'backup', mod_update: 'mod update' }
+  const often: Record<When, string> = { hourly: 'Hourly', daily: 'Nightly', weekly: 'Weekly', monthly: 'Monthly', custom: 'Scheduled' }
+  return `${often[when]} ${what[action] ?? action}`
+}
+
 /** The panel's clock against this browser's: schedule times are shown on the
  *  panel's, which is where cron fires. */
 interface Clock {
@@ -338,24 +346,26 @@ function TaskDialog({ server, task, clock, onClose }: { server: Server; task: Pa
   const [hh, mm] = time.split(':').map((x) => +x)
   const expr = cronOf(when, time, dow, dom, cron)
   const okCron = !!parseCron(expr)
-  const valid = okCron && !!name.trim() && (action !== 'command' || !!command.trim())
+  // A blank name is fine: the schedule takes the suggested one shown in the field.
+  const finalName = name.trim() || suggestedName(action, when)
+  const valid = okCron && (action !== 'command' || !!command.trim())
   const runs = okCron ? nextRuns(expr, 3, Date.now() + clock.delta).map((t) => t - clock.delta) : []
   const save = async () => {
     if (!valid) return
     setBusy(true)
     const body: Partial<ScheduledTask> = {
-      name: name.trim(),
+      name: finalName,
       action,
       cron_expr: expr,
       payload: action === 'command' ? { command: command.trim().replace(/^\//, '') } : null,
       enabled: task.enabled ?? true,
     }
-    const r = await act(editing ? `save “${name}”` : `schedule “${name}”`, async () => {
+    const r = await act(editing ? `save “${finalName}”` : `schedule “${finalName}”`, async () => {
       const saved = editing ? await api.tasks.update(server.id, task.id as string, body) : await api.tasks.create(server.id, body)
       const before = !editing && warn && (action === 'restart' || action === 'stop') ? fiveMinutesBefore(expr) : null
       if (before) {
         await api.tasks.create(server.id, {
-          name: `${name.trim()} warning`,
+          name: `${finalName} warning`,
           action: 'command',
           cron_expr: before,
           payload: { command: `say ${action === 'restart' ? 'Restarting' : 'Shutting down'} in 5 minutes` },
@@ -366,7 +376,7 @@ function TaskDialog({ server, task, clock, onClose }: { server: Server; task: Pa
     })
     setBusy(false)
     if (r === undefined) return
-    toast('ok', editing ? `Saved “${name.trim()}”` : `Scheduled “${name.trim()}”`)
+    toast('ok', editing ? `Saved “${finalName}”` : `Scheduled “${finalName}”`)
     void qc.invalidateQueries({ queryKey: ['tasks', server.id] })
     onClose()
   }
@@ -389,7 +399,7 @@ function TaskDialog({ server, task, clock, onClose }: { server: Server; task: Pa
     >
       <div className="form-grid">
         <Field label="Name" className="span">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nightly restart" autoFocus />
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={suggestedName(action, when)} aria-label="Name" autoFocus />
         </Field>
         <Field label="What to do">
           <Select value={action} onChange={setAction} options={Object.entries(ACTIONS).map(([value, label]) => ({ value, label }))} aria-label="What to do" />
