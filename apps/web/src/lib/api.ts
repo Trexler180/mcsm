@@ -845,6 +845,20 @@ export const api = {
         return new Uint8Array(await r.arrayBuffer());
       });
     },
+    // The raw bytes of a small file the panel shows in place: a world's
+    // level.dat, a player's .dat in the viewer, a world's icon. It reads through
+    // the content endpoint like the text editor does, so looking at a world
+    // isn't recorded as someone downloading it. Large files and real downloads
+    // use readBytes / download, which stream and are recorded.
+    viewBytes: (serverId: string, path: string) => {
+      const params = new URLSearchParams({ path });
+      return fetchWithAuth(
+        `${BASE}/servers/${serverId}/files/content?${params.toString()}`,
+      ).then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return new Uint8Array(await r.arrayBuffer());
+      });
+    },
     // Overwrite a file with raw bytes by uploading into its parent directory
     // under the same name. WriteUpload uses os.Create, so it replaces in place.
     writeBytes: (serverId: string, path: string, bytes: Uint8Array) => {

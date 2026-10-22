@@ -450,7 +450,7 @@ function MultiplayerSection({
             Upload an image
           </Btn>
           {worldIcon && (
-            <Btn size="sm" need="files.write" disabled={busy} tip={`The map of ${world} the game saved`} onClick={() => void setIcon('use the world’s icon', () => api.files.readBytes(server.id, worldIcon))}>
+            <Btn size="sm" need="files.write" disabled={busy} tip={`The map of ${world} the game saved`} onClick={() => void setIcon('use the world’s icon', () => api.files.viewBytes(server.id, worldIcon))}>
               Use the world’s icon
             </Btn>
           )}

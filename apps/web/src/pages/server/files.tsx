@@ -555,7 +555,7 @@ function NbtPane({ server, path, name, onDirty, onClose }: { server: Server; pat
   const [rev, setRev] = useState(0)
   const file = useQuery({
     queryKey: ['file-nbt', server.id, path, rev],
-    queryFn: async () => parseNbt(await api.files.readBytes(server.id, path)),
+    queryFn: async () => parseNbt(await api.files.viewBytes(server.id, path)),
     retry: false,
     gcTime: 0,
   })

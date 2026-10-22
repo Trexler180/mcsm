@@ -59,7 +59,7 @@ function useWorld(serverId: string, w: WorldRow) {
     queryKey: ['world', serverId, w.folder, w.linked.join(',')],
     queryFn: async () => {
       const [bytes, ...lists] = await Promise.all([
-        api.files.readBytes(serverId, `/${w.folder}/level.dat`),
+        api.files.viewBytes(serverId, `/${w.folder}/level.dat`),
         ...[w.folder, ...w.linked].map((f) => api.files.list(serverId, `/${f}`).catch(() => null)),
       ])
       const { root } = await parseNbt(bytes)
