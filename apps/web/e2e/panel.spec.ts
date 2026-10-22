@@ -2,8 +2,9 @@
 // was checked by hand before a release, made repeatable. The tests share one
 // server and run in order; each leaves it as the next expects.
 import { expect, test, type Page } from '@playwright/test'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { zipFolder } from './zip'
 
 const SERVER = 'E2E Paper'
 const admin = () => ({ email: process.env.E2E_ADMIN_EMAIL!, password: process.env.E2E_ADMIN_PASSWORD! })
@@ -168,6 +169,24 @@ test('schedules a backup without naming it, runs it, and deletes it', async () =
   await expect(page.getByText('Nothing is scheduled.')).toBeVisible()
 })
 
+test('uploads a world as a second world', async () => {
+  // The server's own world, zipped as someone would from their game folder.
+  const folder = join(process.env.E2E_SERVERS!, 'e2e-paper')
+  const zip = zipFolder(join(folder, 'world'), 'My World', (rel) => rel === 'session.lock')
+  await open('worlds')
+  await page.getByRole('button', { name: 'Upload a world' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Upload a world' })
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'My World.zip', mimeType: 'application/zip', buffer: zip })
+  await expect(dialog.getByRole('textbox', { name: 'Folder name' })).toHaveValue(/My.World/)
+  await dialog.getByRole('textbox', { name: 'Folder name' }).fill('e2e-uploaded')
+  await dialog.getByRole('button', { name: 'Upload', exact: true }).click()
+  await expect(page.getByText('Uploaded e2e-uploaded')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('main').getByText('e2e-uploaded').first()).toBeVisible()
+  expect(existsSync(join(folder, 'e2e-uploaded', 'level.dat'))).toBe(true)
+  // Nothing of the upload is left beside the server folder.
+  expect(readdirSync(process.env.E2E_SERVERS!).filter((n) => n.includes('world-new') || n.includes('world-old'))).toEqual([])
+})
+
 test('installs a plugin from Hangar', async () => {
   await open('mods', '?sub=browse')
   await page.getByRole('textbox', { name: 'Search Hangar' }).fill('Chunky')
@@ -209,6 +228,13 @@ test('puts the backup back when the new version doesn’t start', async () => {
   await expect(page.getByRole('main').getByText(/it didn’t start, so the backup was put back/)).toBeVisible({ timeout: 5 * 60_000 })
   await expect(page.getByRole('button', { name: 'Minecraft version' })).toHaveText(from)
   await setJavaFlags('')
+
+  // People hear about it, and the alert leads back to the version page.
+  await page.goto('/alerts')
+  const alert = page.locator('.item', { hasText: `${SERVER} didn't move to` })
+  await expect(alert).toContainText(`The server was put back on ${from}`)
+  await alert.getByRole('button', { name: 'Version' }).click()
+  await expect(page).toHaveURL(/\/settings\?sub=version/)
 })
 
 test('moves to the newest Minecraft version', async () => {
@@ -262,7 +288,7 @@ test('deletes the server and its folder', async () => {
   await dialog.locator('input:not([type=checkbox])').fill(SERVER)
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('button', { name: 'Delete them' }).click()
-  await expect(page.getByText(`Deleted ${SERVER}`)).toBeVisible()
+  await expect(page.getByText(`Deleted ${SERVER}`, { exact: true })).toBeVisible()
   await expect(page.getByRole('navigation').getByRole('button', { name: SERVER })).toHaveCount(0)
   await expect.poll(() => existsSync(join(process.env.E2E_SERVERS!, 'e2e-paper'))).toBe(false)
 })
