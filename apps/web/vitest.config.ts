@@ -7,6 +7,11 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify('test'),
   },
+  // The contract test (src/lib/contract.test.ts) reads the API's Go source to
+  // hold the web app's copies of its names to the originals.
+  server: {
+    fs: { allow: [path.resolve(__dirname), path.resolve(__dirname, '../api')] },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

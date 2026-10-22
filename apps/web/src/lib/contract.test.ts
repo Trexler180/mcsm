@@ -1,9 +1,9 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { OPERATION_KIND_LABELS } from './api'
 import { OPERATION_TEXT } from '@/pages/server/header'
 import { alertLink } from '@/pages/alerts'
+import typesSrc from './types.ts?raw'
+import alertsSrc from '@/pages/alerts.tsx?raw'
 
 // The web app keeps its own copies of names the API defines: statuses, kinds,
 // permissions, verdicts. Nothing ties the copies to the originals, and when one
@@ -11,10 +11,17 @@ import { alertLink } from '@/pages/alerts'
 // version-change preview read two verdicts the wrong way round). These tests
 // read the Go source and hold the copies to it.
 
-// Tests run from apps/web.
-const repo = join(process.cwd(), '..', '..')
-const api = (rel: string) => readFileSync(join(repo, 'apps/api', rel), 'utf8')
-const web = (rel: string) => readFileSync(join(repo, 'apps/web/src', rel), 'utf8')
+// Every non-test Go file in the API, by path relative to apps/api.
+const goSources = Object.fromEntries(
+  Object.entries(import.meta.glob(['../../../api/internal/**/*.go', '!**/*_test.go'], { query: '?raw', import: 'default', eager: true })).map(
+    ([path, src]) => [path.replace(/^(\.\.\/)+api\//, ''), src as string],
+  ),
+)
+const api = (rel: string) => {
+  const src = goSources[rel]
+  if (src === undefined) throw new Error(`${rel} not found among ${Object.keys(goSources).length} API sources`)
+  return src
+}
 
 /** Every capture of re in src. */
 const all = (src: string, re: RegExp) => [...src.matchAll(re)].map((m) => m[1])
@@ -35,17 +42,8 @@ function fieldUnion(src: string, iface: string, field: string): string[] {
   return all(m[1], /["']([^"']+)["']/g)
 }
 
-function goFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name)
-    if (statSync(p).isDirectory()) out.push(...goFiles(p))
-    else if (name.endsWith('.go') && !name.endsWith('_test.go')) out.push(p)
-  }
-  return out
-}
 
-const types = web('lib/types.ts')
+const types = typesSrc
 
 describe('names the web app shares with the API', () => {
   it('has words for every kind of operation', () => {
@@ -75,8 +73,7 @@ describe('names the web app shares with the API', () => {
   it('knows every status the API gives a server', () => {
     const known = new Set(union(types, 'ServerStatus'))
     const written = new Set<string>()
-    for (const f of goFiles(join(repo, 'apps/api/internal'))) {
-      const src = readFileSync(f, 'utf8')
+    for (const src of Object.values(goSources)) {
       for (const s of all(src, /(?:setStatus|SetStatus|UpdateServerStatus\w*)\([^()]*?"([a-z_]+)"\)/g)) written.add(s)
     }
     expect(written.size).toBeGreaterThan(3)
@@ -95,7 +92,7 @@ describe('names the web app shares with the API', () => {
 
   it('only links alerts the API can raise', () => {
     const events = new Set(all(api('internal/notify/events.go'), /\bEvent\w+\s*=\s*"([a-z_.]+)"/g))
-    const linked = all(web('pages/alerts.tsx'), /t === '([a-z_]+\.[a-z_]+)'/g)
+    const linked = all(alertsSrc, /t === '([a-z_]+\.[a-z_]+)'/g)
     expect(linked.length).toBeGreaterThan(3)
     for (const e of linked) expect(events, `alert type "${e}"`).toContain(e)
     // And each server alert the API raises either links somewhere or is meant not to.
