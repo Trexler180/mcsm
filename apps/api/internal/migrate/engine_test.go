@@ -324,6 +324,44 @@ func TestMigrateHealthy(t *testing.T) {
 	}
 }
 
+// The run's stops and boots go through the status sink, which announces them, so
+// the panel shows "starting" while the trial boot runs instead of "stopped".
+func TestMigrateAnnouncesStatus(t *testing.T) {
+	fa := newFakeAgent("a-1.0.jar")
+	source := &fakeSource{byTarget: map[string]map[string][]modrinth.Version{
+		"projA": {"1.21.5": {mkVersion("vA2", "projA", "2.0", "a-2.0.jar")}},
+	}}
+	f := newFixture(t, fa, source)
+	f.addMod(t, "projA", "vA1", "1.0", "a-1.0.jar")
+	var mu sync.Mutex
+	var seen []string
+	f.engine.SetStatusSink(func(serverID, status string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if serverID == f.server.ID {
+			seen = append(seen, status)
+		}
+	})
+
+	if run := f.migrateAndWait(t, "1.21.5"); run.Status != "success" {
+		t.Fatalf("status = %q (%s), want success", run.Status, run.Detail)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"starting", "online", "offline"}
+	for _, w := range want {
+		found := false
+		for _, s := range seen {
+			if s == w {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("announced %v, want it to include %q", seen, w)
+		}
+	}
+}
+
 // A start refused with "already running" is the state the migration wanted, not
 // a failed boot. Something else (an operator, an MCP client) can win the race
 // between the migration's stop and its verification start; treating the 409 as

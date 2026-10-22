@@ -195,6 +195,12 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	migrationEngine := migrate.New(s)
 	migrationEngine.SetOperations(svc.Ops)
 	migrationEngine.SetNotifier(notifyEngine)
+	migrationEngine.SetStatusSink(svc.Life.SetStatus)
+	if svc.Bus != nil {
+		migrationEngine.SetChangeSink(func(serverID string) {
+			svc.Bus.Publish(events.Event{Type: events.ServerUpdated, ServerID: serverID})
+		})
+	}
 	migrateH := handlers.NewMigrationHandlers(s, migrationEngine)
 	backupH := handlers.NewBackupHandlers(s, notifyEngine).WithService(svc.Backups)
 	taskH := handlers.NewTaskHandlers(s).WithRunner(svc.Tasks)

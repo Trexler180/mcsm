@@ -78,6 +78,12 @@ type Engine struct {
 	ops *operations.Manager
 	// notifier, when set, alerts people when a version change does not land.
 	notifier *notify.Engine
+	// statusSink, when set, records and announces a status change, so the panel
+	// shows the run's stops and boots as they happen.
+	statusSink func(serverID, status string)
+	// changed, when set, announces that the server's record changed (its
+	// version), so open pages reload it mid-run instead of at the end.
+	changed func(serverID string)
 
 	// Tunables (overridden in tests).
 	pollInterval time.Duration
@@ -172,6 +178,19 @@ func (e *Engine) SetOperations(ops *operations.Manager) { e.ops = ops }
 
 // SetNotifier wires in alerts for a version change that fails or is put back.
 func (e *Engine) SetNotifier(n *notify.Engine) { e.notifier = n }
+
+// SetStatusSink routes the run's status changes through sink (the lifecycle
+// service), which also announces them on the live stream.
+func (e *Engine) SetStatusSink(sink func(serverID, status string)) { e.statusSink = sink }
+
+// SetChangeSink announces a change to the server's record through sink.
+func (e *Engine) SetChangeSink(sink func(serverID string)) { e.changed = sink }
+
+func (e *Engine) announceChanged(serverID string) {
+	if e.changed != nil {
+		e.changed(serverID)
+	}
+}
 
 // alertFailed tells people a version change did not land. Nothing else does: the
 // trial boot's crash happens inside the run, so no crash alert goes out for it.
@@ -354,6 +373,7 @@ func (e *Engine) execute(ctx context.Context, runID string, srv *store.Server, n
 		e.rollback(ctx, c, srv, prevMC, prevLoader, snapshots, bid, d, save, "could not record the new version: "+err.Error())
 		return
 	}
+	e.announceChanged(srv.ID)
 	reinstallCfg := map[string]any{
 		"directory":   srv.DirectoryPath,
 		"platform":    srv.Platform,
@@ -558,6 +578,7 @@ func (e *Engine) rollback(ctx context.Context, c agentAPI, srv *store.Server, pr
 	if err := e.store.UpdateServer(ctx, srv.ID, srv); err != nil {
 		log.Error("migrate: restore server row", "error", err)
 	}
+	e.announceChanged(srv.ID)
 	for id, snap := range snapshots {
 		s := snap
 		if _, err := e.store.UpdateMod(ctx, &s); err != nil {
@@ -745,6 +766,10 @@ func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Serve
 }
 
 func (e *Engine) setStatus(serverID, status string) {
+	if e.statusSink != nil {
+		e.statusSink(serverID, status)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = e.store.UpdateServerStatus(ctx, serverID, status)

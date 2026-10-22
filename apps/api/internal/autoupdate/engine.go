@@ -51,6 +51,9 @@ type Engine struct {
 	sources  modSource
 	newAgent func(n *store.Node) agentAPI
 	notifier *notify.Engine
+	// statusSink, when set, records and announces a status change, so the panel
+	// shows the run's stops and boots as they happen.
+	statusSink func(serverID, status string)
 	// ops, when set, makes every run an operation holding its server, so no
 	// stop, migration or second update can land in the middle of a boot
 	// check and be mistaken for a broken update.
@@ -86,6 +89,10 @@ func New(s *store.Store) *Engine {
 // SetNotifier wires in the notification engine so completed/failed auto-update
 // runs raise alerts. Optional; a nil engine makes Emit a no-op.
 func (e *Engine) SetNotifier(n *notify.Engine) { e.notifier = n }
+
+// SetStatusSink routes the run's status changes through sink (the lifecycle
+// service), which also announces them on the live stream.
+func (e *Engine) SetStatusSink(sink func(serverID, status string)) { e.statusSink = sink }
 
 // SetOperations makes runs operations under the shared per-server lock.
 func (e *Engine) SetOperations(ops *operations.Manager) { e.ops = ops }
@@ -783,9 +790,13 @@ func (e *Engine) startAndWatch(ctx context.Context, c agentAPI, srv *store.Serve
 	}
 }
 
-// setStatus mirrors the agent state into the panel DB so the UI tracks the
-// run live; the poller would converge eventually anyway.
+// setStatus mirrors the agent state into the panel DB and, through the sink,
+// onto the live stream, so the UI tracks the run as it happens.
 func (e *Engine) setStatus(serverID, status string) {
+	if e.statusSink != nil {
+		e.statusSink(serverID, status)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = e.store.UpdateServerStatus(ctx, serverID, status)

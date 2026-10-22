@@ -315,6 +315,7 @@ func main() {
 	life := lifecycle.New(s, ops, bus, nil)
 	backupSvc := backups.NewService(s, ops, bus, notifier.Engine, nil)
 	updater.SetOperations(ops)
+	updater.SetStatusSink(life.SetStatus)
 
 	// Scheduled tasks. Built before the router, which runs tasks by hand
 	// through it; started with the other background workers below.
