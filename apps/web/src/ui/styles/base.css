@@ -655,8 +655,10 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
 .home .issue .mark .icon { width: 14px; height: 14px; }
 .home .issue p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Home server table: one 40px line per server on a shared grid. */
-.srv-list { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+/* Home server table: one 40px line per server on a shared grid. Columns drop
+   by the table's own width, not the window's: the sidebar takes 248px of a
+   1280px window, which left the full grid wider than its tile. */
+.srv-list { container: srvlist / inline-size; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .srv-row { position: relative; display: grid; grid-template-columns: minmax(220px, 2fr) 132px 60px 44px 44px 124px minmax(80px, 1fr) 84px 96px; column-gap: 16px; align-items: center; height: 40px; padding: 0 10px; border-top: 1px solid var(--line); border-radius: 6px; cursor: pointer; transition: background .15s; }
 .srv-row .cell { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
 .srv-row .cell.r, .srv-row.head .r { justify-content: flex-end; text-align: right; }
@@ -672,6 +674,16 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
 .srv-row .acts { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: flex; padding-left: 28px; opacity: 0; pointer-events: none; transition: opacity .15s; background: linear-gradient(90deg, transparent, var(--hover) 24px); }
 .srv-row:hover .acts, .srv-row:focus-within .acts { opacity: 1; pointer-events: auto; }
 .upd-dot { flex: none; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 18px; color: var(--text-2); background: var(--press); }
+
+@container srvlist (max-width: 1040px) {
+  .srv-row { grid-template-columns: minmax(180px, 2fr) 124px 60px 44px 44px 120px 96px; }
+  .srv-row > :nth-child(7), .srv-row > :nth-child(8) { display: none; }
+}
+@container srvlist (max-width: 780px) {
+  .srv-row { grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 12px; }
+  .srv-row.head, .srv-row > :nth-child(n+4) { display: none; }
+  .srv-row .name .small { display: none; }
+}
 
 /* Home widgets: three small panels side by side. */
 .widgets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
@@ -706,8 +718,6 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
 @media (max-width: 1100px) {
   .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .widgets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .srv-row { grid-template-columns: minmax(180px, 2fr) 124px 60px 44px 44px 120px 96px; }
-  .srv-row > :nth-child(7), .srv-row > :nth-child(8) { display: none; }
   .console-page { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
   .console-main { min-height: 560px; }
   .console-aside { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); overflow: visible; }
@@ -724,7 +734,9 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
   .srv-top { gap: 12px; }
   .srv-icon, .srv-icon svg { width: 28px !important; height: 28px !important; }
   .srv-name { font-size: 20px; }
-  .srv-facts { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-top: 4px; white-space: nowrap; }
+  /* Wraps rather than scrolling sideways: a row with no visible end read as
+     cut off ("Local Agent | loc"). */
+  .srv-facts { margin-top: 4px; }
   .srv-facts > * { flex: none; }
   .srv-actions .btn { height: 32px; }
   .srv-top .grow { flex: 1 1 0; }
@@ -753,9 +765,6 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
   .home .issue p { white-space: normal; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .widgets { grid-template-columns: minmax(0, 1fr); }
-  .srv-row { grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 12px; }
-  .srv-row.head, .srv-row > :nth-child(n+4) { display: none; }
-  .srv-row .name .small { display: none; }
   .bento, .figures { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 
