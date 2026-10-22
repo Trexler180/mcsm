@@ -38,6 +38,12 @@ pnpm build
 ```
 
 Run component-specific Go tests from `apps/api` or `apps/agent` while iterating.
+
+`pnpm e2e` (in `apps/web`) drives a throwaway panel, agent and Paper server
+through the main flows in Chromium. It needs Go, Java and network access and
+takes a few minutes, so run it for changes to those flows rather than every
+edit. `E2E_REUSE=1` keeps its stack running between runs, so one test can be
+rerun with `--grep`.
 Use the repository's existing package manager and do not hand-edit generated
 artifacts.
 
