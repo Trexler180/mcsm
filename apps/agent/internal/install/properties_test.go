@@ -153,3 +153,29 @@ func TestReadServerPortMissing(t *testing.T) {
 		t.Error("no server-port key should read as no port")
 	}
 }
+
+// With isolation on, the server's own code can swap server.properties for a
+// symlink to the panel's secrets. Applying the port before a start must not
+// read the target and copy it into the server directory.
+func TestApplyServerPortRefusesASymlinkedFile(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secrets.env")
+	if err := os.WriteFile(secret, []byte("JWT_SECRET=hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, PropertiesFile)
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+
+	if _, _, err := ApplyServerPort(dir, 25570); err == nil {
+		t.Fatal("applied the port through a symlinked server.properties")
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the link was replaced with a copy of what it pointed at")
+	}
+	if got, _ := os.ReadFile(secret); string(got) != "JWT_SECRET=hunter2\n" {
+		t.Fatalf("the secret file was changed: %q", got)
+	}
+}

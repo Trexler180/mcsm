@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mcsm/agent/internal/files"
 	"github.com/mcsm/agent/internal/helperjar"
 	"github.com/mcsm/agent/internal/helpermod"
 )
@@ -84,16 +85,18 @@ func ensureHelperMod(dir, platform, mcVersion string, enabled bool, resolver *he
 		return "[mcsm] helper mod skipped (no build available for Minecraft " + describeVersion(mcVersion) + ")"
 	}
 
-	current, err := fileSHA256(target)
+	// Read and written only inside the server directory: with isolation on,
+	// the server's own code can make mods/ a symlink to somewhere else.
+	current, err := fileSHA256(dir, helperModRelPath())
 	if err == nil && current == resolved.SHA256 {
 		return "" // Already current; nothing to do and nothing to say.
 	}
 
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := files.MkdirAllIn(dir, "mods", 0o755); err != nil {
 		return "[mcsm] warning: could not create mods directory: " + err.Error()
 	}
 
-	if err := writeFileAtomic(target, resolved.Data, 0o644); err != nil {
+	if err := files.WriteRegularAtomic(dir, helperModRelPath(), resolved.Data, 0o644); err != nil {
 		return "[mcsm] warning: could not install helper mod: " + err.Error()
 	}
 
@@ -193,26 +196,11 @@ func HelperModSHA256() string {
 	return helperjar.SHA256()
 }
 
-func fileSHA256(path string) (string, error) {
-	data, err := os.ReadFile(path)
+func fileSHA256(dir, rel string) (string, error) {
+	data, err := files.ReadRegular(dir, rel, 0)
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// writeFileAtomic writes via a temp file and rename so a crash or a concurrent
-// server start can never observe a half-written jar — which Fabric would refuse
-// to load, taking the server down with it.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
 }

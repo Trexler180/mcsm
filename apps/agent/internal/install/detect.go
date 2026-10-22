@@ -2,11 +2,14 @@ package install
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/mcsm/agent/internal/files"
 )
 
 // Detection is a best-effort read of an existing server directory's settings, so
@@ -55,7 +58,7 @@ func Detect(dir string) Detection {
 		d.RuntimeFile = true
 	}
 
-	props := readProperties(filepath.Join(dir, "server.properties"))
+	props := readProperties(dir, "server.properties")
 	if p, ok := props["server-port"]; ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n > 0 {
 			d.Port = n
@@ -69,7 +72,7 @@ func Detect(dir string) Detection {
 		d.HasWorld = true
 	}
 
-	if eula := readProperties(filepath.Join(dir, "eula.txt")); strings.EqualFold(strings.TrimSpace(eula["eula"]), "true") {
+	if eula := readProperties(dir, "eula.txt"); strings.EqualFold(strings.TrimSpace(eula["eula"]), "true") {
 		d.EULA = true
 	}
 
@@ -156,14 +159,15 @@ func fileExists(dir, rel string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func readProperties(path string) map[string]string {
+// readProperties parses dir/rel as key=value lines. Only a regular file inside
+// dir is read: a symlink planted there by a server's code is treated as absent.
+func readProperties(dir, rel string) map[string]string {
 	out := map[string]string{}
-	f, err := os.Open(path)
+	data, err := files.ReadRegular(dir, rel, maxPropertiesBytes)
 	if err != nil {
 		return out
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

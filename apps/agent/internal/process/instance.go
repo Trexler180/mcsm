@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	agentfiles "github.com/mcsm/agent/internal/files"
 	"github.com/mcsm/agent/internal/install"
 	"github.com/mcsm/agent/internal/java"
 )
@@ -296,8 +297,10 @@ func (inst *Instance) buildArgs() ([]string, string, string, error) {
 
 	// If install produced a runtime hint (Forge/NeoForge use this for their
 	// @args.txt classpath dance), use those args instead of `-jar server.jar`.
-	runtimeHint := filepath.Join(cfg.Directory, "mcsm-runtime.txt")
-	if data, err := os.ReadFile(runtimeHint); err == nil {
+	// A regular file inside the directory only: with isolation on, the server's
+	// code could make it a symlink to the panel's secrets, which would then be
+	// read as the agent and passed to java on the command line.
+	if data, err := agentfiles.ReadRegular(cfg.Directory, "mcsm-runtime.txt", 64<<10); err == nil {
 		hint := strings.TrimSpace(string(data))
 		if hint != "" {
 			args = append(args, strings.Fields(hint)...)

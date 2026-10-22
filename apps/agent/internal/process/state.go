@@ -2,6 +2,7 @@ package process
 
 import (
 	"encoding/json"
+	agentfiles "github.com/mcsm/agent/internal/files"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +74,7 @@ func readBannedIPs(dir string) []bannedIPEntry {
 // when the file or the key is absent, so each caller applies vanilla's own
 // default for that setting rather than a shared guess.
 func serverProperty(dir, key string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, "server.properties"))
+	data, err := agentfiles.ReadRegular(dir, "server.properties", 1<<20)
 	if err != nil {
 		return "", false
 	}

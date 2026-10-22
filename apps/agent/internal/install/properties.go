@@ -3,10 +3,11 @@ package install
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strconv"
 	"strings"
+
+	"github.com/mcsm/agent/internal/files"
 )
 
 // PropertiesFile is the config every Java-edition server reads its listen port
@@ -34,11 +35,13 @@ func ApplyServerPort(dir string, port int) (changed bool, previous int, err erro
 	if port <= 0 || port > 65535 {
 		return false, 0, fmt.Errorf("invalid port %d", port)
 	}
-	path := filepath.Join(dir, PropertiesFile)
 	want := strconv.Itoa(port)
 
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	// Read and written only as a regular file inside dir: with isolation on, the
+	// server's own code can replace it with a symlink to the panel's secrets,
+	// and this runs as the agent before every start.
+	data, err := files.ReadRegular(dir, PropertiesFile, maxPropertiesBytes)
+	if errors.Is(err, fs.ErrNotExist) {
 		// No file yet (freshly created server). Writing only the port is enough:
 		// the server fills in every key it doesn't find on first boot, so this
 		// short file becomes a complete one — with the operator's port in it.
@@ -46,7 +49,7 @@ func ApplyServerPort(dir string, port int) (changed bool, previous int, err erro
 			"# defaults the first time it starts.\n" +
 			"server-port=" + want + "\n" +
 			"query.port=" + want + "\n"
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		if err := files.WriteRegularAtomic(dir, PropertiesFile, []byte(body), 0o644); err != nil {
 			return false, 0, err
 		}
 		return true, 0, nil
@@ -97,16 +100,20 @@ func ApplyServerPort(dir string, port int) (changed bool, previous int, err erro
 	if !changed {
 		return false, previous, nil
 	}
-	if err := writePreservingMode(path, []byte(body)); err != nil {
+	if err := files.WriteRegularAtomic(dir, PropertiesFile, []byte(body), 0o644); err != nil {
 		return false, previous, err
 	}
 	return true, previous, nil
 }
 
+// maxPropertiesBytes bounds a server.properties read. A real one is a couple of
+// kilobytes.
+const maxPropertiesBytes = 1 << 20
+
 // ReadServerPort returns the port configured in a directory's
 // server.properties, or ok=false when the file or the key is absent.
 func ReadServerPort(dir string) (int, bool) {
-	v, ok := readProperties(filepath.Join(dir, PropertiesFile))["server-port"]
+	v, ok := readProperties(dir, PropertiesFile)["server-port"]
 	if !ok {
 		return 0, false
 	}
@@ -138,22 +145,4 @@ func rewriteProperty(line, key, value string) string {
 		return key + "=" + value + "\r"
 	}
 	return key + "=" + value
-}
-
-// writePreservingMode replaces a file's contents through a temp file in the
-// same directory, so a crash mid-write can't truncate a live server's config.
-func writePreservingMode(path string, body []byte) error {
-	mode := os.FileMode(0o644)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	}
-	tmp := path + ".mcsm-tmp"
-	if err := os.WriteFile(tmp, body, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
 }
