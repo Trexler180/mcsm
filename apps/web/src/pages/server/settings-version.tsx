@@ -76,13 +76,38 @@ export function VersionSettings({ server, status, perms }: { server: Server; sta
 
 // ---- moving to another version ------------------------------------------------------------
 
-const STATUS_ORDER = ['incompatible', 'unknown', 'unmanaged', 'supported', 'compatible']
-const COMPAT_TEXT: Record<string, string> = {
-  compatible: 'Works as it is',
-  supported: 'Updates',
-  incompatible: 'Turned off: nothing for this version yet',
-  unmanaged: 'Can’t check: you uploaded it',
-  unknown: 'Couldn’t check',
+// What the API's verdicts mean: "compatible" has another build for the target
+// that gets swapped in; "supported" already runs on it and is left alone.
+const STATUS_ORDER = ['incompatible', 'unknown', 'unmanaged', 'compatible', 'supported']
+
+/** What moving will do to one mod, in the words the table shows. The version
+ *  change updates a mod that's turned off too (it stays off), and leaves one
+ *  with no build for the target alone, since it isn't loading anyway. */
+export function compatText(m: ModCompat): string {
+  const off = !m.enabled
+  switch (m.status) {
+    case 'compatible':
+      return `Updates${m.target_version ? ` to ${m.target_version}` : ''}${off ? ', stays off' : ''}`
+    case 'supported':
+      return off ? 'Already works on it, stays off' : 'Works as it is'
+    case 'incompatible':
+      return off ? 'Nothing for this version yet, stays off' : 'Turned off: nothing for this version yet'
+    case 'unmanaged':
+      return 'Can’t check: you uploaded it'
+    default:
+      return 'Couldn’t check'
+  }
+}
+
+/** The preview's totals, counted from the same rows the table lists. */
+export function compatCounts(mods: ModCompat[]) {
+  const n = (f: (m: ModCompat) => boolean) => mods.filter(f).length
+  return {
+    updated: n((m) => m.status === 'compatible'),
+    unchanged: n((m) => m.status === 'supported' || (m.status === 'incompatible' && !m.enabled)),
+    turnedOff: n((m) => m.status === 'incompatible' && m.enabled),
+    unchecked: n((m) => m.status === 'unmanaged' || m.status === 'unknown'),
+  }
 }
 const PHASES: Record<string, string> = {
   checking: 'checking the mods',
@@ -122,13 +147,17 @@ function VersionChange({ server, status, perms }: { server: Server; status: Stat
 
   const older = !!target && compareMc(target, server.mc_version) < 0
   const options = versions.filter((v) => v.version !== server.mc_version).map((v) => ({ value: v.version, label: v.version + (compareMc(v.version, server.mc_version) < 0 ? ' (older)' : '') + (v.stable ? '' : ' (snapshot)') }))
-  const counts = check.data?.counts ?? {}
-  const mods = useMemo(() => [...(check.data?.mods ?? [])].filter((m) => m.enabled).sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)), [check.data])
+  // Every mod, including the ones turned off: the move updates those too.
+  const mods = useMemo(
+    () => [...(check.data?.mods ?? [])].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || Number(b.enabled) - Number(a.enabled)),
+    [check.data],
+  )
+  const counts = compatCounts(mods)
   const word = contentLabel(server.platform).toLowerCase()
   const canMove = allowed(perms, 'settings') && allowed(perms, 'mods.update') && allowed(perms, 'backups.create')
 
   const move = async () => {
-    const off = counts.incompatible ?? 0
+    const off = counts.turnedOff
     const ok = await ask({
       title: `Move ${server.name} to ${checked}?`,
       body: `${off ? plural(off, word.replace(/s$/, '')) + ' will be turned off. ' : ''}A backup is made first, and put back automatically if it doesn’t start.${status === 'online' || status === 'starting' ? ' The server restarts.' : ''}`,
@@ -179,14 +208,14 @@ function VersionChange({ server, status, perms }: { server: Server; status: Stat
                   `There are no ${word} to check.`
                 ) : (
                   <>
-                    {counts.supported ?? 0} will be updated and {counts.compatible ?? 0} work as they are.
-                    {counts.incompatible ? (
+                    {counts.updated} will be updated and {counts.unchanged} stay as they are.
+                    {counts.turnedOff ? (
                       <>
                         {' '}
-                        <span className="bad">{counts.incompatible} would be turned off</span> until there’s a build for {checked}.
+                        <span className="bad">{counts.turnedOff} would be turned off</span> until there’s a build for {checked}.
                       </>
                     ) : null}
-                    {(counts.unmanaged ?? 0) + (counts.unknown ?? 0) ? ` ${(counts.unmanaged ?? 0) + (counts.unknown ?? 0)} can’t be checked.` : ''}
+                    {counts.unchecked ? ` ${counts.unchecked} can’t be checked.` : ''}
                   </>
                 )}
               </p>
@@ -237,12 +266,13 @@ function CompatTable({ mods }: { mods: ModCompat[] }) {
       <tbody>
         {mods.map((m) => (
           <tr key={m.mod_id}>
-            <td>
+            <td className={m.enabled ? undefined : 't3'}>
               {m.name}
+              {!m.enabled && <span className="t3 small"> off</span>}
               {m.pinned && <span className="t3 small"> pinned</span>}
               {m.dep_warnings && m.dep_warnings.length > 0 && <div className="sub warn">Needs {m.dep_warnings.join(', ')}, which would be turned off.</div>}
             </td>
-            <td className={cx('small', m.status === 'incompatible' ? 'bad' : 't2')}>{m.status === 'supported' && m.target_version ? `Updates to ${m.target_version}` : COMPAT_TEXT[m.status] ?? m.status}</td>
+            <td className={cx('small', m.status === 'incompatible' && m.enabled ? 'bad' : 't2')}>{compatText(m)}</td>
           </tr>
         ))}
       </tbody>
