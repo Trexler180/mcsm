@@ -331,3 +331,74 @@ func TestExtractWorldStagesOutsideTheServerDirectory(t *testing.T) {
 		t.Fatalf("staging left behind: %v", left)
 	}
 }
+
+// makeOrderedZip writes entries in the order given, as an archiver that lists a
+// folder before what it holds does.
+func makeOrderedZip(t *testing.T, entries ...[2]string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "archive.zip")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	for _, e := range entries {
+		w, err := zw.Create(e[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(e[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Windows PowerShell's Compress-Archive separates with backslashes and marks a
+// folder with a trailing one. Read literally, world\data\ became an empty file
+// and nothing could be unpacked beneath it.
+func TestExtractWorldFromABackslashArchive(t *testing.T) {
+	base := t.TempDir()
+	zipPath := makeOrderedZip(t,
+		[2]string{`world\data\`, ""},
+		[2]string{`world\level.dat`, "dat"},
+		[2]string{`world\data\minecraft\raids.dat`, "raids"},
+	)
+	arc, err := InspectWorldZip(zipPath)
+	if err != nil {
+		t.Fatalf("InspectWorldZip: %v", err)
+	}
+	if arc.Prefix != "world/" || arc.SuggestedName != "world" || arc.Files != 2 {
+		t.Fatalf("archive = %+v, want the world folder with two files", arc)
+	}
+	if err := ExtractWorld(base, zipPath, arc, "Imported"); err != nil {
+		t.Fatalf("ExtractWorld: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(base, "Imported", "data", "minecraft", "raids.dat"))
+	if err != nil || string(got) != "raids" {
+		t.Fatalf("raids.dat = %q, %v", got, err)
+	}
+}
+
+// Backslashes are separators, so they cannot smuggle a climb out of the world.
+func TestExtractWorldRejectsBackslashTraversal(t *testing.T) {
+	base := t.TempDir()
+	zipPath := makeOrderedZip(t,
+		[2]string{`level.dat`, "dat"},
+		[2]string{`..\..\escaped.txt`, "pwned"},
+	)
+	arc, err := InspectWorldZip(zipPath)
+	if err != nil {
+		t.Fatalf("InspectWorldZip: %v", err)
+	}
+	if err := ExtractWorld(base, zipPath, arc, "world"); err == nil {
+		t.Fatal("expected extraction to refuse a traversal entry")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(base), "escaped.txt")); err == nil {
+		t.Fatal("traversal entry escaped the server directory")
+	}
+}

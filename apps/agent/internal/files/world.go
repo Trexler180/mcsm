@@ -54,24 +54,30 @@ var ErrNoLevelDat = errors.New("this zip doesn't contain a Minecraft world: no l
 var ErrMultipleWorlds = errors.New("this zip contains more than one world; upload a single world folder")
 
 // zipEntryName normalizes an archive entry to a clean, relative, slash-separated
-// path. It returns ok=false for anything that tries to escape the extraction
-// root (absolute paths, "..", Windows drive letters), which is checked here
-// rather than only at write time so such entries never reach the size estimate.
-func zipEntryName(name string) (string, bool) {
-	n := strings.TrimPrefix(filepath.ToSlash(name), "./")
-	if n == "" || strings.HasPrefix(n, "/") || strings.Contains(n, `\`) {
-		return "", false
+// path, and says whether it names a folder. It returns ok=false for anything
+// that tries to escape the extraction root (absolute paths, "..", Windows drive
+// letters), which is checked here rather than only at write time so such
+// entries never reach the size estimate.
+//
+// Backslashes are separators on every platform: Windows PowerShell's
+// Compress-Archive writes them (world\data\ for a folder), and read literally
+// a folder entry would be unpacked as an empty file of that name.
+func zipEntryName(f *zip.File) (name string, isDir, ok bool) {
+	n := strings.TrimPrefix(strings.ReplaceAll(f.Name, `\`, "/"), "./")
+	isDir = strings.HasSuffix(n, "/") || f.FileInfo().IsDir()
+	if n == "" || strings.HasPrefix(n, "/") {
+		return "", false, false
 	}
 	// A "C:" style prefix is relative on Windows but still points outside.
 	if len(n) >= 2 && n[1] == ':' {
-		return "", false
+		return "", false, false
 	}
 	for _, seg := range strings.Split(n, "/") {
 		if seg == ".." {
-			return "", false
+			return "", false, false
 		}
 	}
-	return strings.TrimSuffix(n, "/"), true
+	return strings.TrimSuffix(n, "/"), isDir, true
 }
 
 // InspectWorldZip reads an archive's directory and reports which part of it is
@@ -97,8 +103,8 @@ func inspectWorldZip(zr *zip.Reader) (*WorldArchive, error) {
 	// doubly-wrapped zip it's the inner folder.
 	prefix, found, ambiguous := "", false, false
 	for _, f := range zr.File {
-		name, ok := zipEntryName(f.Name)
-		if !ok || f.FileInfo().IsDir() || path.Base(name) != "level.dat" {
+		name, isDir, ok := zipEntryName(f)
+		if !ok || isDir || path.Base(name) != "level.dat" {
 			continue
 		}
 		dir := path.Dir(name)
@@ -128,8 +134,8 @@ func inspectWorldZip(zr *zip.Reader) (*WorldArchive, error) {
 		arc.SuggestedName = path.Base(strings.TrimSuffix(prefix, "/"))
 	}
 	for _, f := range zr.File {
-		name, ok := zipEntryName(f.Name)
-		if !ok || f.FileInfo().IsDir() || !strings.HasPrefix(name, prefix) || name == prefix {
+		name, isDir, ok := zipEntryName(f)
+		if !ok || isDir || !strings.HasPrefix(name, prefix) || name == prefix {
 			continue
 		}
 		size := int64(f.UncompressedSize64)
@@ -279,7 +285,7 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 
 	var written int64
 	for _, f := range zr.File {
-		entry, ok := zipEntryName(f.Name)
+		entry, isDir, ok := zipEntryName(f)
 		if !ok {
 			return fmt.Errorf("unsafe path in archive: %s", f.Name)
 		}
@@ -295,7 +301,7 @@ func ExtractWorldProgress(base, zipPath string, arc *WorldArchive, name string, 
 			return fmt.Errorf("unsafe path in archive: %s", f.Name)
 		}
 
-		if f.FileInfo().IsDir() {
+		if isDir {
 			if err := root.MkdirAll(dest, 0755); err != nil {
 				return fmt.Errorf("create %s: %w", rel, err)
 			}
