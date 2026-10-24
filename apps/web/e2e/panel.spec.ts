@@ -180,7 +180,11 @@ test('uploads a world as a second world', async () => {
   await expect(dialog.getByRole('textbox', { name: 'Folder name' })).toHaveValue(/My.World/)
   await dialog.getByRole('textbox', { name: 'Folder name' }).fill('e2e-uploaded')
   await dialog.getByRole('button', { name: 'Upload', exact: true }).click()
-  await expect(page.getByText('Uploaded e2e-uploaded')).toBeVisible({ timeout: 60_000 })
+  // Waits for whichever toast the dialog raises, so a failed upload fails here
+  // with what it said instead of as a missing success toast a minute later.
+  const outcome = page.getByRole('status').filter({ hasText: /e2e-uploaded/ }).first()
+  await expect(outcome).toBeVisible({ timeout: 60_000 })
+  await expect(outcome).toHaveText(/^Uploaded e2e-uploaded/)
   await expect(page.getByRole('main').getByText('e2e-uploaded').first()).toBeVisible()
   expect(existsSync(join(folder, 'e2e-uploaded', 'level.dat'))).toBe(true)
   // Nothing of the upload is left beside the server folder.

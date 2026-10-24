@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { parseNbt } from '@/lib/nbt'
-import type { FileTree, Server } from '@/lib/types'
+import type { FileTree, Server, WorldUploadResult } from '@/lib/types'
 import { defaultServerPropertiesFor, parseProperties, serializeProperties } from '@/pages/server/properties-schema'
 import { useUploadStats } from '@/lib/upload-stats'
 import { Btn, Check, Copy, Empty, Field, Meter, Search, Switch, type StatusKey } from '@/ui/controls'
@@ -442,7 +442,7 @@ export function folderError(name: string): string | null {
 
 const MB = 1024 * 1024
 
-function WorldUploadDialog({
+export function WorldUploadDialog({
   server,
   live,
   initialName,
@@ -498,8 +498,9 @@ function WorldUploadDialog({
     started.current = Date.now()
     stats.begin()
     setPhase('sending')
+    let result: WorldUploadResult
     try {
-      const result = await api.worlds.upload(
+      result = await api.worlds.upload(
         server.id,
         file,
         { name: trimmed, overwrite: replacing, signal: ctl.signal },
@@ -509,18 +510,6 @@ function WorldUploadDialog({
           setPhase('unpacking')
         },
       )
-      const makeLoaded = loadIt && !isLoaded
-      if (makeLoaded) {
-        const text = await api.files.readContent(server.id, '/server.properties').catch(() => defaultServerPropertiesFor(server.port))
-        await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { 'level-name': result.name }))
-      }
-      toast(
-        'ok',
-        result.replaced ? `Replaced ${result.name}` : `Uploaded ${result.name}`,
-        makeLoaded || isLoaded ? (live ? 'It loads after a restart.' : 'It loads the next time the server starts.') : `${result.files.toLocaleString('en-US')} files, ${fmtBytes(result.bytes)}.`,
-      )
-      onDone(result.name)
-      onClose()
     } catch (e) {
       if (ctl.signal.aborted) {
         toast('info', 'Stopped the upload', 'Nothing on the server changed.')
@@ -530,9 +519,30 @@ function WorldUploadDialog({
       }
       setPhase('idle')
       stats.clear()
+      return
     } finally {
       abort.current = null
     }
+    // The world is installed from here on: failing to make it the one that
+    // loads must not read as a failed upload, or the dialog offers to replace
+    // a world that is already there.
+    const done = result.replaced ? `Replaced ${result.name}` : `Uploaded ${result.name}`
+    const makeLoaded = loadIt && !isLoaded
+    try {
+      if (makeLoaded) {
+        const text = await api.files.readContent(server.id, '/server.properties').catch(() => defaultServerPropertiesFor(server.port))
+        await api.files.writeContent(server.id, '/server.properties', serializeProperties(text, { 'level-name': result.name }))
+      }
+      toast(
+        'ok',
+        done,
+        makeLoaded || isLoaded ? (live ? 'It loads after a restart.' : 'It loads the next time the server starts.') : `${result.files.toLocaleString('en-US')} files, ${fmtBytes(result.bytes)}.`,
+      )
+    } catch (e) {
+      toast('bad', `${done}, but it isn’t set to load`, `${failureOf(e).message} Choose Load beside it to try again.`)
+    }
+    onDone(result.name)
+    onClose()
   }
 
   const st = stats.stats
