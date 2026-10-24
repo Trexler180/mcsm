@@ -46,6 +46,11 @@ type Manager struct {
 
 	// quiesce counts the backups currently holding each server's autosave off.
 	quiesce quiesceState
+
+	// pending holds starts still preparing their runtime, which a stop, kill
+	// or purge cancels. pendingMu is taken before mu, never after.
+	pendingMu sync.Mutex
+	pending   map[string]*pendingStart
 }
 
 // rosterCache memoises the expensive part of AllPlayers (reading every
@@ -66,6 +71,7 @@ func NewManager(serverRoot string) *Manager {
 		roster:       make(map[string]rosterCache),
 		bedrockCache: make(map[string]bedrockLookup),
 		denials:      make(map[string]*denialLog),
+		pending:      make(map[string]*pendingStart),
 	}
 }
 
@@ -127,10 +133,14 @@ func (m *Manager) Start(id string, cfg StartConfig) error {
 }
 
 func (m *Manager) Stop(id string, graceful bool, timeout time.Duration) error {
+	cancelled := m.cancelPending(id)
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
 	if !ok {
+		if cancelled {
+			return nil
+		}
 		return fmt.Errorf("server not found")
 	}
 	return inst.stop(graceful, timeout)
@@ -149,12 +159,18 @@ func (m *Manager) ForgetExited(id string) {
 	}
 }
 
+// Kill ends a server's process at once, cancelling a start that is still
+// preparing its runtime. ErrNoProcess means there was nothing to end.
 func (m *Manager) Kill(id string) error {
+	cancelled := m.cancelPending(id)
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("server not found")
+		if cancelled {
+			return nil
+		}
+		return ErrNoProcess
 	}
 	return inst.requestKill()
 }
@@ -224,6 +240,10 @@ func (m *Manager) removeInstance(id string, inst *Instance) {
 		delete(m.instances, id)
 	}
 }
+
+// ErrNoProcess means the agent has no process for the server: it has not run
+// since the agent started, or its record was purged.
+var ErrNoProcess = errors.New("server not found")
 
 func (m *Manager) Status(id string) StatusInfo {
 	m.mu.RLock()

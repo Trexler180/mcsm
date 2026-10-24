@@ -24,6 +24,17 @@ import (
 // migration over a benign conflict.
 var ErrServerAlreadyRunning = errors.New("server already running")
 
+// ErrNoProcess means the agent has no process for the server. Agents before
+// kill became idempotent answer a kill of a stopped server with it.
+var ErrNoProcess = errors.New("agent: server not found")
+
+// Unreachable reports whether err is a failure to reach the agent at all, as
+// opposed to an answer it gave.
+func Unreachable(err error) bool {
+	var ue *url.Error
+	return errors.As(err, &ue)
+}
+
 type Client struct {
 	BaseURL string
 	Token   string
@@ -807,8 +818,11 @@ func checkError(resp *http.Response) error {
 	if err := json.Unmarshal(body, &e); err != nil || e["error"] == "" {
 		return fmt.Errorf("agent: HTTP %d", resp.StatusCode)
 	}
-	if e["error"] == "server not running" {
+	switch e["error"] {
+	case "server not running":
 		return ErrServerNotRunning
+	case "server not found":
+		return ErrNoProcess
 	}
 	return fmt.Errorf("agent: %s", e["error"])
 }

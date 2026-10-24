@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -85,31 +86,46 @@ func (h *ServerHandlers) Start(w http.ResponseWriter, r *http.Request) {
 	cfg.Directory = dir
 
 	// Auto-fetch a server JAR (or run an installer) if the directory is empty.
-	// Detached context with a generous deadline so a slow Spigot BuildTools
-	// run (~5–10 min) or Forge/NeoForge installer doesn't get truncated.
-	// Skipped for imported servers (NoInstall): their runtime is already on disk
-	// and must not be overwritten.
+	// Detached from the request with a generous deadline so a slow Spigot
+	// BuildTools run (~5–10 min) or Forge/NeoForge installer doesn't get
+	// truncated; a stop, kill or purge cancels it instead. Skipped for imported
+	// servers (NoInstall): their runtime is already on disk and must not be
+	// overwritten.
+	pending, err := h.mgr.BeginStart(id, 15*time.Minute)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if cfg.Platform != "" && !cfg.NoInstall {
-		dlCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		err := install.EnsureRuntime(dlCtx, cfg.Directory, cfg.Platform, cfg.MCVersion, cfg.LoaderVersion, cfg.JavaBinary)
-		cancel()
-		if err != nil {
+		if err := ensureRuntime(pending.Context(), cfg.Directory, cfg.Platform, cfg.MCVersion, cfg.LoaderVersion, cfg.JavaBinary); err != nil {
+			cancelled := errors.Is(pending.Context().Err(), context.Canceled)
+			pending.Abandon()
+			if cancelled {
+				writeError(w, http.StatusServiceUnavailable, process.ErrStartCancelled.Error())
+				return
+			}
 			log.Printf("install runtime (%s %s): %v", cfg.Platform, cfg.MCVersion, err)
 			writeError(w, http.StatusBadGateway, "auto-install: "+err.Error())
 			return
 		}
 	}
 
-	if err := h.mgr.Start(id, cfg); err != nil {
-		if err.Error() == "server already running" {
+	if err := pending.Launch(cfg); err != nil {
+		switch {
+		case errors.Is(err, process.ErrStartCancelled):
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+		case err.Error() == "server already running":
 			writeError(w, http.StatusConflict, err.Error())
-			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "starting"})
 }
+
+// ensureRuntime installs a server's runtime; replaced in tests.
+var ensureRuntime = install.EnsureRuntime
 
 // Reinstall wipes the runtime jar/installer artifacts and re-fetches them for
 // the requested platform + version. Requires the server to be stopped; the
@@ -189,6 +205,11 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 func (h *ServerHandlers) Kill(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.mgr.Kill(id); err != nil {
+		// Nothing running is what a kill asks for, not a failure.
+		if errors.Is(err, process.ErrNoProcess) {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "offline"})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -249,8 +270,10 @@ func (h *ServerHandlers) Purge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort kill; a server that isn't running just returns an error we
-	// ignore. Without this, locked files on Windows would block RemoveAll.
+	// Best-effort kill, which also cancels a start still fetching the runtime
+	// and waits for it to let go of the directory; a server that isn't running
+	// just returns an error we ignore. Without this, locked files on Windows
+	// would block RemoveAll, and a download could write into a deleted folder.
 	_ = h.mgr.Kill(id)
 
 	if body.Backups {

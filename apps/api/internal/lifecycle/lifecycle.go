@@ -180,10 +180,27 @@ func (s *Service) launch(op *operations.Op, c Agent, serverID string, actor oper
 		if errors.Is(err, agent.ErrServerAlreadyRunning) {
 			return map[string]string{"status": "already running"}, nil
 		}
+		if op.Cancelled() {
+			// Dropping the request does not stop the node, which would finish
+			// fetching the runtime and launch a server nobody wants any more.
+			s.abandonStart(c, current.ID)
+			return nil, err
+		}
 		s.startFailed(current, actor, err)
 		return nil, err
 	}
 	return map[string]string{"status": "starting"}, nil
+}
+
+// abandonStart tells the node to drop a start the operation gave up on, before
+// or after it launched.
+func (s *Service) abandonStart(c Agent, serverID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := c.KillServer(ctx, serverID); err != nil && !errors.Is(err, agent.ErrNoProcess) {
+		slog.Warn("lifecycle: abandon start", "server", serverID, "error", err)
+	}
+	s.SetStatus(serverID, "offline")
 }
 
 func (s *Service) startFailed(srv *store.Server, actor operations.Actor, err error) {
@@ -271,7 +288,9 @@ func (s *Service) Kill(ctx context.Context, srv *store.Server, actor operations.
 	}
 	callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
-	if err := c.KillServer(callCtx, srv.ID); err != nil {
+	// An agent with no process for the server has nothing to kill: the server
+	// is already down, which is what the kill asked for.
+	if err := c.KillServer(callCtx, srv.ID); err != nil && !errors.Is(err, agent.ErrNoProcess) {
 		return err
 	}
 	s.SetStatus(srv.ID, "offline")
@@ -374,7 +393,10 @@ func (s *Service) Delete(ctx context.Context, srv *store.Server, actor operation
 		}
 	}
 	if err != nil && !o.Force {
-		return fmt.Errorf("%w; the server was not deleted: %v", ErrNodeUnreachable, err)
+		if agent.Unreachable(err) {
+			return fmt.Errorf("%w; the server was not deleted: %v", ErrNodeUnreachable, err)
+		}
+		return fmt.Errorf("the server was not deleted: %w", err)
 	}
 	// Recorded against the server while it still exists, so the row carries
 	// its name and closes the server's own history; audit rows outlive it.
