@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import type { MetricsHistory, Server, ServerStats } from '@/lib/types'
 import { useGo } from '@/shell/nav'
 import { paths } from '@/shell/paths'
-import { Columns, Heatmap, LineChart, UptimeStrip, type Point } from '@/ui/charts'
+import { Columns, Heatmap, LineChart, barTicks, peakBars, UptimeStrip, type PeakBar, type Point } from '@/ui/charts'
 import { Empty, Filters, TextBtn } from '@/ui/controls'
 import { DOW, fmtClock, fmtDate, fmtDay, fmtDur, fmtMB, fmtNum } from '@/ui/format'
 import { PlayerHead } from '@/ui/pixel'
@@ -46,11 +46,18 @@ export function StatsTab({ server }: { server: Server }) {
 function StatsBody({ server, days, stats, history }: { server: Server; days: Period; stats: ServerStats; history: MetricsHistory | undefined }) {
   const go = useGo()
   const [asTable, setAsTable] = useState(false)
+  const [asLine, setAsLine] = useState(false)
   const short = days === 1
   const xFmt = short ? (t: number) => fmtClock(t) : (t: number) => fmtDate(t, false)
   const tip = (d: Point) => (short ? fmtClock(d.ts) : fmtDay(d.ts) + ' ' + fmtClock(d.ts))
   const pts = history?.points ?? []
   const online: Point[] = pts.map((p) => ({ ts: p.ts * 1000, players: p.players, cpu: p.cpu_percent, ram: p.ram_used_mb }))
+  const onlineBars = peakBars(online, 'players', 200, (history?.bucket_seconds ?? 0) * 1000)
+  const barX = (b: PeakBar) => (b.span < DAY && short ? fmtClock(b.ts) : fmtDate(b.ts, false))
+  const barTip = (b: PeakBar) => {
+    const at = b.span < DAY ? `${short ? '' : fmtDay(b.ts) + ' '}${fmtClock(b.ts)}–${fmtClock(b.ts + b.span)}` : b.span === DAY ? fmtDay(b.ts) : `${fmtDay(b.ts)} – ${fmtDay(b.ts + b.span - DAY)}`
+    return 'at most, ' + at
+  }
   const ticks: Point[] = pts.filter((p) => p.tps != null).map((p) => ({ ts: p.ts * 1000, tps: p.tps as number }))
   const mspt: Point[] = pts.filter((p) => p.mspt_avg != null).map((p) => ({ ts: p.ts * 1000, mspt: p.mspt_avg as number, mspt_p95: (p.mspt_p95 ?? p.mspt_avg) as number }))
   const sum = stats.summary
@@ -89,8 +96,15 @@ function StatsBody({ server, days, stats, history }: { server: Server; days: Per
       <div className="chart-block">
         <div className="chart-title">
           <h3>People online</h3>
+          <TextBtn quiet className="small" onClick={() => setAsLine(!asLine)}>
+            {asLine ? 'Show as bars' : 'Show as a line'}
+          </TextBtn>
         </div>
-        <LineChart data={online} k="players" integer xFmt={xFmt} tipTitle={tip} height={200} label="People online" />
+        {asLine || online.length < 2 ? (
+          <LineChart data={online} k="players" integer xFmt={xFmt} tipTitle={tip} height={200} label="People online" />
+        ) : (
+          <Columns joined data={onlineBars} tick={barTicks(onlineBars)} xFmt={barX} tip={barTip} height={200} label="Most people online at once" />
+        )}
       </div>
 
       <div className="chart-block split" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '36px 48px' }}>

@@ -185,6 +185,77 @@ export interface Column {
   label: string
 }
 
+export interface PeakBar extends Column {
+  ts: number
+  /** Bucket width in ms. */
+  span: number
+}
+
+const HOUR = 3_600_000
+const BAR_SPANS = [10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080, 43200].map((m) => m * 60_000)
+const LABEL_STEPS = [1, 3, 6, 12, 24, 48, 168, 336, 720].map((h) => h * HOUR)
+const tzMs = (ts: number) => new Date(ts).getTimezoneOffset() * 60_000
+
+/** Folds a time series into at most maxBars columns of the highest value in
+ *  each, on local-time boundaries (whole hours, midnights). minSpan is the
+ *  data's own resolution: narrower bars would only add empty slots. Empty
+ *  stretches stay in as zero bars so the columns keep their place in time. */
+export function peakBars(data: Point[], k: string, maxBars = 200, minSpan = 0): PeakBar[] {
+  if (!data.length) return []
+  const t0 = data[0].ts
+  const t1 = data[data.length - 1].ts
+  const span = BAR_SPANS.find((s) => s >= minSpan && (t1 - t0) / s < maxBars) ?? BAR_SPANS[BAR_SPANS.length - 1]
+  const key = (ts: number) => Math.floor((ts - tzMs(ts)) / span)
+  const first = key(t0)
+  const out: PeakBar[] = []
+  for (let i = first; i <= key(t1); i++) {
+    const ts = i * span + tzMs(i * span)
+    out.push({ ts, span, v: 0, label: '' })
+  }
+  for (const d of data) {
+    const b = out[key(d.ts) - first]
+    if (b) b.v = Math.max(b.v, d[k])
+  }
+  return out
+}
+
+/** Which of peakBars' columns get an axis label: those starting on a round
+ *  local time (3 h, midnight, week…) chosen so at most maxLabels show. */
+export function barTicks(bars: PeakBar[], maxLabels = 8): (b: PeakBar) => boolean {
+  const span = bars[0]?.span ?? HOUR
+  const total = bars.length * span
+  const step = LABEL_STEPS.find((s) => s >= span && s % span === 0 && total / s <= maxLabels) ?? LABEL_STEPS[LABEL_STEPS.length - 1]
+  return (b) => (b.ts - tzMs(b.ts)) % step === 0
+}
+
+/** One outline for gapless columns: a staircase over the bar tops from x0 in
+ *  steps of band, closed along base, with every bend rounded by up to r. */
+export function stepPath(tops: number[], x0: number, band: number, base: number, r = 3): string {
+  if (!tops.length) return ''
+  const pts: [number, number][] = [[x0, base]]
+  tops.forEach((y, i) => pts.push([x0 + band * i, y], [x0 + band * (i + 1), y]))
+  pts.push([x0 + band * tops.length, base])
+  const v = pts.filter(([x, y], i) => {
+    const p = pts[i - 1]
+    const n = pts[i + 1]
+    if (p && p[0] === x && p[1] === y) return false
+    return !(p && n && ((p[0] === x && n[0] === x) || (p[1] === y && n[1] === y)))
+  })
+  let d = `M${v[0][0]} ${v[0][1]}`
+  for (let i = 1; i < v.length - 1; i++) {
+    const [px, py] = v[i - 1]
+    const [x, y] = v[i]
+    const [nx, ny] = v[i + 1]
+    const a = Math.min(r, Math.hypot(x - px, y - py) / 2)
+    const b = Math.min(r, Math.hypot(nx - x, ny - y) / 2)
+    const ux = Math.sign(x - px), uy = Math.sign(y - py)
+    const wx = Math.sign(nx - x), wy = Math.sign(ny - y)
+    d += ` L${x - ux * a} ${y - uy * a} Q${x} ${y} ${x + wx * b} ${y + wy * b}`
+  }
+  const [lx, ly] = v[v.length - 1]
+  return d + ` L${lx} ${ly} Z`
+}
+
 export function Columns<C extends Column>({
   data,
   height = 160,
@@ -192,6 +263,8 @@ export function Columns<C extends Column>({
   xFmt,
   label,
   tip,
+  joined,
+  tick,
 }: {
   data: C[]
   height?: number
@@ -199,6 +272,11 @@ export function Columns<C extends Column>({
   xFmt?: (c: C) => string
   label?: string
   tip?: (c: C) => string
+  /** Draw the columns edge to edge as one shape, for bars that are slices of
+   *  a continuous series rather than separate counts. */
+  joined?: boolean
+  /** Which columns get an x label; by default an even spread of about 8. */
+  tick?: (c: C) => boolean
 }) {
   const box = useRef<HTMLDivElement>(null)
   const w = useWidth(box)
@@ -210,7 +288,7 @@ export function Columns<C extends Column>({
   const ticks = niceTicks(0, max, 3, true)
   const top = ticks[ticks.length - 1]
   const band = iw / Math.max(1, data.length)
-  const bw = Math.min(22, Math.max(3, band - 3))
+  const bw = joined ? band : Math.min(22, Math.max(3, band - 3))
   const Y = (v: number) => pad.t + ih - (v / top) * ih
   const every = Math.ceil(data.length / 8)
   return (
@@ -228,19 +306,32 @@ export function Columns<C extends Column>({
             ))}
             {data.map(
               (d, i) =>
-                i % every === 0 && (
+                (tick ? tick(d) : i % every === 0) && (
                   <text key={i} x={pad.l + band * i + band / 2} y={height - 5} textAnchor="middle">
                     {xFmt ? xFmt(d) : d.label}
                   </text>
                 ),
             )}
           </g>
+          {joined && (
+            <path
+              d={stepPath(data.map((d) => Y(d.v)), pad.l, band, pad.t + ih)}
+              fill="var(--chart)"
+              opacity={hi == null ? 0.85 : 0.4}
+              pointerEvents="none"
+            />
+          )}
           {data.map((d, i) => {
             const x = pad.l + band * i + (band - bw) / 2
             const y = Y(d.v)
             const h = pad.t + ih - y
             const r = Math.min(3, bw / 2, h)
-            const p = h <= 0 ? '' : `M${x} ${pad.t + ih} L${x} ${y + r} Q${x} ${y} ${x + r} ${y} L${x + bw - r} ${y} Q${x + bw} ${y} ${x + bw} ${y + r} L${x + bw} ${pad.t + ih} Z`
+            const p =
+              h <= 0 || (joined && hi !== i)
+                ? ''
+                : joined
+                  ? `M${x} ${pad.t + ih} L${x} ${y} L${x + bw} ${y} L${x + bw} ${pad.t + ih} Z`
+                  : `M${x} ${pad.t + ih} L${x} ${y + r} Q${x} ${y} ${x + r} ${y} L${x + bw - r} ${y} Q${x + bw} ${y} ${x + bw} ${y + r} L${x + bw} ${pad.t + ih} Z`
             return (
               <g
                 key={i}
@@ -252,7 +343,7 @@ export function Columns<C extends Column>({
                 aria-label={(tip ? tip(d) : d.label) + ': ' + yFmt(d.v)}
               >
                 <rect x={pad.l + band * i} y={pad.t} width={band} height={ih} fill="transparent" />
-                <path d={p} fill="var(--chart)" opacity={hi == null || hi === i ? 0.85 : 0.4} />
+                {p && <path d={p} fill="var(--chart)" opacity={joined ? 0.75 : hi == null || hi === i ? 0.85 : 0.4} />}
               </g>
             )
           })}
