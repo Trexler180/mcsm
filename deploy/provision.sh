@@ -202,6 +202,19 @@ launcher_installed() {
     case "$caps" in *cap_setgid*) ;; *) return 1 ;; esac
 }
 
+# Whether the running agent can use the launcher's file capabilities: the
+# kernel ignores them under no_new_privs, and a bounding set without
+# CAP_SETUID and CAP_SETGID (bits 7 and 6) drops them.
+agent_can_switch_users() {
+    local pid st bnd
+    pid=$(systemctl show "$AGENT_UNIT" -p MainPID --value 2>/dev/null || echo 0)
+    [ -n "$pid" ] && [ "$pid" != 0 ] || return 1
+    st=$(cat "$PROC/$pid/status" 2>/dev/null) || return 1
+    grep -qE '^NoNewPrivs:[[:space:]]*0$' <<<"$st" || return 1
+    bnd=$(sed -n 's/^CapBnd:[[:space:]]*//p' <<<"$st")
+    [ -n "$bnd" ] && (( ((16#$bnd >> 6) & 3) == 3 ))
+}
+
 # Whether the server user can walk into a directory (every directory above it
 # included), asked as that user.
 server_user_reaches() { runuser -u "$SERVER_USER" -- test -x "$R$1" 2>/dev/null; }
@@ -219,6 +232,9 @@ check_isolation() {
         bad "isolation: the bundle has no launcher (deploy with Deploy-Dashboard.ps1, which builds it)"
     elif ! launcher_installed; then
         bad "isolation: $LAUNCHER is missing, differs from the bundle, or lacks cap_setuid,cap_setgid"
+    fi
+    if ! isolation_opted_out && ! agent_can_switch_users; then
+        bad "isolation: the running agent has no_new_privs or lacks CAP_SETUID/CAP_SETGID in its bounding set, so $LAUNCHER cannot switch users and every server start fails (restart pending, or a unit setting overrides NoNewPrivileges=no?)"
     fi
     local data servers
     data=$(dirname "$(unit_path "$API_UNIT" DATABASE_PATH mcsm.db)")

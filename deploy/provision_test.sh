@@ -49,6 +49,11 @@ EOF
     tr '\n' '\0' < "$T/state/base-mcsm-api.service" > "$T/proc/101/environ"
     tr '\n' '\0' < "$T/state/base-mcsm-agent.service" > "$T/proc/102/environ"
     mkdir -p "$R/srv/dashboard/data" "$R/srv/dashboard/servers"
+    # The base agent unit sets NoNewPrivileges=true, as on the real host, and
+    # the processes were started under it.
+    touch "$T/state/nnp-mcsm-agent.service"
+    proc_status 0 > "$T/proc/101/status"
+    proc_status 1 > "$T/proc/102/status"
 
     # The host's users: the agent's, without the server user yet.
     echo mcsm > "$T/state/users"
@@ -59,8 +64,15 @@ EOF
     make_shims
 }
 
+# /proc/PID/status, as much of it as provisioning reads.
+proc_status() { # no_new_privs [bounding set]
+    printf 'Name:\tx\nNoNewPrivs:\t%s\nCapBnd:\t%s\n' "$1" "${2:-000001ffffffffff}"
+}
+
 # A restart re-reads the unit's drop-ins into its process environment, the way
 # systemd would; secrets.env overrides are simulated with state/override-*.
+# NoNewPrivileges= comes from the base unit (state/nnp-*) and then the drop-ins,
+# the last one to set it winning.
 restart_env() { # unit pid
     local f lines="$T/state/env-$1"
     : > "$lines"
@@ -73,6 +85,15 @@ restart_env() { # unit pid
     # A later assignment of a name replaces an earlier one, as in systemd.
     awk -F= '{ if (!($1 in v)) o[++n] = $1; v[$1] = $0 } END { for (i = 1; i <= n; i++) print v[o[i]] }' "$lines" |
         tr '\n' '\0' > "$T/proc/$2/environ"
+    local nnp=0 v
+    [ -f "$T/state/nnp-$1" ] && nnp=1
+    for f in "$R/etc/systemd/system/$1.d/"*.conf; do
+        [ -f "$f" ] || continue
+        v=$(sed -n 's/^NoNewPrivileges=//p' "$f" | tail -n 1)
+        case "$v" in yes | true | on | 1) nnp=1 ;; no | false | off | 0) nnp=0 ;; esac
+    done
+    printf 'Name:\tx\nNoNewPrivs:\t%s\nCapBnd:\t%s\n' "$nnp" \
+        "$(cat "$T/state/capbnd-$1" 2>/dev/null || echo 000001ffffffffff)" > "$T/proc/$2/status"
 }
 
 make_shims() {
@@ -358,6 +379,39 @@ test_isolation_opt_out_is_honoured() {
     assert_eq "$CODE" 0 "apply status"
     assert_contains "$OUT" "isolation: turned off on this host (AGENT_ISOLATE_SERVERS=0)" "reported"
     assert_not_contains "$OUT" "does not have AGENT_ISOLATE_SERVERS=1" "not drift"
+}
+
+# The launcher's file capabilities do nothing under no_new_privs, which the base
+# unit sets: the drop-in has to undo it, and a running agent that still has it
+# is drift, since every server start would fail.
+test_agent_with_no_new_privs_is_reported() {
+    new_host
+    run apply
+    assert_eq "$CODE" 0 "apply status"
+    assert_contains "$(cat "$T/proc/102/status")" "NoNewPrivs:	0" "the drop-in undoes the base unit's NoNewPrivileges"
+
+    proc_status 1 > "$T/proc/102/status"
+    run check
+    assert_eq "$CODE" 2 "check status"
+    assert_contains "$OUT" "the running agent has no_new_privs" "explains"
+}
+
+test_agent_without_setuid_in_bounding_set_is_reported() {
+    new_host
+    echo 0000000000000020 > "$T/state/capbnd-mcsm-agent.service"
+    run apply
+    assert_eq "$CODE" 2 "apply status"
+    assert_contains "$OUT" "lacks CAP_SETUID/CAP_SETGID in its bounding set" "explains"
+}
+
+test_no_new_privs_is_fine_when_opted_out() {
+    new_host
+    echo "AGENT_ISOLATE_SERVERS=0" > "$T/state/override-mcsm-agent.service"
+    run apply
+    proc_status 1 > "$T/proc/102/status"
+    run check
+    assert_eq "$CODE" 0 "check status"
+    assert_not_contains "$OUT" "no_new_privs" "not drift"
 }
 
 test_missing_launcher_is_reported() {

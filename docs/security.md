@@ -428,7 +428,10 @@ downloaded code too) run as a dedicated user, `mcsm-mc`:
   and refuses root. It sets `no_new_privs`, clears its ambient capabilities and
   execs the JVM in place, so the server has no capabilities and can never gain
   any. The helper is built into the root-only provisioning bundle, never shipped
-  with the agent binary, because it carries capabilities.
+  with the agent binary, because it carries capabilities. The kernel ignores
+  file capabilities under `no_new_privs`, so the agent itself must run without
+  it: the isolation drop-in sets `NoNewPrivileges=no` over the base unit's
+  `true`, and provisioning reports an agent that still has it.
 - A server can read and write its own directory (the agent shares it through
   the `mcsm-mc` group before each start) and nothing of the panel's: the API's
   data directory is `0700`, `.mcsm-run` (console logs, launch tokens) and
