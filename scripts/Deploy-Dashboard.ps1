@@ -217,7 +217,9 @@ Step "Building the server launcher (linux/amd64)"
 $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
 Push-Location "$RepoPath\apps\agent"
 try {
-    go build -trimpath -ldflags='-s -w' -o (Join-Path $provStage 'launcher/mcsm-launch') ./cmd/mcsm-launch
+    # -buildvcs=false keeps the bytes identical across commits that leave the
+    # launcher alone; provision.sh compares them to spot drift.
+    go build -trimpath -ldflags='-s -w' -buildvcs=false -o (Join-Path $provStage 'launcher/mcsm-launch') ./cmd/mcsm-launch
     if ($LASTEXITCODE) { throw "launcher build failed" }
 } finally {
     Pop-Location
