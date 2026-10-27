@@ -18,6 +18,10 @@ func TestSavedConfirmationIgnoresChat(t *testing.T) {
 		{"[12:00:00 INFO]: Saved the game", true},
 		{"[12:00:00] [Server thread/INFO]: Saved the world", true},
 		{"[12:00:00 INFO]: Save complete.", true},
+		// Minecraft 26 logs command feedback as system chat.
+		{"[12:00:00] [Server thread/INFO]: System chat: Saved the game", true},
+		{"[12:00:00] [Server thread/INFO]: System chat: Saving the game (this may take a moment!)", false},
+		{"[12:00:00] [Server thread/INFO]: <Steve> System chat: Saved the game", false},
 		{"[12:00:00] [Server thread/INFO]: Saving the game (this may take a moment!)", false},
 		// A player typing the phrase must not end the wait early.
 		{"[12:00:00] [Server thread/INFO]: <Steve> Saved the game", false},

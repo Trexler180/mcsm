@@ -20,9 +20,10 @@ import (
 
 // savedRe matches the server's confirmation that a save-all finished: "Saved
 // the game" on current versions, "Saved the world" before 1.13, and Bukkit's
-// "Save complete." It is anchored to the log prefix so a player typing the
-// phrase in chat cannot fake it.
-var savedRe = regexp.MustCompile(`\]:\s+(?:Saved the (?:game|world)|Save complete\.?)\s*$`)
+// "Save complete." Minecraft 26 logs it as "System chat: Saved the game". It is
+// anchored to the log prefix so a player typing the phrase in chat cannot fake
+// it.
+var savedRe = regexp.MustCompile(`\]:\s+(?:System chat:\s+)?(?:Saved the (?:game|world)|Save complete\.?)\s*$`)
 
 type quiesceState struct {
 	mu    sync.Mutex
