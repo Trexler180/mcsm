@@ -4,6 +4,7 @@ package isolation
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -171,6 +173,59 @@ func wrap(st *state, program string, args []string, dir string) (string, []strin
 	return st.cfg.Launcher, append([]string{"--", path}, args...), nil
 }
 
+// reclaimTimeout bounds one reclaim. find stats a world of tens of thousands
+// of files in well under a second; this only stops a hung one holding up a
+// backup forever.
+const reclaimTimeout = 2 * time.Minute
+
+// reclaim first shares what the agent owns under dir, as before every start,
+// so the server user can walk the whole tree, then runs find as the server
+// user to add group access to everything that user owns and kept to itself.
+// The result is best effort: find reports files the server renamed or removed
+// while it ran, and the agent's own directories it cannot enter.
+func reclaim(st *state, dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	if err := ShareDir(abs, st.gid); err != nil {
+		return fmt.Errorf("share %s with the server user: %w", abs, err)
+	}
+	program, args, err := wrap(st, "find", reclaimArgs(abs, st.uid), "")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reclaimTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, program, args...)
+	cmd.Dir = abs
+	// Never the agent's environment, which holds its token.
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("reclaim %s from %s: %w: %s", abs, st.cfg.User, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// reclaimArgs is the find expression reclaim runs: directories the server user
+// owns get group rwx and its files group rw, leaving alone what already has
+// them and never following a symlink. The agent's own directories are pruned.
+func reclaimArgs(dir string, uid int) []string {
+	owner := strconv.Itoa(uid)
+	return []string{
+		dir, "-xdev", "-ignore_readdir_race",
+		"(", "-name", ".mcsm-run", "-o", "-name", "mcsm-backups", ")", "-prune", "-o",
+		"-user", owner, "(",
+		"-type", "d", "!", "-perm", "-g=rwx", "-exec", "chmod", "g+rwx", "--", "{}", "+",
+		"-o",
+		"-type", "f", "!", "-perm", "-g=rw", "-exec", "chmod", "g+rw", "--", "{}", "+",
+		")",
+	}
+}
+
 // skipShare names directories that stay the agent's alone, should one sit
 // inside a server directory.
 var skipShare = map[string]bool{".mcsm-run": true, "mcsm-backups": true}
@@ -178,7 +233,8 @@ var skipShare = map[string]bool{".mcsm-run": true, "mcsm-backups": true}
 // ShareDir gives the server user's group read and write access to everything
 // the agent owns under dir — files the agent installed or uploaded, a world it
 // restored — and makes new directories inherit the group. What the server
-// creates itself is already shared through its umask.
+// creates itself is shared through its umask, except what Java writes
+// owner-only, which Reclaim hands back.
 func ShareDir(dir string, gid int) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

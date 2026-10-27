@@ -16,6 +16,7 @@ import (
 
 	agentfiles "github.com/mcsm/agent/internal/files"
 	"github.com/mcsm/agent/internal/install"
+	"github.com/mcsm/agent/internal/isolation"
 	"github.com/mcsm/agent/internal/java"
 )
 
@@ -957,6 +958,13 @@ func (inst *Instance) finalize() {
 			tail = readTail(inst.logPath, exitLogTailBytes)
 		}
 		status, cause := classifyExit(prev, requested, code, tail)
+
+		// An isolated server leaves files only its own user can read (see
+		// isolation.Reclaim). Hand them back before it reads as stopped, so a
+		// backup or copy that follows finds them readable.
+		if err := isolation.Reclaim(inst.Config.Directory); err != nil {
+			log.Printf("server %s: %v", inst.ID, err)
+		}
 
 		inst.mu.Lock()
 		inst.status = status

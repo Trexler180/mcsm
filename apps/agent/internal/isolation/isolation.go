@@ -23,6 +23,7 @@ package isolation
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -141,4 +142,43 @@ func Command(program string, args []string, dir string) (string, []string, error
 		return program, args, nil
 	}
 	return wrap(st, program, args, dir)
+}
+
+// Reclaim gives the agent back what the server user wrote under dir and kept
+// to itself. The launcher's umask shares most of what a server creates, but
+// Java writes some files through a temporary file it creates owner-only and
+// renames into place (Minecraft saves level.dat and player data that way), so
+// the agent, reading through the group, is shut out of the files that matter
+// most to backups. Reclaim runs a chmod as the server user, through the
+// launcher: it can only touch files that user owns, which the server could
+// change anyway. It does nothing when servers are not isolated.
+func Reclaim(dir string) error {
+	st := snapshot()
+	if !st.status.Active {
+		return nil
+	}
+	return reclaimFn(st, dir)
+}
+
+// reclaimFn is reclaim, replaceable in tests.
+var reclaimFn = reclaim
+
+// RetryDenied runs op and, when it fails for lack of permission while servers
+// are isolated, reclaims dir and runs it once more. It suits an operation that
+// is safe to repeat: a read, or a write that replaces a whole file. A stream
+// that may already have sent part of its output should call Reclaim first
+// instead.
+func RetryDenied(dir string, op func() error) error {
+	err := op()
+	if err == nil || !errors.Is(err, fs.ErrPermission) || !Current().Active {
+		return err
+	}
+	// Retry even when the reclaim reports a problem: it is best effort (a file
+	// the server renames mid-walk fails its chmod) and has usually fixed the
+	// file this op needs. Its error only explains a retry that fails too.
+	rerr := Reclaim(dir)
+	if err := op(); err != nil {
+		return errors.Join(err, rerr)
+	}
+	return nil
 }

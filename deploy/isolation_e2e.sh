@@ -33,4 +33,4 @@ install -d -o mcsm -g mcsm -m 0755 /srv/servers
 cd /tmp
 setpriv --reuid mcsm --regid mcsm --init-groups --inh-caps +kill --ambient-caps +kill -- \
     env MCSM_ISOLATION_E2E=1 MCSM_SERVER_ROOT=/srv/servers HOME=/var/lib/mcsm \
-    /tmp/isolation.test -test.v -test.run 'EndToEnd|ShareDir|Traversable'
+    /tmp/isolation.test -test.v -test.run 'EndToEnd|ShareDir|Traversable|ReclaimArgs'

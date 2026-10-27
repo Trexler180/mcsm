@@ -437,6 +437,13 @@ downloaded code too) run as a dedicated user, `mcsm-mc`:
   data directory is `0700`, `.mcsm-run` (console logs, launch tokens) and
   `mcsm-backups` are the agent's alone, and the agent and API processes are
   non-dumpable, so their `/proc` entries are closed to it.
+- What a server writes is shared back through its group umask (`0002`),
+  except files Java creates owner-only: Minecraft saves `level.dat` and player
+  data through such a temporary file. The agent reclaims those by running
+  `find … -exec chmod g+rw` as `mcsm-mc` through the launcher, which can only
+  touch files that user owns. It does so when a server exits, after a backup
+  pauses saving, after an installer runs, and whenever a read or write of a
+  server's files is denied, which it then retries once.
 - The agent keeps `CAP_KILL` to stop a server running as another user, and
   clears it from its ambient set so no child inherits it. It recognises an
   isolated server at reattach by its start time, since that server's working

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mcsm/agent/internal/isolation"
 )
 
 // Enchant is one enchantment on an item ({id, level}).
@@ -255,8 +257,12 @@ func ReadPlayerDetail(dir, uuid string) (*PlayerDetail, error) {
 		return nil, fmt.Errorf("no playerdata directory")
 	}
 	datPath := filepath.Join(pdDir, uuid+".dat")
-	root, err := parseNBTFile(datPath)
-	if err != nil {
+	// Minecraft saves player data owner-only; see isolation.Reclaim.
+	var root map[string]any
+	if err := isolation.RetryDenied(dir, func() (err error) {
+		root, err = parseNBTFile(datPath)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 

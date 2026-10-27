@@ -434,6 +434,10 @@ func spigotJar(ctx context.Context, dir, mcVersion, javaBinary string) error {
 	// the agent's, which carries the agent token.
 	cmd.Env = childenv.Build()
 	out, err := cmd.CombinedOutput()
+	// What it built is read and removed below; see isolation.Reclaim.
+	if rerr := isolation.Reclaim(tmpDir); rerr != nil {
+		log.Printf("BuildTools: %v", rerr)
+	}
 	if err != nil {
 		return fmt.Errorf("BuildTools failed: %w (last output: %s)", err, snippet(out, 500))
 	}
@@ -548,6 +552,10 @@ func runInstallerAndCaptureRuntime(ctx context.Context, dir, installerJar, javaB
 	// The installer is third-party code; see childenv.
 	cmd.Env = childenv.Build()
 	out, err := cmd.CombinedOutput()
+	// The agent reads its run script below and manages its files from now on.
+	if rerr := isolation.Reclaim(dir); rerr != nil {
+		log.Printf("installer: %v", rerr)
+	}
 	if err != nil {
 		return fmt.Errorf("installer failed: %w (output: %s)", err, snippet(out, 500))
 	}

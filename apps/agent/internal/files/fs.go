@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mcsm/agent/internal/isolation"
 )
 
 type Entry struct {
@@ -186,6 +188,10 @@ func withinBase(base, path string) bool {
 }
 
 func List(base, userPath string) (*Listing, error) {
+	return retryDenied(base, func() (*Listing, error) { return list(base, userPath) })
+}
+
+func list(base, userPath string) (*Listing, error) {
 	root, name, err := openRootPath(base, userPath)
 	if err != nil {
 		return nil, err
@@ -308,12 +314,14 @@ func ListTreeWith(base, userPath string, opts TreeOptions) (*Tree, error) {
 }
 
 func ReadContent(base, userPath string) ([]byte, error) {
-	root, name, err := openRootPath(base, userPath)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	return root.ReadFile(name)
+	return retryDenied(base, func() ([]byte, error) {
+		root, name, err := openRootPath(base, userPath)
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		return root.ReadFile(name)
+	})
 }
 
 // OpenFile opens a regular file through an anchored server root. The returned
@@ -323,7 +331,7 @@ func OpenFile(base, userPath string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := root.Open(name)
+	f, err := retryDenied(base, func() (*os.File, error) { return root.Open(name) })
 	root.Close()
 	if err != nil {
 		return nil, nil, err
@@ -346,10 +354,12 @@ func WriteContent(base, userPath string, data []byte) error {
 		return err
 	}
 	defer root.Close()
-	if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
-		return err
-	}
-	return root.WriteFile(name, data, 0644)
+	return isolation.RetryDenied(base, func() error {
+		if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
+			return err
+		}
+		return root.WriteFile(name, data, 0644)
+	})
 }
 
 func Delete(base, userPath string) error {
@@ -358,7 +368,7 @@ func Delete(base, userPath string) error {
 		return err
 	}
 	defer root.Close()
-	return root.RemoveAll(name)
+	return isolation.RetryDenied(base, func() error { return root.RemoveAll(name) })
 }
 
 func Rename(base, fromPath, toPath string) error {
@@ -371,10 +381,12 @@ func Rename(base, fromPath, toPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := root.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-	return root.Rename(src, dst)
+	return isolation.RetryDenied(base, func() error {
+		if err := root.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return err
+		}
+		return root.Rename(src, dst)
+	})
 }
 
 func Mkdir(base, userPath string) error {
@@ -417,7 +429,7 @@ func FileFingerprints(base, userPath string) (sha512hex string, murmur2 uint32, 
 		return "", 0, err
 	}
 	defer root.Close()
-	f, err := root.Open(name)
+	f, err := retryDenied(base, func() (*os.File, error) { return root.Open(name) })
 	if err != nil {
 		return "", 0, err
 	}
@@ -522,12 +534,15 @@ func ZipDir(base, userPath string, w io.Writer) error {
 		}
 		rel := rootWalkRelative(start, name)
 
-		f, err := zw.Create(rel)
+		// Opened before its entry is written, so a file the server kept to
+		// itself can be reclaimed and retried without corrupting the stream.
+		src, err := retryDenied(base, func() (*os.File, error) { return root.Open(name) })
 		if err != nil {
 			return err
 		}
-		src, err := root.Open(name)
+		f, err := zw.Create(rel)
 		if err != nil {
+			src.Close()
 			return err
 		}
 		_, copyErr := io.Copy(f, src)
@@ -537,6 +552,17 @@ func ZipDir(base, userPath string, w io.Writer) error {
 		}
 		return closeErr
 	})
+}
+
+// retryDenied is isolation.RetryDenied for an operation with a result: when
+// the server's own user kept a file to itself, reclaim it and try again.
+func retryDenied[T any](base string, op func() (T, error)) (T, error) {
+	var v T
+	err := isolation.RetryDenied(base, func() (err error) {
+		v, err = op()
+		return err
+	})
+	return v, err
 }
 
 func rootWalkRelative(start, name string) string {

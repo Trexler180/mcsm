@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	agentfiles "github.com/mcsm/agent/internal/files"
 	"github.com/mcsm/agent/internal/install"
+	"github.com/mcsm/agent/internal/isolation"
 	"github.com/mcsm/agent/internal/process"
 	"github.com/shirou/gopsutil/v4/disk"
 )
@@ -284,6 +286,12 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 
 	quiesced, resume := h.mgr.Quiesce(r.Context(), id, quiesceTimeout)
 	defer resume()
+	// An isolated server saves level.dat and player data through owner-only
+	// temporary files; with saving paused, make them the agent's to read. A
+	// file that is still denied below is reclaimed again and retried.
+	if err := isolation.Reclaim(src); err != nil {
+		log.Printf("backup %s: %v", id, err)
+	}
 
 	partPath := zipPath + ".partial"
 	zf, err := os.Create(partPath)
@@ -342,12 +350,18 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 		}
 		header.Name = name
 		header.Method = zip.Deflate
-		entry, err := zw.CreateHeader(header)
-		if err != nil {
+		// Opened before its entry is written, so a denied file can be
+		// reclaimed and retried without leaving a broken entry behind.
+		var f *os.File
+		if err := isolation.RetryDenied(src, func() (err error) {
+			f, err = root.Open(name)
+			return err
+		}); err != nil {
 			return err
 		}
-		f, err := root.Open(name)
+		entry, err := zw.CreateHeader(header)
 		if err != nil {
+			f.Close()
 			return err
 		}
 		_, err = io.Copy(entry, f)
@@ -564,6 +578,11 @@ func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 
 	// Stop the instance first; ignore "not running" so restore works offline.
 	_ = h.mgr.Stop(id, true, 30*time.Second)
+	// The old tree is moved aside and removed; a directory the server made
+	// owner-only would stop that part way.
+	if err := isolation.Reclaim(dst); err != nil {
+		log.Printf("restore %s: %v", id, err)
+	}
 
 	if err := swapRestoredDirectory(dst, stage); err != nil {
 		writeError(w, http.StatusInternalServerError, "install restore: "+err.Error())

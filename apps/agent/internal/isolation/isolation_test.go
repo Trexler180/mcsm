@@ -2,6 +2,7 @@ package isolation
 
 import (
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -54,5 +55,87 @@ func TestEnforcedRefusesWhenUnavailable(t *testing.T) {
 	_, _, err := Command("java", nil, t.TempDir())
 	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "AGENT_ISOLATE_SERVERS=0") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// isolatedForTest makes servers count as isolated, with reclaim replaced.
+func isolatedForTest(t *testing.T, reclaim func(*state, string) error) {
+	t.Helper()
+	mu.Lock()
+	prev := current
+	current = &state{status: Status{Mode: Enforced, Active: true, User: DefaultUser}}
+	mu.Unlock()
+	prevFn := reclaimFn
+	reclaimFn = reclaim
+	t.Cleanup(func() {
+		mu.Lock()
+		current = prev
+		mu.Unlock()
+		reclaimFn = prevFn
+	})
+}
+
+// A file the server kept to itself is reclaimed once and the op retried, which
+// is how a backup reads the level.dat Minecraft saves owner-only.
+func TestRetryDeniedReclaimsAndRetries(t *testing.T) {
+	var reclaimed []string
+	isolatedForTest(t, func(_ *state, dir string) error {
+		reclaimed = append(reclaimed, dir)
+		return nil
+	})
+	calls := 0
+	err := RetryDenied("/srv/servers/smp", func() error {
+		calls++
+		if calls == 1 {
+			return &fs.PathError{Op: "open", Path: "world/level.dat", Err: fs.ErrPermission}
+		}
+		return nil
+	})
+	if err != nil || calls != 2 || strings.Join(reclaimed, ",") != "/srv/servers/smp" {
+		t.Fatalf("err=%v calls=%d reclaimed=%q", err, calls, reclaimed)
+	}
+}
+
+// A reclaim that reports a problem (a file renamed mid-walk) still gets its
+// retry; its error only explains a retry that fails as well.
+func TestRetryDeniedRetriesDespiteReclaimError(t *testing.T) {
+	reclaimErr := errors.New("find: chmod: No such file or directory")
+	isolatedForTest(t, func(*state, string) error { return reclaimErr })
+	calls := 0
+	if err := RetryDenied("/srv/servers/smp", func() error {
+		calls++
+		if calls == 1 {
+			return fs.ErrPermission
+		}
+		return nil
+	}); err != nil || calls != 2 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+
+	err := RetryDenied("/srv/servers/smp", func() error { return fs.ErrPermission })
+	if !errors.Is(err, fs.ErrPermission) || !errors.Is(err, reclaimErr) {
+		t.Fatalf("err = %v, want both the denial and the reclaim error", err)
+	}
+}
+
+// Only a denial is worth a reclaim, and only when servers are isolated.
+func TestRetryDeniedLeavesOtherFailuresAlone(t *testing.T) {
+	reclaims := 0
+	isolatedForTest(t, func(*state, string) error { reclaims++; return nil })
+	if err := RetryDenied("/srv/servers/smp", func() error { return fs.ErrNotExist }); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v", err)
+	}
+
+	mu.Lock()
+	current = &state{status: Status{Mode: Off}}
+	mu.Unlock()
+	if err := RetryDenied("/srv/servers/smp", func() error { return fs.ErrPermission }); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := Reclaim("/srv/servers/smp"); err != nil {
+		t.Fatalf("reclaim without isolation: %v", err)
+	}
+	if reclaims != 0 {
+		t.Fatalf("reclaimed %d times", reclaims)
 	}
 }

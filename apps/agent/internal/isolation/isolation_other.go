@@ -13,6 +13,8 @@ func resolve(cfg Config) *state {
 	return st
 }
 
+func reclaim(*state, string) error { return nil }
+
 func wrap(_ *state, program string, args []string, _ string) (string, []string, error) {
 	return program, args, nil
 }

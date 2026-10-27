@@ -47,9 +47,17 @@ func TestIsolationEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "server.properties"), []byte("motd=hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The agent's own: its run state, which the server user cannot enter, and a
+	// world it unpacked owner-only, not yet shared by a start.
+	for _, own := range []string{".mcsm-run", "uploaded"} {
+		if err := os.MkdirAll(filepath.Join(dir, own), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	script := `id -u; umask; grep NoNewPrivs /proc/self/status; grep CapEff /proc/self/status
 echo edited >> server.properties
 mkdir -p world/region && echo chunk > world/region/r.0.0.mca
+(umask 077; echo nbt > world/level.dat; mkdir -p world/playerdata world/tmp; echo nbt > world/playerdata/p.dat; echo x > world/tmp/f)
 cat ` + secret + ` 2>/dev/null && echo LEAKED || echo secret-unreadable`
 	program, args, err := Command("sh", []string{"-c", script}, dir)
 	if err != nil {
@@ -69,6 +77,32 @@ cat ` + secret + ` 2>/dev/null && echo LEAKED || echo secret-unreadable`
 	}
 	if strings.Contains(got, "LEAKED") {
 		t.Fatal("the server process read the agent's secret")
+	}
+
+	// Minecraft saves level.dat and player data through an owner-only
+	// temporary file it renames into place, so the group does not reach them
+	// until the agent reclaims them.
+	level := filepath.Join(dir, "world", "level.dat")
+	if _, err := os.ReadFile(level); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("expected the server's owner-only level.dat to be denied, got %v", err)
+	}
+	var data []byte
+	if err := RetryDenied(dir, func() (err error) {
+		data, err = os.ReadFile(level)
+		return err
+	}); err != nil || string(data) != "nbt\n" {
+		t.Fatalf("level.dat after reclaiming: %q %v", data, err)
+	}
+	if err := Reclaim(dir); err != nil {
+		t.Fatalf("a reclaim with nothing racing it should be clean: %v", err)
+	}
+	for _, name := range []string{"world/playerdata/p.dat", "world/tmp/f"} {
+		if _, err := os.ReadFile(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s after reclaiming: %v", name, err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(dir, ".mcsm-run")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf(".mcsm-run should stay the agent's alone: %v", err)
 	}
 
 	// The agent can still manage what the server wrote.

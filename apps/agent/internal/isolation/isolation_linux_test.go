@@ -4,6 +4,7 @@ package isolation
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -64,5 +65,60 @@ func TestTraversable(t *testing.T) {
 	}
 	if _, ok := traversable(filepath.Join(locked, "servers"), 65533, 65533); !ok {
 		t.Fatal("o+x directories should be traversable")
+	}
+}
+
+// The find expression reclaim runs as the server user, run here as the test's
+// own user: what that user kept to itself (the way Java saves level.dat, or
+// makes a temporary directory) gains group access; the agent's own
+// directories and anything behind a symlink are left alone.
+func TestReclaimArgs(t *testing.T) {
+	if _, err := exec.LookPath("find"); err != nil {
+		t.Skip("find is not installed")
+	}
+	dir, outside := t.TempDir(), t.TempDir()
+	write := func(path string, mode os.FileMode) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	level := write(filepath.Join(dir, "world", "level.dat"), 0o600)
+	shared := write(filepath.Join(dir, "server.properties"), 0o664)
+	tmpDir := filepath.Join(dir, "world", "tmp")
+	inTmp := write(filepath.Join(tmpDir, "chunk"), 0o600)
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runState := write(filepath.Join(dir, ".mcsm-run", "state.json"), 0o600)
+	backup := write(filepath.Join(dir, "mcsm-backups", "b.zip"), 0o600)
+	secret := write(filepath.Join(outside, "secret"), 0o600)
+	if err := os.Symlink(secret, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("find", reclaimArgs(dir, os.Getuid())...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("find: %v: %s", err, out)
+	}
+
+	for path, want := range map[string]os.FileMode{
+		level: 0o660, inTmp: 0o660, tmpDir: 0o770, shared: 0o664,
+		runState: 0o600, backup: 0o600, secret: 0o600,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s: mode %v, want %v", path, got, want)
+		}
 	}
 }
