@@ -319,6 +319,8 @@ export function MenuButton({
   variant = 'quiet',
   size = 'sm',
   className,
+  need,
+  loading,
 }: {
   icon?: IconName
   label?: string
@@ -329,6 +331,8 @@ export function MenuButton({
   variant?: string
   size?: 'sm' | ''
   className?: string
+  need?: ServerPermission
+  loading?: boolean
 }) {
   const ref = useRef<HTMLSpanElement>(null)
   const [open, setOpen] = useState(false)
@@ -341,11 +345,11 @@ export function MenuButton({
     <>
       <span ref={ref} style={{ display: 'inline-flex' }} className={className}>
         {children ? (
-          <Btn variant={variant} size={size} iconRight="chev-d" onClick={toggle} aria-haspopup="menu" aria-expanded={open}>
+          <Btn variant={variant} size={size} iconRight="chev-d" need={need} loading={loading} onClick={toggle} aria-haspopup="menu" aria-expanded={open}>
             {children}
           </Btn>
         ) : (
-          <IconBtn icon={icon} label={label} variant={variant} size={size} onClick={toggle} aria-haspopup="menu" aria-expanded={open} />
+          <IconBtn icon={icon} label={label} variant={variant} size={size} need={need} loading={loading} onClick={toggle} aria-haspopup="menu" aria-expanded={open} />
         )}
       </span>
       <Menu anchor={ref} open={open} onClose={close} align={align} width={width}>

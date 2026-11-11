@@ -3,10 +3,12 @@ package files
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -154,6 +156,32 @@ func TestWriteUploadIntoServerRoot(t *testing.T) {
 	}
 	if string(got) != "png" {
 		t.Fatalf("uploaded contents = %q, want %q", got, "png")
+	}
+}
+
+// TestWriteUploadBuildsFolders covers a folder upload: the panel sends its files
+// a few at a time, each naming a folder nothing has made yet, and they all race
+// to create the same parents.
+func TestWriteUploadBuildsFolders(t *testing.T) {
+	base := t.TempDir()
+
+	errs := make([]error, 64)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Go(func() {
+			dir := fmt.Sprintf("/config/mod/%d/deep", i%4)
+			errs[i] = WriteUpload(base, dir, fmt.Sprintf("%d.toml", i), strings.NewReader("x"))
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("upload %d failed: %v", i, err)
+		}
+		if _, err := os.Stat(filepath.Join(base, "config", "mod", fmt.Sprint(i%4), "deep", fmt.Sprintf("%d.toml", i))); err != nil {
+			t.Fatalf("upload %d missing: %v", i, err)
+		}
 	}
 }
 

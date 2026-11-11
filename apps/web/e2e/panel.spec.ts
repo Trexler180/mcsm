@@ -2,8 +2,9 @@
 // was checked by hand before a release, made repeatable. The tests share one
 // server and run in order; each leaves it as the next expects.
 import { expect, test, type Page } from '@playwright/test'
-import { existsSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { zipFolder } from './zip'
 
 const SERVER = 'E2E Paper'
@@ -146,6 +147,57 @@ test('creates, edits, and deletes a file', async () => {
   await page.getByRole('menuitem', { name: 'Delete' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
   await expect(page.getByRole('button', { name: 'More for e2e.txt' })).toHaveCount(0)
+})
+
+test('uploads folders, picked and dropped, with their shape', async () => {
+  const server = join(process.env.E2E_SERVERS!, 'e2e-paper')
+  const local = mkdtempSync(join(tmpdir(), 'mcsm-e2e-upload-'))
+  const write = (path: string, text: string) => {
+    mkdirSync(dirname(join(local, path)), { recursive: true })
+    writeFileSync(join(local, path), text)
+  }
+  const onServer = (path: string) => readFileSync(join(server, path), 'utf-8')
+  const uploaded = (name: string) => expect(page.getByRole('status').filter({ hasText: `Uploaded ${name}` }).first()).toBeVisible()
+
+  write('picked/a.toml', 'a = 1')
+  write('picked/mod/deep/b.toml', 'b = 2')
+  await open('files')
+  await page.getByRole('button', { name: 'Upload', exact: true }).click()
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('menuitem', { name: 'Upload a folder' }).click()
+  await (await chooser).setFiles(join(local, 'picked'))
+  await uploaded('picked')
+  expect(onServer('picked/a.toml')).toBe('a = 1')
+  expect(onServer('picked/mod/deep/b.toml')).toBe('b = 2')
+
+  // A drag the browser believes in: only a real one carries folder entries.
+  const cdp = await page.context().newCDPSession(page)
+  const drop = async (path: string) => {
+    const box = (await page.locator('.files-list').boundingBox())!
+    const at = { x: box.x + box.width / 2, y: box.y + box.height / 2, data: { items: [], files: [join(local, path)], dragOperationsMask: 1 } }
+    for (const type of ['dragEnter', 'dragOver', 'drop'] as const) await cdp.send('Input.dispatchDragEvent', { type, ...at })
+  }
+  write('dropped/c.toml', 'c = 3')
+  write('dropped/mod/d.toml', 'd = 4')
+  mkdirSync(join(local, 'dropped/empty'))
+  await drop('dropped')
+  await uploaded('dropped')
+  expect(onServer('dropped/mod/d.toml')).toBe('d = 4')
+  expect(statSync(join(server, 'dropped/empty')).isDirectory()).toBe(true)
+
+  // Landing on a folder that's already there replaces matching files, so it asks.
+  await expect(page.getByRole('button', { name: 'More for dropped' })).toBeVisible()
+  write('dropped/c.toml', 'c = changed')
+  rmSync(join(local, 'dropped/mod'), { recursive: true })
+  await drop('dropped')
+  await page.getByRole('dialog', { name: 'dropped is already here' }).getByRole('button', { name: 'Upload' }).click()
+  await expect.poll(() => onServer('dropped/c.toml')).toBe('c = changed')
+  expect(onServer('dropped/mod/d.toml')).toBe('d = 4')
+
+  await cdp.detach()
+  rmSync(local, { recursive: true })
+  rmSync(join(server, 'picked'), { recursive: true })
+  rmSync(join(server, 'dropped'), { recursive: true })
 })
 
 test('schedules a backup without naming it, runs it, and deletes it', async () => {

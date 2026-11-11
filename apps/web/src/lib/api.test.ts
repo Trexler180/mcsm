@@ -185,6 +185,54 @@ describe("request auth retry", () => {
   });
 });
 
+describe("files.upload", () => {
+  // Just enough of XMLHttpRequest for one answered request.
+  function answerUploadsWith(status: number, body: string) {
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      class {
+        status = status;
+        statusText = "";
+        responseText = body;
+        upload = {};
+        onload = () => {};
+        open() {}
+        setRequestHeader() {}
+        send() {
+          queueMicrotask(() => this.onload());
+        }
+      },
+    );
+  }
+  const upload = () =>
+    api.files.upload("s1", "/config", new File(["x"], "a.toml"));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Callers tell success from `act`'s undefined: the resource pack setting used
+  // to save nothing after an upload that had worked.
+  it("resolves to something a caller can tell from a failure", async () => {
+    answerUploadsWith(200, '{"uploaded":1}');
+    await expect(upload()).resolves.toBe(true);
+  });
+
+  it("says what the panel said", async () => {
+    answerUploadsWith(403, '{"error":"the server\'s files don\'t allow that"}');
+    await expect(upload()).rejects.toMatchObject({
+      status: 403,
+      message: "the server's files don't allow that",
+    });
+  });
+
+  it("explains a size limit the proxy answered with a page", async () => {
+    answerUploadsWith(413, "<html>Request Entity Too Large</html>");
+    await expect(upload()).rejects.toMatchObject({
+      status: 413,
+      message: "too big to upload",
+    });
+  });
+});
+
 describe("server runtime repair", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

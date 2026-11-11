@@ -312,9 +312,25 @@ function xhrUpload(
         }),
       );
     };
-    xhr.onerror = () => reject(new Error("Network error during upload"));
+    // A TypeError is what fetch rejects with when nothing answered at all.
+    xhr.onerror = () => reject(new TypeError("Network error during upload"));
     xhr.send(formData);
   });
+}
+
+// What a refused upload answered, for the panel's failure rules to read. A 401
+// has already been through xhrUpload's refresh, so the session is over. A 413
+// can come from the proxy in front of the API, as a page rather than JSON.
+async function uploadError(r: Response): Promise<ApiError> {
+  if (r.status === 401) return sessionEndedError();
+  let msg = r.status === 413 ? "too big to upload" : `HTTP ${r.status}`;
+  let body: { code?: string; operation?: Operation } = {};
+  try {
+    const err = await r.json();
+    msg = err.error || msg;
+    body = err;
+  } catch {}
+  return new ApiError(r.status, msg, body);
 }
 
 async function request<T>(
@@ -892,8 +908,9 @@ export const api = {
         `${BASE}/servers/${serverId}/files/upload?path=${encodeURIComponent(dirPath)}`,
         fd,
         onProgress,
-      ).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      ).then(async (r) => {
+        if (!r.ok) throw await uploadError(r);
+        return true;
       });
     },
   },
@@ -925,16 +942,7 @@ export const api = {
         true,
         opts.signal,
       ).then(async (r) => {
-        if (!r.ok) {
-          let msg = `HTTP ${r.status}`;
-          let body: { code?: string; operation?: Operation } = {};
-          try {
-            const err = await r.json();
-            msg = err.error || msg;
-            body = err;
-          } catch {}
-          throw new ApiError(r.status, msg, body);
-        }
+        if (!r.ok) throw await uploadError(r);
         const answer = (await r.json()) as WorldUploadResult & {
           operation?: Operation;
         };

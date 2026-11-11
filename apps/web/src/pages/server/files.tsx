@@ -18,6 +18,7 @@ import { cx, plural } from '@/ui/util'
 import { CodeEditor } from './code-editor'
 import { isLiveStatus, okToOverwrite } from './data'
 import { NbtTree } from './nbt-view'
+import { droppedItems, pickedItems, topFolders, uploadName, uploadRun, type UploadItem, type UploadMeter } from './upload'
 
 // The server's folder: browse, upload, rename and delete, and open a file
 // beside the list to edit it (text in an editor, .dat files as a tree). The
@@ -129,9 +130,10 @@ function Browser({
   }).data?.sizes
   const [sel, setSel] = useState<string[]>([])
   const [over, setOver] = useState(false)
-  const [up, setUp] = useState<{ loaded: number; total: number; count: number } | null>(null)
+  const [up, setUp] = useState<UploadMeter | null>(null)
   const [naming, setNaming] = useState<{ kind: 'file' | 'dir' | 'rename'; from?: string } | null>(null)
   const pick = useRef<HTMLInputElement>(null)
+  const pickFolder = useRef<HTMLInputElement>(null)
   useEffect(() => setSel([]), [path])
 
   const entries = (listing.data?.entries ?? []).slice().sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1))
@@ -143,25 +145,44 @@ function Browser({
     void qc.invalidateQueries({ queryKey: ['file-tree', server.id] })
   }
 
-  const upload = async (files: File[]) => {
-    if (!files.length) return
-    const loaded = files.map(() => 0)
-    const total = files.reduce((n, f) => n + f.size, 0)
-    setUp({ loaded: 0, total, count: files.length })
-    const results = await Promise.all(
-      files.map((f, i) =>
-        act(`upload ${f.name}`, () =>
-          api.files.upload(server.id, path, f, (p) => {
-            loaded[i] = p.loaded
-            setUp((u) => u && { ...u, loaded: loaded.reduce((a, b) => a + b, 0) })
-          }),
-        ),
-      ),
+  const upload = async (items: UploadItem[]) => {
+    if (!items.length) return
+    if (up) return toast('info', 'An upload is already running', 'Try this one again when it finishes.')
+    // Landing on a folder that's here merges into it, which can replace a lot at
+    // once with nothing to undo it, so that takes a yes.
+    const merging = topFolders(items).filter((n) => entries.some((e) => e.type === 'dir' && e.name === n))
+    if (merging.length) {
+      const ok = await ask({
+        title: merging.length === 1 ? `${merging[0]} is already here` : `${plural(merging.length, 'folder')} are already here`,
+        body: 'Uploading adds to what’s there and replaces any file with the same name.',
+        confirm: 'Upload',
+      })
+      if (!ok) return
+    }
+    const name = uploadName(items)
+    const run = uploadRun(
+      items,
+      {
+        file: (dir, file, onProgress) => api.files.upload(server.id, dir ? join(path, dir) : path, file, onProgress),
+        folder: (dir) => api.files.mkdir(server.id, join(path, dir)),
+      },
+      setUp,
     )
-    setUp(null)
-    const ok = results.filter((r) => r !== undefined).length
-    if (ok) toast('ok', ok === 1 ? `Uploaded ${files[results.findIndex((r) => r !== undefined)].name}` : `Uploaded ${plural(ok, 'file')}`)
-    refresh()
+    await act(`upload ${name}`, async () => {
+      try {
+        await run()
+        toast('ok', `Uploaded ${name}`)
+      } finally {
+        setUp(null)
+        refresh()
+      }
+    })
+  }
+
+  const picked = (input: HTMLInputElement) => {
+    const items = pickedItems(Array.from(input.files ?? []))
+    input.value = ''
+    void upload(items)
   }
 
   const remove = async (names: string[]) => {
@@ -222,7 +243,9 @@ function Browser({
       onDrop={(e) => {
         e.preventDefault()
         setOver(false)
-        if (can('files.write')) void upload(Array.from(e.dataTransfer.files))
+        if (!can('files.write')) return
+        const reading = droppedItems(e.dataTransfer)
+        void act('read what you dropped', () => reading).then((items) => items && upload(items))
       }}
     >
       <div className="files-bar">
@@ -251,17 +274,9 @@ function Browser({
           </>
         ) : (
           <>
-            <input
-              ref={pick}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                const files = Array.from(e.target.files ?? [])
-                e.target.value = ''
-                void upload(files)
-              }}
-            />
+            <input ref={pick} type="file" multiple hidden onChange={(e) => picked(e.target)} />
+            {/* Spread because React's types don't know the attribute. */}
+            <input ref={pickFolder} type="file" hidden {...{ webkitdirectory: '' }} onChange={(e) => picked(e.target)} />
             <IconBtn icon="refresh" label="Refresh" onClick={refresh} />
             <MenuButton
               label="New"
@@ -277,9 +292,24 @@ function Browser({
                 </>
               )}
             />
-            <Btn size="sm" need="files.write" loading={!!up} onClick={() => pick.current?.click()}>
+            <MenuButton
+              variant=""
+              align="end"
+              need="files.write"
+              loading={!!up}
+              items={(close) => (
+                <>
+                  <MenuItem close={close} onClick={() => pick.current?.click()}>
+                    Upload files
+                  </MenuItem>
+                  <MenuItem close={close} onClick={() => pickFolder.current?.click()}>
+                    Upload a folder
+                  </MenuItem>
+                </>
+              )}
+            >
               Upload
-            </Btn>
+            </MenuButton>
           </>
         )}
       </div>
@@ -287,6 +317,7 @@ function Browser({
         <div className="files-upload">
           <Meter value={up.loaded} max={up.total || 1} label="Upload progress" />
           <span className="t3 small num">
+            {up.count > 1 ? `${up.done} of ` : ''}
             {plural(up.count, 'file')}, {fmtBytes(up.loaded)} of {fmtBytes(up.total)}
           </span>
         </div>
@@ -374,11 +405,11 @@ function Browser({
                   })}
                 </tbody>
               </table>
-              {entries.length === 0 && <Empty title="This folder is empty.">{can('files.write') ? 'Drop files here to upload them.' : undefined}</Empty>}
+              {entries.length === 0 && <Empty title="This folder is empty.">{can('files.write') ? 'Drop files or folders here to upload them.' : undefined}</Empty>}
               {!narrow && entries.length > 0 && (
                 <p className="t3 small" style={{ marginTop: 12 }}>
                   {plural(entries.length, 'item')}
-                  {sizes ? `, ${fmtBytes(Object.values(sizes).reduce((a, b) => a + b, 0))}` : ''}.{can('files.write') ? ' Drop files anywhere here to upload them.' : ''}
+                  {sizes ? `, ${fmtBytes(Object.values(sizes).reduce((a, b) => a + b, 0))}` : ''}.{can('files.write') ? ' Drop files or folders anywhere here to upload them.' : ''}
                 </p>
               )}
             </>

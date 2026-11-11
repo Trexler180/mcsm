@@ -404,11 +404,15 @@ func WriteUpload(base, dirPath, filename string, src io.Reader) error {
 		return err
 	}
 	defer root.Close()
-	if err := root.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
 	dst := filepath.Join(dir, filepath.Base(filename))
-	f, err := root.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	// Nothing of src has been read yet, so this is safe to repeat: a config the
+	// server saved owner-only can be replaced like any other.
+	f, err := retryDenied(base, func() (*os.File, error) {
+		if err := root.MkdirAll(dir, 0755); err != nil {
+			return nil, err
+		}
+		return root.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	})
 	if err != nil {
 		return err
 	}
