@@ -16,7 +16,7 @@ The API auto-registers the agent as `Local Agent` when
 
 ## Build
 
-Go 1.26.10 or newer (with the default `GOTOOLCHAIN=auto`, an older Go downloads
+Go 1.26.11 or newer (with the default `GOTOOLCHAIN=auto`, an older Go downloads
 it), Node 22 and pnpm 10.
 
 ```bash
