@@ -54,7 +54,9 @@ up, with a warning that the copy may be inconsistent. Archives are written under
 a temporary name and renamed into place once complete.
 
 Restoring first takes a backup of the current world (`pre_restore`), and stops
-if that fails, so restoring the wrong backup loses nothing. Retention keeps a
+if that fails, so restoring the wrong backup loses nothing. It also stops, with
+the server's files untouched, if the server cannot be confirmed stopped: the
+restored world is never swapped in underneath a running process. Retention keeps a
 backup target's newest *N* successful backups and drops those older than its
 maximum age, but never the newest successful one. Download an archive with
 `GET /servers/{id}/backups/{backupId}/download` (ticketed; needs backups and
@@ -62,6 +64,13 @@ files read access).
 
 For disaster recovery, back up the SQLite database, the encryption key, and the
 server root together (see the README).
+
+The panel copies its own database once a day into `db-backups` beside it and
+keeps the newest seven (see `DB_BACKUP_*` in
+[deployment.md](deployment.md#settings-reference)). To go back to one, stop the
+API, replace the database file with the copy (removing any `-wal` and `-shm`
+files left beside it), and start the API. Those copies share a disk with the
+database unless `DB_BACKUP_DIR` says otherwise.
 
 ## Startup problems
 

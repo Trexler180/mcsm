@@ -71,8 +71,8 @@ whose basename is not a Java executable (`java`/`javaw`).
   presented again within 30 seconds of its rotation (two tabs refreshing
   together) still earns an access token; presented after that, it is treated
   as stolen and the whole session ends. Browser refresh tokens are `HttpOnly`,
-  `SameSite=Strict` cookies scoped to `/api/v1/auth`; the frontend stores only
-  the short-lived access token. Logout is keyed on that cookie and works with
+  `SameSite=Strict` cookies scoped to `/api/v1/auth`; the frontend holds only
+  the short-lived access token, in memory, and writes it to no storage. Logout is keyed on that cookie and works with
   an expired access token.
 - Query-string tokens are never accepted. WebSocket/download endpoints that
   cannot carry an Authorization header accept a short-lived, single-use ticket
@@ -597,6 +597,10 @@ gated at three layers:
   is `X-Real-IP` from a trusted proxy, else the rightmost `X-Forwarded-For` hop
   that is not a trusted proxy, so a client cannot choose the address its login
   throttle and audit rows are keyed on.
+- `TRUSTED_PROXY_SECRET` makes the proxy prove itself as well. On a single host
+  every local process shares the proxy's loopback address, a Minecraft
+  server's mods included; with the secret set, a peer that does not present it
+  is a client like any other, whatever address it connects from.
 - `/api/v1/health` answers only `{"status":"ok"}` to anything but a direct
   loopback caller, which also gets the version.
 - Outbound webhooks are signed over the delivery time and the body
@@ -611,7 +615,15 @@ gated at three layers:
 
 Outside `MCSM_DEV_MODE=1` or a development `APP_ENV`, the API requires a
 configured `JWT_SECRET`, and the API and agent reject the default
-`dev-agent-token`.
+`dev-agent-token` along with the other placeholder values this repository
+prints in its examples (`CHANGE_ME`, `changeme`, `dev-secret`), for the signing
+secret, the agent token, and an admin password about to be set.
+
+The API also refuses to start when it can neither read nor create its
+encryption key file. It used to carry on with a key derived from `JWT_SECRET`,
+and everything saved in that state became unreadable once the file was fixed.
+A key file that exists is never replaced: an empty or unreadable one stops the
+start and says so.
 
 ## Future Work
 

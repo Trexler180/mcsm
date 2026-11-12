@@ -146,6 +146,30 @@ func (m *Manager) Stop(id string, graceful bool, timeout time.Duration) error {
 	return inst.stop(graceful, timeout)
 }
 
+// ErrStillRunning means a server's process outlived an attempt to stop it.
+var ErrStillRunning = errors.New("server did not exit in time")
+
+// EnsureStopped stops a server and returns nil only once its process is gone;
+// a server with no process is already stopped. Stop alone can return nil with
+// the process still alive (the wait after a kill is bounded), which is not
+// enough for a caller about to replace the server's files underneath it.
+func (m *Manager) EnsureStopped(id string, timeout time.Duration) error {
+	m.cancelPending(id)
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	if err := inst.stop(true, timeout); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	if !inst.exited() {
+		return ErrStillRunning
+	}
+	return nil
+}
+
 // ForgetExited drops the record of a server whose process has already exited,
 // so its status reads offline again. A restore calls it: a crash or startup
 // failure on the record happened on files that were just replaced, and the

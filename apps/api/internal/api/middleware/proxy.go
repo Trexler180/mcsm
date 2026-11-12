@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -38,14 +39,39 @@ var forwardedHeaders = []string{
 // "reverse proxy on the same host" production shape; operators terminating TLS
 // on a separate host set TRUSTED_PROXIES to that proxy's CIDR.
 func TrustedProxy(trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return TrustedProxyWithSecret(trusted, "")
+}
+
+// ProxySecretHeader carries the secret a reverse proxy proves itself with when
+// TRUSTED_PROXY_SECRET is set.
+const ProxySecretHeader = "X-MCSM-Proxy-Secret"
+
+// TrustedProxyWithSecret is TrustedProxy that, when secret is non-empty, also
+// requires the peer to present it in ProxySecretHeader before any forwarding
+// header is believed.
+//
+// An address alone cannot tell the proxy from its neighbours: on the supported
+// single-host shape the proxy is a loopback peer, and so is every other
+// process on the machine — including a Minecraft server's mods, which can open
+// a connection to the API and claim any client address they like, giving each
+// login guess a fresh throttle bucket and writing invented addresses into the
+// audit log. The secret is something only the proxy holds (a root-only nginx
+// include), so a loopback peer without it is just a client.
+//
+// The header never travels further than this middleware.
+func TrustedProxyWithSecret(trusted []*net.IPNet, secret string) func(http.Handler) http.Handler {
 	if len(trusted) == 0 {
 		trusted = loopbackNets()
 	}
+	want := []byte(secret)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// True-Client-IP is not part of our proxy contract; never honor it.
 			r.Header.Del("True-Client-IP")
-			if !peerTrusted(r.RemoteAddr, trusted) {
+			presented := r.Header.Get(ProxySecretHeader)
+			r.Header.Del(ProxySecretHeader)
+			vouched := len(want) == 0 || subtle.ConstantTimeCompare([]byte(presented), want) == 1
+			if !vouched || !peerTrusted(r.RemoteAddr, trusted) {
 				for _, h := range forwardedHeaders {
 					r.Header.Del(h)
 				}

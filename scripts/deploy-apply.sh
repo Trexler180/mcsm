@@ -15,6 +15,18 @@
 #               is), then restart services
 # Restarting mcsm-api also applies any new DB migrations (goose runs on boot).
 #
+# What a rollback returns to is the last deploy that passed its health checks,
+# not merely the one before. Each part installed is marked unverified until
+# the checks at the end pass; a deploy over an unverified part (a second
+# attempt after a failed one) leaves the rollback target, and the database copy
+# that goes with it, where they were. Two bad deploys in a row therefore still
+# roll back to the build that worked.
+#
+# Binaries and the web bundle are installed root-owned. The services only need
+# to read and execute them, and a file its own service can rewrite is a way for
+# anything that takes over that service to stay: a patched binary, or script
+# served to every admin's browser.
+#
 # An api deploy copies the database first, with the API stopped, into
 # db-prev/ (root-only; the last three are kept). A new API can migrate the
 # schema and re-encrypt stored secrets in a form the previous one cannot read,
@@ -37,6 +49,7 @@ ROOT=${DEPLOY_ROOT:-/srv/dashboard}
 PROC=${DEPLOY_PROC:-/proc}
 DOMAIN_FILE=${DEPLOY_DOMAIN_FILE:-/root/.test_domain}
 HEALTH_WAIT=${DEPLOY_HEALTH_WAIT:-2}
+HEALTH_TIMEOUT=${DEPLOY_HEALTH_TIMEOUT:-60}
 DB_KEEP=3
 STAGE=$(cd "$(dirname "$0")" && pwd)
 case "$STAGE" in
@@ -62,9 +75,19 @@ done
 
 install_bin() { # $1 = binary name
   local n="$1"
-  install -o mcsm -g mcsm -m 0755 "$STAGE/upload-$n" "bin/$n.new"
-  [ -f "bin/$n" ] && cp -a "bin/$n" "bin/$n.prev"
+  chown root:root bin
+  chmod 755 bin
+  install -o root -g root -m 0755 "$STAGE/upload-$n" "bin/$n.new"
+  if [ -f "bin/$n" ]; then
+    if [ -f "bin/$n.unverified" ] && [ -f "bin/$n.prev" ]; then
+      echo "[deploy] $n: the build being replaced never passed its health checks; rollback still returns to the one before it"
+    else
+      cp -a "bin/$n" "bin/$n.prev"
+      chown root:root "bin/$n.prev"
+    fi
+  fi
   mv "bin/$n.new" "bin/$n"
+  : > "bin/$n.unverified"
   rm -f "$STAGE/upload-$n"
 }
 
@@ -106,10 +129,24 @@ snapshot_db() {
     [ -f "$f" ] && cp -a "$f" "$snap/"
   done
   echo "$db" > "$snap/PATH"
-  echo "$name" > "$ROOT/db-prev/LATEST"
-  # Keep the newest few pre-deploy copies; databases set aside by a rollback
-  # are kept until someone removes them.
-  ls -1d "$ROOT"/db-prev/2*/ 2>/dev/null | sort -r | tail -n +$((DB_KEEP + 1)) | xargs -r rm -rf
+  # The copy a rollback restores must be the one the rollback binary last ran
+  # on. When the API being replaced never passed its health checks, that is
+  # still the copy an earlier deploy named, not this one.
+  local keep="" old
+  if [ -f bin/mcsm-api.unverified ] && [ -f bin/mcsm-api.prev ] && [ -f "$ROOT/db-prev/LATEST" ] &&
+     [ -d "$ROOT/db-prev/$(cat "$ROOT/db-prev/LATEST")" ]; then
+    keep=$(cat "$ROOT/db-prev/LATEST")
+    echo "[db] rollback still restores db-prev/$keep, from before the build that failed"
+  else
+    echo "$name" > "$ROOT/db-prev/LATEST"
+  fi
+  # Keep the newest few pre-deploy copies, and always the one a rollback would
+  # restore; databases set aside by a rollback are kept until someone removes
+  # them.
+  ls -1d "$ROOT"/db-prev/2*/ 2>/dev/null | sort -r | tail -n +$((DB_KEEP + 1)) | while read -r old; do
+    if [ -n "$keep" ] && [ "$(basename "$old")" = "$keep" ]; then continue; fi
+    rm -rf "$old"
+  done
   echo "[db] copied $(basename "$db") to db-prev/$name"
 }
 
@@ -155,10 +192,13 @@ fi
 provision_status=0
 if [ "$rollback" = 1 ]; then
   echo "[rollback] restoring previous artifacts"
-  [ -f bin/mcsm-api.prev ]   && cp -a bin/mcsm-api.prev   bin/mcsm-api   && echo "  api binary rolled back"
-  [ -f bin/mcsm-agent.prev ] && cp -a bin/mcsm-agent.prev bin/mcsm-agent && echo "  agent binary rolled back"
+  # Copies kept by deploys from before artifacts were installed root-owned
+  # still belong to mcsm; what goes back into service is made root's.
+  [ -f bin/mcsm-api.prev ]   && cp -a bin/mcsm-api.prev   bin/mcsm-api   && chown root:root bin/mcsm-api   && echo "  api binary rolled back"
+  [ -f bin/mcsm-agent.prev ] && cp -a bin/mcsm-agent.prev bin/mcsm-agent && chown root:root bin/mcsm-agent && echo "  agent binary rolled back"
   if [ -d web_prev ]; then
     rm -rf web_bad; mv web web_bad; cp -a web_prev web; rm -rf web_bad
+    chown -R root:root web
     echo "  web rolled back"
   fi
   if [ "$keepdb" = 1 ]; then
@@ -172,12 +212,18 @@ else
   [ "$do_agent" = 1 ] && { install_bin mcsm-agent; echo "[deploy] agent binary updated"; }
   if [ "$do_web" = 1 ]; then
     rm -rf web_new; mkdir web_new
-    tar -xzf "$STAGE/web.tgz" -C web_new
-    chown -R mcsm:mcsm web_new
+    tar -xzf "$STAGE/web.tgz" -C web_new --no-same-owner
+    chown -R root:root web_new
     find web_new -type d -exec chmod 755 {} +
     find web_new -type f -exec chmod 644 {} +
-    rm -rf web_prev; [ -d web ] && mv web web_prev
+    if [ -f web.unverified ] && [ -d web_prev ]; then
+      echo "[deploy] web: the bundle being replaced never passed its health checks; rollback still returns to the one before it"
+      rm -rf web
+    else
+      rm -rf web_prev; [ -d web ] && mv web web_prev
+    fi
     mv web_new web
+    : > web.unverified
     rm -f "$STAGE/web.tgz"
     echo "[deploy] web bundle updated"
   fi
@@ -201,12 +247,25 @@ fi
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sha=$SHA web=$do_web api=$do_api agent=$do_agent provision=$do_provision rollback=$rollback" >> data/DEPLOYED.txt
 
 # --- Health checks ---
+# A restarted API answers once it has opened its database and applied any
+# migrations, which takes as long as the migrations do. Wait for it instead of
+# guessing: a fixed pause either fails a deploy that was fine or is wasted on
+# one that restarted nothing.
 sleep "$HEALTH_WAIT"
 D=$(cat "$DOMAIN_FILE")
 fail=0
+http_code() { curl -sS -o /dev/null -w "%{http_code}" "$1" 2>/dev/null || echo 000; }
+waited=0
+while [ "$(http_code "http://127.0.0.1:8081/api/v1/health")" != 200 ] && [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do
+  # A unit that has given up is not going to answer; stop waiting for it.
+  if [ "$(systemctl is-failed mcsm-api 2>/dev/null || true)" = failed ]; then break; fi
+  sleep 1
+  waited=$((waited + 1))
+done
+if [ "$waited" != 0 ]; then echo "[health] waited ${waited}s for the API"; fi
 http_check() { # $1 label  $2 url  $3 expect
   local code
-  code=$(curl -sS -o /dev/null -w "%{http_code}" "$2" 2>/dev/null || echo 000)
+  code=$(http_code "$2")
   printf "  %-18s %s\n" "$1" "$code"
   [ "$code" = "$3" ] || fail=1
 }
@@ -231,4 +290,13 @@ elif [ -n "$PROV" ] && [ "$rollback" = 0 ]; then
 fi
 
 if [ "$fail" = 1 ]; then echo "[health] FAILED"; exit 1; fi
+# What is running now has passed its checks, so it is a build worth rolling
+# back to.
+rm -f bin/mcsm-api.unverified bin/mcsm-agent.unverified web.unverified
+# Root-owned files in a directory someone else owns can still be swapped out
+# whole by that owner.
+owner=$(stat -c %U "$ROOT" 2>/dev/null || echo root)
+if [ "$owner" != root ] && [ -z "${DEPLOY_ROOT:-}" ]; then
+  echo "[deploy] note: $ROOT belongs to $owner, who can still move bin/ and web/ aside; make it root's (chown root:root $ROOT) once nothing running as $owner creates files directly in it"
+fi
 echo "[health] OK (sha=$SHA)"

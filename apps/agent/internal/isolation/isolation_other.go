@@ -2,6 +2,11 @@
 
 package isolation
 
+type state struct {
+	cfg    Config
+	status Status
+}
+
 func resolve(cfg Config) *state {
 	st := &state{cfg: cfg, status: Status{Mode: cfg.Mode}}
 	switch cfg.Mode {

@@ -3,12 +3,14 @@ import {
   __test,
   api,
   ApiError,
+  clearSession,
   describeBusy,
   onSessionEnded,
   SESSION_ENDED,
+  setAccessToken,
 } from "./api";
 
-const { tokenExpiresSoon, request } = __test;
+const { getToken, tokenExpiresSoon, request } = __test;
 
 // Build a structurally valid JWT with an arbitrary payload (signature is never
 // verified client-side; only the exp claim is read).
@@ -63,15 +65,14 @@ describe("request auth retry", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    localStorage.clear();
-    localStorage.setItem("access_token", "stale-token");
+    setAccessToken("stale-token");
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    localStorage.clear();
+    clearSession();
   });
 
   it("refreshes once for concurrent 401s (single-flight)", async () => {
@@ -99,7 +100,7 @@ describe("request auth retry", () => {
     );
     expect(refreshCalls).toHaveLength(1);
     // The retried requests carried the refreshed token.
-    expect(localStorage.getItem("access_token")).not.toBe("stale-token");
+    expect(getToken()).not.toBe("stale-token");
   });
 
   it("performs a fresh refresh on a later 401 round (promise resets)", async () => {
@@ -111,7 +112,7 @@ describe("request auth retry", () => {
         return okJson({ access_token: makeToken({ exp: nowSec() + 900, round }) });
       }
       const auth = new Headers(init?.headers).get("Authorization") ?? "";
-      const current = `Bearer ${localStorage.getItem("access_token")}`;
+      const current = `Bearer ${getToken()}`;
       // 401 until the caller presents the freshest token.
       return auth === current && round > 0
         ? okJson({ ok: true })
@@ -120,7 +121,7 @@ describe("request auth retry", () => {
 
     await request("GET", "/servers");
     // Simulate the next access token going stale again.
-    localStorage.setItem("access_token", "stale-token");
+    setAccessToken("stale-token");
     round = 0;
     await request("GET", "/servers");
 
@@ -157,7 +158,16 @@ describe("request auth retry", () => {
       status: 401,
       code: SESSION_ENDED,
     });
+    expect(getToken()).toBeNull();
+  });
+
+  // The token is never written where another script could read it later, and
+  // one an older panel stored is removed.
+  it("keeps the access token out of storage", () => {
+    localStorage.setItem("access_token", "left-by-an-older-panel");
+    setAccessToken(makeToken({ exp: nowSec() + 900 }));
     expect(localStorage.getItem("access_token")).toBeNull();
+    expect(getToken()).not.toBeNull();
   });
 
   // Once the panel is on screen, an ended session asks to sign in again over
@@ -236,11 +246,11 @@ describe("files.upload", () => {
 describe("server runtime repair", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    localStorage.clear();
+    clearSession();
   });
 
   it("sends the complete target runtime in one reinstall request", async () => {
-    localStorage.setItem("access_token", makeToken({ exp: nowSec() + 3600 }));
+    setAccessToken(makeToken({ exp: nowSec() + 3600 }));
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ status: "reinstalled" }), {
         status: 200,
@@ -291,7 +301,7 @@ describe("operations", () => {
     });
 
   beforeEach(() => {
-    localStorage.setItem("access_token", makeToken({ exp: nowSec() + 3600 }));
+    setAccessToken(makeToken({ exp: nowSec() + 3600 }));
     vi.useFakeTimers();
   });
   afterEach(() => {

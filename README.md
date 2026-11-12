@@ -99,6 +99,10 @@ Stop the services (or make sure SQLite has checkpointed cleanly), then a plain
 tar czf mcsm-backup.tgz "$DATABASE_PATH" "$(dirname "$DATABASE_PATH")/.mcsm-secret-key" "$SERVER_ROOT"
 ```
 
+The API keeps daily copies of the database on its own (`db-backups` beside
+it, the newest seven), which is the first part taken care of for a damaged
+database but not for a lost disk: see `docs/deployment.md`.
+
 If you set `APP_ENCRYPTION_KEY` instead, keep a copy of its value with the
 backup (it never touches the disk). Restore by stopping the services,
 extracting the archive back to the same paths, and starting the services again.

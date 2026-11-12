@@ -23,7 +23,7 @@ import { ServerIcon } from '@/ui/pixel'
 import { platformLabel } from '@/ui/platforms'
 import { HomeSkeleton, Loaded } from '@/ui/skeleton'
 import { toast } from '@/ui/toasts'
-import { DAY, cap, cx, plural, toMs } from '@/ui/util'
+import { DAY, cap, cx, plural, rowPress, toMs } from '@/ui/util'
 import type { ServerPermission } from '@/lib/types'
 
 // Home: who's playing, what needs attention, every server on one line each,
@@ -311,7 +311,7 @@ function Home({ fleet }: { fleet: FleetSummary }) {
           {fleet.upcoming.length ? (
             <div className="mini-t">
               {fleet.upcoming.slice(0, 6).map((u) => (
-                <div key={u.task_id} className="mini-row click pair" onClick={() => go(paths.server(u.server_id, 'schedules'))}>
+                <div key={u.task_id} className="mini-row click pair" {...rowPress(() => go(paths.server(u.server_id, 'schedules')), 'link')}>
                   <span className="num t2">{fmtClock(toMs(u.next_run) ?? now)}</span>
                   <span className="ellipsis">
                     <span className="strong">{u.name}</span> <span className="t3">{u.server_name}</span>
@@ -732,7 +732,7 @@ function NodesWidget({ nodes, onOpen }: { nodes: FleetNode[]; onOpen?: () => voi
             const disk = pct(n.disk_used_gb, n.disk_gb)
             const seen = toMs(n.last_seen)
             return (
-              <div key={n.id} className={cx('mini-row', onOpen && 'click')} onClick={onOpen}>
+              <div key={n.id} className={cx('mini-row', onOpen && 'click')} {...rowPress(onOpen, 'link')}>
                 <span className="row" style={{ gap: 8, minWidth: 0 }}>
                   <Status status={n.online ? 'online' : 'crashed'} quiet />
                   <span className="strong ellipsis">{n.name}</span>

@@ -377,6 +377,7 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .t tbody tr:hover td:last-child { border-radius: 0 10px 10px 0; }
 .t tbody tr:hover td, .t tbody tr:hover + tr td { border-top-color: transparent; }
 .t tr.click { cursor: pointer; }
+.t tr.click:focus-visible { outline-offset: -2px; }
 .t .r { text-align: right; }
 .t td.actions { width: 1%; white-space: nowrap; text-align: right; padding-top: 6px; padding-bottom: 6px; }
 .t .sub { color: var(--text-3); font-size: 12px; line-height: 18px; }

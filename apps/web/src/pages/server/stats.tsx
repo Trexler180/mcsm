@@ -9,7 +9,7 @@ import { Empty, Filters, TextBtn } from '@/ui/controls'
 import { DOW, fmtClock, fmtDate, fmtDay, fmtDur, fmtMB, fmtNum } from '@/ui/format'
 import { PlayerHead } from '@/ui/pixel'
 import { Loaded, StatsSkeleton } from '@/ui/skeleton'
-import { DAY, plural } from '@/ui/util'
+import { DAY, plural, rowPress } from '@/ui/util'
 
 // Stats: who plays and when, how smoothly the server runs, and how often it
 // was up, over a period.
@@ -243,7 +243,7 @@ function StatsBody({ server, days, stats, history }: { server: Server; days: Per
             <table className="t">
               <tbody>
                 {top.map((p) => (
-                  <tr key={p.name} className="click" onClick={() => go(paths.server(server.id, 'players') + `?player=${encodeURIComponent(p.name)}`)}>
+                  <tr key={p.name} className="click" {...rowPress(() => go(paths.server(server.id, 'players') + `?player=${encodeURIComponent(p.name)}`))}>
                     <td>
                       <span className="row" style={{ gap: 10 }}>
                         <PlayerHead name={p.name} size={18} />

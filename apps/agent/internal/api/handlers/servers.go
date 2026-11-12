@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mcsm/agent/internal/install"
+	"github.com/mcsm/agent/internal/isolation"
 	"github.com/mcsm/agent/internal/process"
 )
 
@@ -191,6 +192,14 @@ func (h *ServerHandlers) Restart(w http.ResponseWriter, r *http.Request) {
 		// A missing or unparseable body is not an error: older panels restart
 		// without one, and those must keep working.
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err == nil && cfg.Directory != "" {
+			// The same confinement a start gets: a restart must not be a way
+			// to launch from a directory outside the server root.
+			dir, err := validateServerDirectory(h.serverRoot, cfg.Directory)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			cfg.Directory = dir
 			override = &cfg
 		}
 	}
@@ -284,6 +293,12 @@ func (h *ServerHandlers) Purge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.Files {
+		// A directory the server's own user made owner-only would stop the
+		// removal part way; the kill above reclaims at exit, but not when the
+		// exit outlasts its wait or the server never ran under this agent.
+		if err := isolation.Reclaim(dir); err != nil {
+			log.Printf("purge %s: %v", id, err)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			writeError(w, http.StatusInternalServerError, "delete files: "+err.Error())
 			return

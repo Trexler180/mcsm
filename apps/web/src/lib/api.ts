@@ -133,18 +133,35 @@ export function describeBusy(e: unknown): string | null {
 
 const BASE = "/api/v1";
 
+// The access token is held in memory only. It lives fifteen minutes and the
+// HttpOnly refresh cookie mints another on a reload, so keeping it in storage
+// bought nothing but a copy any script on the page could read and keep.
+let currentToken: string | null = null;
+
 function getToken(): string | null {
-  return localStorage.getItem("access_token");
+  return currentToken;
 }
 
-function setAccessToken(token: string) {
-  localStorage.setItem("access_token", token);
-  localStorage.removeItem("refresh_token");
+export function setAccessToken(token: string) {
+  currentToken = token;
+  dropStoredTokens();
 }
 
-function clearStoredSession() {
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("refresh_token");
+export function hasAccessToken(): boolean {
+  return currentToken !== null;
+}
+
+// Tokens an earlier version of the panel left in storage.
+function dropStoredTokens() {
+  try {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+  } catch {}
+}
+
+export function clearSession() {
+  currentToken = null;
+  dropStoredTokens();
 }
 
 let refreshPromise: Promise<string | null> | null = null;
@@ -215,7 +232,7 @@ export function onSessionEnded(handler: (() => void) | null) {
 }
 
 function sessionEnded() {
-  clearStoredSession();
+  clearSession();
   if (sessionEndedHandler) sessionEndedHandler();
   else redirectToLogin();
 }
@@ -227,7 +244,7 @@ function sessionEndedError() {
 }
 
 function redirectToLogin() {
-  clearStoredSession();
+  clearSession();
   // Respect the app's base path (Vite BASE_URL, e.g. "/dashboard/") so a hard
   // redirect lands on the real login route under a subpath deployment, not root.
   const loginPath = import.meta.env.BASE_URL + "login";
@@ -1398,6 +1415,7 @@ export const api = {
 // Test-only seam: exposes the module-private auth/refresh machinery to the
 // vitest suite without widening the public API. Not for application use.
 export const __test = {
+  getToken,
   tokenExpiresSoon,
   refreshAccessToken,
   fetchWithAuth,

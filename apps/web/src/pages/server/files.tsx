@@ -14,7 +14,7 @@ import { useCan } from '@/ui/perm'
 import { FilesSkeleton, Loaded } from '@/ui/skeleton'
 import { ask } from '@/ui/store'
 import { toast } from '@/ui/toasts'
-import { cx, plural } from '@/ui/util'
+import { cx, plural, rowPress } from '@/ui/util'
 import { CodeEditor } from './code-editor'
 import { isLiveStatus, okToOverwrite } from './data'
 import { NbtTree } from './nbt-view'
@@ -346,7 +346,7 @@ function Browser({
                 )}
                 <tbody>
                   {path !== '/' && (
-                    <tr className="click" onClick={() => onFolder(parentOf(path))}>
+                    <tr className="click" {...rowPress(() => onFolder(parentOf(path)))}>
                       {!narrow && <td />}
                       <td className="t2" colSpan={4}>
                         <span className="row" style={{ gap: 8 }}>
@@ -360,7 +360,7 @@ function Browser({
                     const full = join(path, e.name)
                     const size = e.type === 'dir' ? sizes?.[e.name] : e.size
                     return (
-                      <tr key={e.name} className={cx('click', open === full && 'current')} onClick={() => activate(e)}>
+                      <tr key={e.name} className={cx('click', open === full && 'current')} {...rowPress(() => activate(e))}>
                         {!narrow && (
                           <td className="pick" onClick={(ev) => ev.stopPropagation()}>
                             <Check checked={sel.includes(e.name)} onChange={(v) => setSel(v ? [...sel, e.name] : sel.filter((x) => x !== e.name))} label={`Select ${e.name}`} hideLabel />

@@ -1,5 +1,7 @@
 // Small helpers the design system and pages share.
 
+import type { KeyboardEvent } from 'react'
+
 export const SEC = 1000
 export const MIN = 60 * SEC
 export const HOUR = 60 * MIN
@@ -8,6 +10,24 @@ export const DAY = 24 * HOUR
 /** Joins the truthy class names. */
 export function cx(...parts: Array<string | false | null | undefined | 0>): string {
   return parts.filter(Boolean).join(' ')
+}
+
+/** Props for a row that opens when clicked, so it opens from the keyboard as
+ *  well: it takes focus, and Enter or Space on the row itself (not on a
+ *  control inside it) does what a click does. Give div rows a role; a table
+ *  row keeps its own. */
+export function rowPress(open: (() => void) | undefined, role?: 'link' | 'button') {
+  if (!open) return {}
+  return {
+    role,
+    tabIndex: 0,
+    onClick: open,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+      e.preventDefault()
+      open()
+    },
+  }
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))

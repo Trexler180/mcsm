@@ -20,6 +20,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type state struct {
+	cfg    Config
+	status Status
+	// The server user's ids, resolved once at startup.
+	uid int
+	gid int
+}
+
 // capKill is CAP_KILL's bit: the agent must be able to signal a server that
 // runs as another user.
 const capKill = 5

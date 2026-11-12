@@ -421,6 +421,46 @@ test_missing_launcher_is_reported() {
     assert_contains "$OUT" "the bundle has no launcher" "explains"
 }
 
+# The proxy secret is optional, so a host without it converges; a host with
+# only half of it is told which half is missing.
+test_proxy_secret_is_noted_and_a_half_setup_is_reported() {
+    new_host
+    run apply
+    assert_eq "$CODE" 0 "apply without a proxy secret"
+    assert_contains "$OUT" "proxy-secret: not set up" "notes that it is optional and off"
+
+    # nginx sends one, the API does not expect it.
+    echo 'proxy_set_header X-MCSM-Proxy-Secret "s3cret";' > "$R/etc/nginx/mcsm-proxy-secret.conf"
+    run check
+    assert_eq "$CODE" 2 "half set up (nginx only)"
+    assert_contains "$OUT" "the running API has no TRUSTED_PROXY_SECRET" "names the missing half"
+
+    # Both halves: nothing to say, and the secret itself is never printed.
+    echo 'TRUSTED_PROXY_SECRET=s3cret' > "$T/state/override-mcsm-api.service"
+    bash "$T/restart-env" mcsm-api.service 101
+    run check
+    assert_eq "$CODE" 0 "fully set up"
+    assert_not_contains "$OUT" "proxy-secret" "silent when it is in place"
+    assert_not_contains "$OUT" "s3cret" "never prints the secret"
+
+    # The API expects one, nginx sends none.
+    rm "$R/etc/nginx/mcsm-proxy-secret.conf"
+    run check
+    assert_eq "$CODE" 2 "half set up (API only)"
+    assert_contains "$OUT" "nginx sends none" "names the missing half"
+}
+
+# The snippet sets the headers that keep the panel out of other sites' frames,
+# so their absence on the host shows up as drift like any other change.
+test_dashboard_snippet_sets_framing_headers() {
+    new_host
+    local snippet="$HERE/nginx/mcsm-dashboard.conf"
+    assert_contains "$(cat "$snippet")" "add_header Content-Security-Policy \"frame-ancestors 'none'\" always;" "frame-ancestors"
+    assert_contains "$(cat "$snippet")" "add_header X-Frame-Options DENY always;" "X-Frame-Options"
+    assert_eq "$(grep -c 'include /etc/nginx/mcsm-proxy-secret\*.conf;' "$snippet")" \
+        "$(grep -c 'proxy_pass ' "$snippet")" "every proxied location can carry the proxy secret"
+}
+
 test_unreachable_server_root_is_reported() {
     new_host
     touch "$T/state/servers-unreachable"

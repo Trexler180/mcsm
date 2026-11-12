@@ -541,6 +541,12 @@ func swapRestoredDirectory(dst, stage string) error {
 	return nil
 }
 
+// stopForRestore stops a server and confirms its process is gone; replaced in
+// tests.
+var stopForRestore = func(mgr *process.Manager, id string) error {
+	return mgr.EnsureStopped(id, 30*time.Second)
+}
+
 // Restore validates and extracts the selected backup into a staging directory,
 // then stops the server and swaps the completed tree into place. The caller is
 // responsible for restarting afterwards.
@@ -576,8 +582,16 @@ func (h *BackupHandlers) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(stage)
 
-	// Stop the instance first; ignore "not running" so restore works offline.
-	_ = h.mgr.Stop(id, true, 30*time.Second)
+	// Stop the instance first; a server that isn't running is already stopped.
+	// The swap below must not happen under a live process: it would keep
+	// writing into the tree being removed and hold the port the restored
+	// server needs, so a stop that didn't take ends the restore here, with the
+	// live directory untouched.
+	if err := stopForRestore(h.mgr, id); err != nil {
+		log.Printf("restore %s: %v", id, err)
+		writeError(w, http.StatusConflict, "the server could not be stopped, so nothing was restored: "+err.Error())
+		return
+	}
 	// The old tree is moved aside and removed; a directory the server made
 	// owner-only would stop that part way.
 	if err := isolation.Reclaim(dst); err != nil {

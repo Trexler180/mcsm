@@ -10,8 +10,10 @@ import { copyText } from '@/ui/util'
  * for whoever looks into it. The router's error component, so a crash in any
  * route lands here.
  */
-export function CrashPage({ error, reset, info }: { error: Error; reset?: () => void; info?: { componentStack?: string } }) {
+export function CrashPage({ error: thrown, reset, info }: { error: unknown; reset?: () => void; info?: { componentStack?: string } }) {
   const navigate = useNavigate()
+  // Anything can be thrown, not only an Error.
+  const error = thrown instanceof Error ? thrown : new Error(String(thrown))
   const stack = (info?.componentStack || error.stack || '').trim().split('\n').slice(0, 4).join('\n')
   const details = `${error.name}: ${error.message}\nPage: ${window.location.pathname}${window.location.search}\nPanel ${__APP_VERSION__}\n${stack}`
   const again = () => (reset ? reset() : window.location.reload())

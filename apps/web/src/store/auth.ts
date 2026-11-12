@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from '@/lib/api'
+import { api, clearSession, hasAccessToken, setAccessToken } from '@/lib/api'
 import type { User } from '@/lib/types'
 
 interface LoginResult {
@@ -25,11 +25,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   init: async () => {
-    localStorage.removeItem('refresh_token')
-    if (!localStorage.getItem('access_token')) {
+    // The access token is kept in memory, so a fresh page has none: the
+    // refresh cookie says whether there is still a session to pick up.
+    if (!hasAccessToken()) {
       try {
         await api.auth.refresh()
       } catch {
+        // Signed out. Also drops a token an older panel left in storage.
+        clearSession()
         set({ isLoading: false })
         return
       }
@@ -38,7 +41,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const user = await api.auth.me()
       set({ user, isAuthenticated: true, isLoading: false })
     } catch {
-      localStorage.removeItem('access_token')
+      clearSession()
       set({ isLoading: false })
     }
   },
@@ -48,15 +51,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (res.mfa_required) {
       return { mfaRequired: true }
     }
-    localStorage.setItem('access_token', res.access_token!)
-    localStorage.removeItem('refresh_token')
+    setAccessToken(res.access_token!)
     set({ user: res.user!, isAuthenticated: true })
     return { mfaRequired: false }
   },
 
   logout: async () => {
     await api.auth.logout().catch(() => {})
-    localStorage.removeItem('access_token')
+    clearSession()
     set({ user: null, isAuthenticated: false })
   },
 }))

@@ -1,8 +1,10 @@
 package process
 
 import (
+	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestRemoveInstanceIdentity covers the Restart race: if a concurrent Start
@@ -98,4 +100,28 @@ func TestManagerConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestEnsureStoppedReportsALiveProcess covers the caller about to replace a
+// server's files: a stop that returns without the process having exited must
+// read as a failure, and a server with no process as already stopped.
+func TestEnsureStoppedReportsALiveProcess(t *testing.T) {
+	m := NewManager(t.TempDir())
+	if err := m.EnsureStopped("absent", time.Millisecond); err != nil {
+		t.Fatalf("a server with no process: %v, want nil", err)
+	}
+
+	dead := newInstance(m.serverRoot, "dead", StartConfig{})
+	close(dead.done)
+	m.instances["dead"] = dead
+	if err := m.EnsureStopped("dead", time.Millisecond); err != nil {
+		t.Fatalf("an exited server: %v, want nil", err)
+	}
+
+	// No real process (pid 0): stop→kill returns nil without closing done.
+	live := newInstance(m.serverRoot, "live", StartConfig{})
+	m.instances["live"] = live
+	if err := m.EnsureStopped("live", time.Millisecond); !errors.Is(err, ErrStillRunning) {
+		t.Fatalf("a process that never exited: %v, want ErrStillRunning", err)
+	}
 }

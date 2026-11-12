@@ -44,6 +44,10 @@ Plus checks with nothing to install:
   root; it reports the one that blocks the way.
 - **Boot** — `mcsm-api`, `mcsm-agent`, nginx, and SSH must be enabled, or the
   dashboard (and remote access) will not come back after a reboot.
+- **Proxy secret** — optional, and set up by hand because both halves are
+  secrets (`TRUSTED_PROXY_SECRET` in `secrets.env`, the matching header in
+  `/etc/nginx/mcsm-proxy-secret.conf`; see `docs/deployment.md`). Having
+  neither is noted; having only one is reported as a problem.
 
 ### Server isolation and the opt-out
 

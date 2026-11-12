@@ -1,0 +1,48 @@
+# Dependency updates, so a fixed vulnerability reaches this repo as a pull
+# request instead of waiting for someone to run an audit by hand. CI then says
+# whether the update is safe to take.
+#
+# Routine version bumps arrive weekly, grouped into one pull request per
+# ecosystem. Security fixes are not held for that: Dependabot opens those as
+# soon as an advisory is published, when security updates are enabled in the
+# repository's settings.
+#
+# apps/mod is left out on purpose. Its versions (Minecraft, Fabric loader, Loom)
+# move together and are chosen from the game's own metadata; see
+# apps/mod/AGENTS.md.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /apps/api
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /apps/agent
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    groups:
+      # Major versions (React, Vite) come one at a time: each is its own
+      # migration and should not ride along with patch releases.
+      web:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

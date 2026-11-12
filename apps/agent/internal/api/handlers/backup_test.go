@@ -109,6 +109,42 @@ func TestRestoreSwapsFullyExtractedTreeIntoPlace(t *testing.T) {
 	}
 }
 
+// A restore must not swap the directory under a server that is still running.
+func TestRestoreLeavesTheLiveTreeWhenTheServerWillNotStop(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "server")
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(dst, "old.txt")
+	if err := os.WriteFile(live, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeBackupZip(t, filepath.Join(root, "mcsm-backups", "srv", "good.zip"), map[string]string{
+		"world/level.dat": "new world",
+	})
+	prev := stopForRestore
+	stopForRestore = func(*process.Manager, string) error { return process.ErrStillRunning }
+	t.Cleanup(func() { stopForRestore = prev })
+
+	mgr := process.NewManager(root)
+	mgr.RegisterDir("srv", dst)
+	rec := restoreRequest(t, NewBackupHandlers(mgr, root), "srv", "good")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if got, err := os.ReadFile(live); err != nil || string(got) != "old" {
+		t.Fatalf("live tree was touched: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "world")); !os.IsNotExist(err) {
+		t.Fatalf("backup was swapped in under a running server: %v", err)
+	}
+	left, _ := filepath.Glob(filepath.Join(root, ".server-restore-*"))
+	if len(left) != 0 {
+		t.Fatalf("staging directory left behind: %v", left)
+	}
+}
+
 func TestBackupBlockedMsg(t *testing.T) {
 	total := 240 * gib // danger floor clamps to 10 GiB
 	cases := []struct {

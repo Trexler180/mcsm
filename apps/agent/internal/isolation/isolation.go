@@ -93,12 +93,9 @@ type Status struct {
 // not set up for it.
 var ErrUnavailable = errors.New("server isolation is required (AGENT_ISOLATE_SERVERS=1) but unavailable")
 
-type state struct {
-	cfg    Config
-	status Status
-	uid    int
-	gid    int
-}
+// state is the resolved configuration. Its type is declared per platform:
+// only Linux, where servers can run as another user, has that user's ids to
+// keep beside cfg and status.
 
 var (
 	mu      sync.RWMutex

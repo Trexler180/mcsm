@@ -309,6 +309,28 @@ apply_isolation() {
     return $failed
 }
 
+# ── Proxy secret ─────────────────────────────────────────────────
+
+# The proxy secret lets the API tell nginx from every other process on the
+# host. Both halves hold a secret, so neither is installed from the repo: the
+# operator puts TRUSTED_PROXY_SECRET in secrets.env and the matching header in
+# /etc/nginx/mcsm-proxy-secret.conf, which the snippet includes when present.
+# Having neither is a choice and is only noted. Having one without the other is
+# a fault: the API then believes no forwarded address at all, or nginx sends a
+# secret nobody checks.
+PROXY_SECRET_GLOB=/etc/nginx/mcsm-proxy-secret*.conf
+check_proxy_secret() {
+    local api=0 nginx=0
+    [ -n "$(unit_env "$API_UNIT" TRUSTED_PROXY_SECRET)" ] && api=1
+    compgen -G "$R$PROXY_SECRET_GLOB" >/dev/null && nginx=1
+    case "$api$nginx" in
+        11) ;;
+        10) bad "proxy-secret: the API expects a proxy secret (TRUSTED_PROXY_SECRET) but nginx sends none (/etc/nginx/mcsm-proxy-secret.conf is missing), so every visitor looks like this host to it" ;;
+        01) bad "proxy-secret: nginx sends a proxy secret but the running API has no TRUSTED_PROXY_SECRET (restart pending, or missing from secrets.env)" ;;
+        00) say "proxy-secret: not set up, so any process on this host can pose as the proxy to the API; see \"Proxy secret\" in docs/deployment.md" ;;
+    esac
+}
+
 # ── Check ────────────────────────────────────────────────────────
 
 check() {
@@ -334,6 +356,8 @@ check() {
 
     unit_env_is "$API_UNIT" "APP_BASE_PATH=$BASE_PATH" ||
         bad "api-env: the running API does not have APP_BASE_PATH=$BASE_PATH (restart pending, or secrets.env overrides it)"
+
+    check_proxy_secret
 
     unit_env_is "$AGENT_UNIT" "AGENT_ALLOW_REBOOT=1" ||
         bad "reboot: the running agent does not have AGENT_ALLOW_REBOOT=1 (restart pending?)"

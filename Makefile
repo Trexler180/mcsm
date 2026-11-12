@@ -61,6 +61,7 @@ test:
 	cd apps/agent && go test ./...
 	cd apps/api && go test ./...
 	bash deploy/provision_test.sh
+	bash scripts/deploy_apply_test.sh
 
 # The checks CI runs beyond the tests. staticcheck and govulncheck install with
 #   go install honnef.co/go/tools/cmd/staticcheck@v0.8.2

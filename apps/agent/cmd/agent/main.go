@@ -106,8 +106,8 @@ func main() {
 	if token == "" {
 		log.Fatal("AGENT_TOKEN environment variable is required")
 	}
-	if token == "dev-agent-token" && !isDevMode() {
-		log.Fatal("AGENT_TOKEN must not use the default dev token outside development mode")
+	if isPlaceholderToken(token) && !isDevMode() {
+		log.Fatal("AGENT_TOKEN must not use the default dev token or a placeholder outside development mode")
 	}
 
 	port := os.Getenv("AGENT_PORT")
@@ -353,6 +353,17 @@ func defaultServerRoot() string {
 		return "servers"
 	}
 	return filepath.Join("..", "..", "servers")
+}
+
+// isPlaceholderToken reports the values the docs and dev launchers use where a
+// real token belongs. Each is published in this repository, so none may guard
+// the agent outside development mode.
+func isPlaceholderToken(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "dev-agent-token", "change_me", "change-me", "changeme":
+		return true
+	}
+	return false
 }
 
 func isDevMode() bool {

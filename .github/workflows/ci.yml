@@ -1,11 +1,17 @@
 name: CI
 
+# Every push, on every branch: work that lives on a long-running branch for
+# months is exactly the work that most needs checking, and a branch filter here
+# once left 129 commits unchecked. Pull requests are listed too so that ones
+# from forks, which push nowhere in this repository, are covered.
 on:
   pull_request:
   push:
-    branches:
-      - master
-      - main
+
+# A newer push to the same branch makes the run before it pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   go:
@@ -56,6 +62,32 @@ jobs:
           go build ./cmd/agent
           CGO_ENABLED=0 GOOS=linux go build ./cmd/mcsm-launch
 
+  # The panel is developed on Windows and the agent has Windows-only code
+  # (process spawning, Java discovery, file semantics) that the Linux job never
+  # compiles, let alone runs.
+  go-windows:
+    name: Go (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: |
+            apps/api/go.sum
+            apps/agent/go.sum
+      - name: Vet
+        shell: bash
+        run: |
+          (cd apps/api && go vet ./...)
+          (cd apps/agent && go vet ./...)
+      - name: Test API
+        working-directory: apps/api
+        run: go test -timeout 30m ./...
+      - name: Test agent
+        working-directory: apps/agent
+        run: go test -timeout 30m ./...
+
   deploy:
     name: Host provisioning
     runs-on: ubuntu-latest
@@ -63,6 +95,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Provisioning tests
         run: bash deploy/provision_test.sh
+      - name: Deploy applier tests
+        run: bash scripts/deploy_apply_test.sh
       # Server isolation on a throwaway host: real users, the launcher with its
       # file capabilities, and the agent's checks of what a server can reach.
       - name: Server isolation end to end
@@ -117,6 +151,13 @@ jobs:
       - name: Install
         working-directory: apps/web
         run: pnpm install --frozen-lockfile
+      # What ships to browsers must have no known vulnerabilities. Build and
+      # test tooling is left to Dependabot: its advisories arrive weekly and
+      # are rarely reachable, and failing every branch on them teaches people
+      # to ignore the job.
+      - name: Vulnerabilities
+        working-directory: apps/web
+        run: pnpm audit --prod
       - name: Lint
         working-directory: apps/web
         run: pnpm lint

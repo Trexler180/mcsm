@@ -123,9 +123,12 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         // The API (including WebSockets) must always hit the network; only
-        // the app shell and static assets are precached.
+        // the app shell and static assets are precached. The same goes for
+        // everything else the API answers at the origin root: served from '/',
+        // the worker's scope covers those paths too, and it would hand a
+        // public status page or an OAuth discovery document the app shell.
         navigateFallback: base + 'index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/status\//, /^\/\.well-known\//],
       },
     }),
   ],

@@ -50,6 +50,9 @@ redis-data/
 # Auto-generated app-secret encryption key (never commit)
 .mcsm-secret-key
 
+# The API's own copies of its database
+db-backups/
+
 # Per-server working dirs (created by agent at runtime).
 # Anchored to repo root so it does NOT match apps/web/src/routes/servers/.
 /servers/

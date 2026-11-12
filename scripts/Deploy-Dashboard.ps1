@@ -33,7 +33,7 @@
     .\Deploy-Dashboard.ps1 -Part binaries # api + agent only
     .\Deploy-Dashboard.ps1 -Part host     # host config only (provision)
     .\Deploy-Dashboard.ps1 -Provision     # deploy everything + converge host config
-    .\Deploy-Dashboard.ps1 -Test          # run tests/lint first, then deploy
+    .\Deploy-Dashboard.ps1 -Test          # run the checks CI runs first, then deploy
     .\Deploy-Dashboard.ps1 -Rollback      # restore previous binaries + web + database
     .\Deploy-Dashboard.ps1 -Rollback -KeepDatabase  # code only; keep the database as it is
 
@@ -88,7 +88,15 @@ $applyText = (Get-Content $ApplyLocal -Raw) -replace "`r`n", "`n" -replace "`r",
 # Git SHA for the audit trail (best-effort).
 $sha = (& git -C $RepoPath rev-parse --short HEAD 2>$null)
 if (-not $sha) { $sha = 'nogit' }
-if (& git -C $RepoPath status --porcelain 2>$null) { $sha = "$sha+dirty" }
+if (& git -C $RepoPath status --porcelain 2>$null) {
+    $sha = "$sha+dirty"
+    # Allowed, because a fix is sometimes deployed before it is committed, but
+    # said out loud: what goes out is this working tree, which no commit names
+    # and no CI run has seen.
+    if (-not $Rollback) {
+        Write-Warning "Deploying uncommitted changes: this build is not any commit ($sha). Commit first to be able to reproduce it."
+    }
+}
 
 # --- Rollback path ---------------------------------------------------------
 if ($Rollback) {
@@ -116,25 +124,38 @@ function Find-GitBash {
 }
 
 # --- Optional tests (gate the deploy) --------------------------------------
+# The same checks CI runs for each part being deployed, so a build that CI
+# would refuse is refused here too: the deploy goes out from this machine and
+# does not wait for CI.
+function Test-GoModule([string]$name) {
+    Push-Location "$RepoPath\apps\$name"
+    try {
+        Step "go vet + test ($name)"
+        go vet ./...;  if ($LASTEXITCODE) { throw "$name vet failed" }
+        go test ./...; if ($LASTEXITCODE) { throw "$name tests failed" }
+        # Known vulnerabilities in the toolchain and modules this build would
+        # ship. Needs the network, like the deploy itself. Pinned to CI's version.
+        Step "govulncheck ($name)"
+        go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        if ($LASTEXITCODE) { throw "$name has known vulnerabilities (govulncheck); update the Go toolchain or the module it names" }
+    } finally { Pop-Location }
+}
+
 if ($Test) {
     if ($doWeb) {
-        Step "Web typecheck + lint"
+        Step "Web typecheck + lint + tests"
         Push-Location "$RepoPath\apps\web"
         try {
             pnpm run typecheck; if ($LASTEXITCODE) { throw "web typecheck failed" }
             pnpm run lint;      if ($LASTEXITCODE) { throw "web lint failed" }
+            pnpm run test;      if ($LASTEXITCODE) { throw "web tests failed" }
+            # Only what reaches users' browsers; the build tooling's advisories
+            # are CI's and Dependabot's to chase, not a reason to hold a deploy.
+            pnpm audit --prod;  if ($LASTEXITCODE) { throw "web dependencies have known vulnerabilities (pnpm audit --prod)" }
         } finally { Pop-Location }
     }
-    if ($doApi) {
-        Step "go test (api)"
-        Push-Location "$RepoPath\apps\api"
-        try { go test ./...; if ($LASTEXITCODE) { throw "api tests failed" } } finally { Pop-Location }
-    }
-    if ($doAgent) {
-        Step "go test (agent)"
-        Push-Location "$RepoPath\apps\agent"
-        try { go test ./...; if ($LASTEXITCODE) { throw "agent tests failed" } } finally { Pop-Location }
-    }
+    if ($doApi)   { Test-GoModule 'api' }
+    if ($doAgent) { Test-GoModule 'agent' }
     Step "provision tests"
     $gitBash = Find-GitBash
     if (-not $gitBash) { throw "provision tests need Git for Windows' bash.exe" }

@@ -19,7 +19,7 @@ import { PageHead } from '@/ui/page'
 import { Loaded, SkItems, SkTable } from '@/ui/skeleton'
 import { ask } from '@/ui/store'
 import { toast } from '@/ui/toasts'
-import { cx } from '@/ui/util'
+import { cx, rowPress } from '@/ui/util'
 
 // Alerts: what happened (the inbox), what to hear about and where (rules),
 // and the places alerts can go (this browser, webhooks).
@@ -121,7 +121,7 @@ function Inbox({ onRules }: { onRules: () => void }) {
             return (
               <Fragment key={n.id}>
                 {head && <div className="item day t3 small">{head}</div>}
-                <div className="item" style={{ alignItems: 'flex-start' }} onClick={() => read(n)}>
+                <div className="item" style={{ alignItems: 'flex-start' }} {...rowPress(n.read_at ? undefined : () => read(n), 'button')}>
                   <span className={cx('dot', n.severity === 'critical' ? 'bad' : n.severity === 'warning' ? 'warn' : '')} style={{ marginTop: 7, animation: 'none', opacity: n.read_at ? 0.45 : 1 }} />
                   <div className="grow">
                     <div style={{ fontWeight: n.read_at ? 400 : 600 }}>{n.title}</div>

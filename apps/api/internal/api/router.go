@@ -148,7 +148,9 @@ func NewRouter(s *store.Store, jwtSecret, serverRoot string, updater *autoupdate
 	// Establish the caller's address once: forwarding headers are honored only
 	// from TRUSTED_PROXIES and read from the right, so client IPs in audit logs
 	// and login throttling can't be forged.
-	r.Use(apimw.TrustedProxy(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))))
+	// TRUSTED_PROXY_SECRET, when set, additionally makes the proxy prove itself,
+	// so another process on the same host cannot pose as it.
+	r.Use(apimw.TrustedProxyWithSecret(apimw.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES")), os.Getenv("TRUSTED_PROXY_SECRET")))
 	r.Use(apimw.SecurityHeaders)
 	// Unauthenticated routes (sign-in, refresh, public status pages, public
 	// resource packs) get a per-address budget. Login also has its own

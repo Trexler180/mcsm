@@ -16,7 +16,7 @@ The API auto-registers the agent as `Local Agent` when
 
 ## Build
 
-Go 1.26.9 or newer (with the default `GOTOOLCHAIN=auto`, an older Go downloads
+Go 1.26.10 or newer (with the default `GOTOOLCHAIN=auto`, an older Go downloads
 it), Node 22 and pnpm 10.
 
 ```bash
@@ -58,9 +58,37 @@ forward `/api` (including WebSocket upgrades for console/metrics) to `:8081`.
 
 ### systemd (Linux)
 
-Two long-running native processes. Adjust `User`, paths, and secrets to match
-your host. Use a real secrets mechanism (`EnvironmentFile=` with `chmod 600`, or
-your secrets manager) rather than inlining production secrets.
+Two long-running native processes. Adjust `User` and paths to match your host.
+
+Secrets go in a file only root can read, never in the unit: unit files are
+world-readable and `systemctl show` prints their `Environment=` lines to any
+user, which on a host with server isolation includes the user every Minecraft
+mod runs as. A token readable there undoes the isolation.
+
+```bash
+sudo install -d -m 0755 /etc/mcsm
+sudo install -m 0600 /dev/null /etc/mcsm/api.env
+sudo install -m 0600 /dev/null /etc/mcsm/agent.env
+```
+
+```ini
+# /etc/mcsm/api.env — long random values; `openssl rand -hex 32` makes one
+JWT_SECRET=...
+ADMIN_PASSWORD=...
+LOCAL_AGENT_TOKEN=...
+
+# /etc/mcsm/agent.env — the same value as LOCAL_AGENT_TOKEN
+AGENT_TOKEN=...
+```
+
+Outside development mode both processes refuse to start on the placeholder
+values this repository uses in its examples (`CHANGE_ME`, `changeme`,
+`dev-secret`, `dev-agent-token`).
+
+The panel's own data (the database and its encryption key) and the server
+root are separate directories. With server isolation the first is closed to
+the server user and the second must be reachable by it, so one cannot sit
+inside the other.
 
 ```ini
 # /etc/systemd/system/mcsm-api.service
@@ -76,11 +104,9 @@ ExecStart=/opt/mcsm/mcsm-api
 Environment=API_HOST=127.0.0.1
 Environment=API_PORT=8081
 Environment=DATABASE_PATH=/var/lib/mcsm/mcsm.db
-Environment=SERVER_ROOT=/var/lib/mcsm/servers
-Environment=JWT_SECRET=CHANGE_ME
-Environment=ADMIN_PASSWORD=CHANGE_ME
+Environment=SERVER_ROOT=/srv/mcsm/servers
 Environment=AUTO_REGISTER_LOCAL_AGENT=1
-Environment=LOCAL_AGENT_TOKEN=CHANGE_ME
+EnvironmentFile=/etc/mcsm/api.env
 Restart=on-failure
 RestartSec=2
 
@@ -101,8 +127,8 @@ WorkingDirectory=/opt/mcsm
 ExecStart=/opt/mcsm/mcsm-agent
 Environment=AGENT_HOST=127.0.0.1
 Environment=AGENT_PORT=8090
-Environment=AGENT_TOKEN=CHANGE_ME
-Environment=AGENT_SERVER_ROOT=/var/lib/mcsm/servers
+Environment=AGENT_SERVER_ROOT=/srv/mcsm/servers
+EnvironmentFile=/etc/mcsm/agent.env
 Restart=on-failure
 RestartSec=2
 
@@ -113,6 +139,8 @@ WantedBy=multi-user.target
 `AGENT_TOKEN` and the API's `LOCAL_AGENT_TOKEN` must be the same value. Then:
 
 ```bash
+sudo install -d -o mcsm -g mcsm -m 0700 /var/lib/mcsm
+sudo install -d -o mcsm -g mcsm -m 0755 /srv/mcsm /srv/mcsm/servers
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcsm-api mcsm-agent
 ```
@@ -398,6 +426,10 @@ Before exposing the panel to the public internet:
   login throttle can't be spoofed. When unset it defaults to loopback only,
   which is correct for a same-host proxy.
 
+- **Set a proxy secret** when anything else runs on the API's host; see
+  [Proxy secret](#proxy-secret) below. An address says which machine a
+  request came from, not which program.
+
 - **Login throttling, rate limiting, and password policy are automatic.**
   Repeated failed logins lock the source IP (and, briefly, the targeted account);
   authenticated traffic is per-caller rate limited; passwords must be ≥10 chars.
@@ -420,6 +452,44 @@ Before exposing the panel to the public internet:
   and back it up with the database: a database restored without its key locks
   out every two-factor account and every node.
 
+### Proxy secret
+
+On a single host the reverse proxy reaches the API over loopback, and so can
+every other process on the machine. Minecraft servers are such processes, and
+their mods are code you did not write. Without a secret, one of them can
+connect to `127.0.0.1:8081` directly, say it is the proxy, and claim any client
+address: each sign-in guess then gets a fresh per-address lockout, and the
+audit log records addresses that were never there. (The per-account lockout
+still applies, and none of this gets past authentication.)
+
+`TRUSTED_PROXY_SECRET` closes that. When it is set, the API believes forwarding
+headers only from a trusted peer that also sends the same value in
+`X-MCSM-Proxy-Secret`; everything else is treated as a direct client.
+
+1. Pick a value: `openssl rand -hex 32`.
+2. Give it to nginx in a file only root can read. nginx reads its
+   configuration as root, so its workers need no access:
+
+   ```bash
+   sudo install -m 0600 /dev/null /etc/nginx/mcsm-proxy-secret.conf
+   echo 'proxy_set_header X-MCSM-Proxy-Secret "<value>";' | sudo tee /etc/nginx/mcsm-proxy-secret.conf >/dev/null
+   ```
+
+   Every `location` that proxies to the API needs
+   `include /etc/nginx/mcsm-proxy-secret*.conf;` beside its other
+   `proxy_set_header` lines. The managed snippet
+   (`deploy/nginx/mcsm-dashboard.conf`) already has it; add it to any location
+   of your own, such as a status-page subdomain's.
+3. `sudo nginx -t && sudo systemctl reload nginx`. Nothing changes yet: the API
+   ignores the header until it has a secret of its own.
+4. Add `TRUSTED_PROXY_SECRET=<value>` to the API's secrets file (`secrets.env`
+   on the hosted instance) and restart the API.
+
+Do them in that order. With the API's half set and nginx's missing, the panel
+still works but sees every visitor as the host itself, so they share one
+rate limit and one lockout. Host provisioning reports a half-finished setup,
+and notes when none is set.
+
 ### Reverse-proxy security headers (recommended)
 
 The API sets a strict CSP and HSTS on its own JSON responses, but the SPA shell
@@ -433,6 +503,11 @@ add_header Referrer-Policy strict-origin-when-cross-origin always;
 add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 add_header Content-Security-Policy "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" always;
 ```
+
+On the hosted instance the managed nginx snippet sets the framing, sniffing,
+referrer and HSTS headers for the dashboard itself, so provisioning reports them
+missing like any other drift; the snippet above is for deployments that write
+their own server block.
 
 Adjust `connect-src`/`img-src` if you front the API or mod-thumbnail CDNs from
 other origins. The built `index.html` also carries an equivalent policy in a
@@ -448,6 +523,15 @@ the document.
 - Minecraft server directories and local backup archives under `SERVER_ROOT`.
 
 Back up both together so metadata and files stay in sync (see README).
+
+The API also keeps its own copies of the database: one a day into `db-backups`
+beside it, the newest seven kept (`DB_BACKUP_DIR`, `DB_BACKUP_INTERVAL_HOURS`,
+`DB_BACKUP_KEEP`). They are taken with `VACUUM INTO` while the panel runs, so
+each is a consistent database on its own. They protect against a damaged or
+mistakenly changed database, not a lost disk: point `DB_BACKUP_DIR` at other
+storage or sync that directory off the host. The encryption key is not copied
+with them, so the directory can go somewhere less trusted than the host; a
+restore needs both.
 
 ## Upgrades
 
@@ -468,6 +552,16 @@ deploy copies the database, with the API stopped, to `/srv/dashboard/db-prev`
 (root-only, the last three kept), and `-Rollback` restores that copy with the
 previous binaries, setting the replaced database aside in the same directory.
 `-Rollback -KeepDatabase` rolls back code only.
+
+"Previous" means the last build that passed the deploy's health checks. A
+deploy that fails them is marked unverified, and deploying over it again
+leaves the rollback target, and the database copy that belongs to it, where
+they were, so a failed fix for a failed deploy still rolls back to the build
+that worked. The health checks wait up to a minute for a restarted API, which
+answers only after its migrations have run.
+
+Deployed binaries and the web bundle are installed root-owned: the services
+read and run them but cannot rewrite them.
 
 ## TLS
 
@@ -503,3 +597,7 @@ Settings added for the hardened backend (the rest are described above):
 | `AUDIT_RETENTION_DAYS` | API | `365` | How long audit rows are kept; `0` keeps them forever |
 | `APP_ENCRYPTION_KEY` / `APP_ENCRYPTION_KEY_FILE` | API | `.mcsm-secret-key` beside the database | Encrypts stored secrets; back it up with the database |
 | `TRUSTED_PROXIES` | API | loopback | Peers whose `X-Real-IP` / `X-Forwarded-For` are believed |
+| `TRUSTED_PROXY_SECRET` | API | — | When set, a trusted peer must also send this value in `X-MCSM-Proxy-Secret` to be believed |
+| `DB_BACKUP_DIR` | API | `db-backups` beside the database | Where the API keeps copies of its own database |
+| `DB_BACKUP_INTERVAL_HOURS` | API | `24` | How often a copy is taken; `0` turns them off |
+| `DB_BACKUP_KEEP` | API | `7` | How many copies are kept |

@@ -1,9 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import ReactMarkdown from 'react-markdown'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
-import remarkGfm from 'remark-gfm'
 import { api } from '@/lib/api'
 import type { InstalledMod, ModProjectType, ModSearchHit, ModSortIndex, ModSource, Server } from '@/lib/types'
 import { Btn, Check, Empty, Field, Notice, Search, Select, Tabs, TextBtn, type StatusKey } from '@/ui/controls'
@@ -307,24 +303,15 @@ export function Browse({ server, status, installed, onTotal }: { server: Server;
 
 // ---- a closer look --------------------------------------------------------------------------------
 
-const MD: ComponentProps<typeof ReactMarkdown>['components'] = {
-  a: ({ href, children }) => (
-    <a className="link" href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
-  img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" />,
-}
+const MarkdownText = lazy(() => import('./markdown'))
 
-/** A project's own text: Markdown, often with HTML mixed in, which is kept
- *  to what GitHub would allow (no scripts, styles or event handlers). */
+/** A project's own text, rendered as Markdown. The renderer is fetched the
+ *  first time something is shown with it, not with the mods tab. */
 export function Markdown({ text }: { text: string }) {
   return (
-    <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]} components={MD}>
-        {text}
-      </ReactMarkdown>
-    </div>
+    <Suspense fallback={<p className="t3 small">Loading…</p>}>
+      <MarkdownText text={text} />
+    </Suspense>
   )
 }
 

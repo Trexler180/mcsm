@@ -166,3 +166,17 @@ func TestKillWithNothingRunningSucceeds(t *testing.T) {
 		t.Fatalf("kill: %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+// A restart that carries a new configuration is confined to the server root
+// exactly as a start is.
+func TestRestartRefusesADirectoryOutsideTheServerRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	h := NewServerHandlers(process.NewManager(root), root)
+	rr := httptest.NewRecorder()
+	h.Restart(rr, serverRequest(http.MethodPost, "/agent/v1/servers/srv/restart", "srv",
+		`{"directory":"`+filepath.ToSlash(outside)+`"}`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusBadRequest, rr.Body.String())
+	}
+}
