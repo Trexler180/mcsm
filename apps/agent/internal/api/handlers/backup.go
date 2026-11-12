@@ -38,6 +38,10 @@ const gib = int64(1) << 30
 // aren't wasteful.
 func dangerFloor(total int64) int64 { return max(2*gib, min(total/20, 10*gib)) }
 
+// diskUsage reads a filesystem's size and free space. A variable so tests do
+// not depend on how full the machine running them is.
+var diskUsage = disk.Usage
+
 // warnFloor is where we start warning: 10% of the disk, clamped to [5 GiB, 25 GiB].
 func warnFloor(total int64) int64 { return max(5*gib, min(total/10, 25*gib)) }
 
@@ -276,7 +280,7 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 	skipExt := map[string]bool{".lock": true, ".lck": true}
 
 	// Refuse a backup that could dangerously fill the target filesystem.
-	if du, derr := disk.Usage(backupDir); derr == nil && du != nil {
+	if du, derr := diskUsage(backupDir); derr == nil && du != nil {
 		estimate := estimateBackupSize(src, skipRoots, skipExt)
 		if msg := backupBlockedMsg(int64(du.Free), int64(du.Total), estimate); msg != "" {
 			writeError(w, http.StatusInsufficientStorage, msg)
@@ -414,7 +418,7 @@ func (h *BackupHandlers) Backup(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, "the server did not confirm saving the world before the copy, so the backup may be inconsistent")
 	}
 	// Report (but don't fail on) a disk that is getting tight after the backup.
-	if du, derr := disk.Usage(backupDir); derr == nil && du != nil {
+	if du, derr := diskUsage(backupDir); derr == nil && du != nil {
 		if warning := lowSpaceWarning(int64(du.Free), int64(du.Total)); warning != "" {
 			warnings = append(warnings, warning)
 		}

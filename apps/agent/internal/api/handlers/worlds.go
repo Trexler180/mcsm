@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	agentfiles "github.com/mcsm/agent/internal/files"
 	"github.com/mcsm/agent/internal/process"
-	"github.com/shirou/gopsutil/v4/disk"
 )
 
 // WorldHandlers serves world-level operations on a server directory. Uploading
@@ -103,7 +102,7 @@ func (h *WorldHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// The upload itself has to fit on disk alongside the world it unpacks into.
-	if du, derr := disk.Usage(base); derr == nil && du != nil && r.ContentLength > 0 {
+	if du, derr := diskUsage(base); derr == nil && du != nil && r.ContentLength > 0 {
 		if msg := unpackBlockedMsg(int64(du.Free), int64(du.Total), r.ContentLength*2); msg != "" {
 			writeError(w, http.StatusInsufficientStorage, msg)
 			return
@@ -170,7 +169,7 @@ func (h *WorldHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, msg)
 		return
 	}
-	if du, derr := disk.Usage(base); derr == nil && du != nil {
+	if du, derr := diskUsage(base); derr == nil && du != nil {
 		if msg := unpackBlockedMsg(int64(du.Free), int64(du.Total), arc.Bytes); msg != "" {
 			writeError(w, http.StatusInsufficientStorage, msg)
 			return
