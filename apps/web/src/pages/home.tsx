@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMcpApprovalDialog } from '@/shell/agent-review'
 import { api } from '@/lib/api'
@@ -6,6 +6,7 @@ import { asJoinDeniedAlert, whitelistFromAlert } from '@/lib/join-denied'
 import { actionPhrase } from '@/lib/mcp-action-alert'
 import type { AuditEntryWithActor, FleetNode, FleetServer, FleetSummary, MCPActionRequest, MyServerPermissions, NotificationItem } from '@/lib/types'
 import { useAuthStore } from '@/store/auth'
+import { dismissedFor, pruneDismissed, splitDismissed, useDismissedIssues } from '@/store/dismissed-issues'
 import { useNotificationFeed } from '@/store/notification-feed'
 import { useTicker } from '@/shell/banners'
 import { effStatus, groupFleet, useFleet, useFolders } from '@/shell/fleet'
@@ -13,7 +14,7 @@ import { useGo } from '@/shell/nav'
 import { auditSentence } from './audit-text'
 import { paths } from '@/shell/paths'
 import { useServerPerms } from '@/shell/perms'
-import { Btn, Empty, Filters, Meter, Num, STATE, Status, type StatusKey } from '@/ui/controls'
+import { Btn, Empty, Filters, IconBtn, Meter, Num, STATE, Status, type StatusKey } from '@/ui/controls'
 import { act } from '@/ui/failure'
 import { fmtClock, fmtDur, fmtMB, relTime } from '@/ui/format'
 import { Icon, type IconName } from '@/ui/icon'
@@ -65,6 +66,10 @@ interface Issue {
   lead: string
   rest?: string
   serverId?: string
+  /** The state this issue is about. A dismissal holds while it stays the same. */
+  fp?: string
+  /** Dismisses the issue somewhere other than this browser (an alert marked read). */
+  dismiss?: () => void
   acts: { label: string; run: () => void; primary?: boolean; text?: boolean; need?: ServerPermission }[]
 }
 
@@ -74,6 +79,7 @@ function Home({ fleet }: { fleet: FleetSummary }) {
   const go = useGo()
   const qc = useQueryClient()
   const admin = useAuthStore((s) => s.user?.role === 'admin')
+  const userId = useAuthStore((s) => s.user?.id)
   const folders = useFolders().data
   const permsFor = useServerPerms()
   const feed = useNotificationFeed()
@@ -88,7 +94,20 @@ function Home({ fleet }: { fleet: FleetSummary }) {
   const start = (s: FleetServer) => void act(`start ${s.name}`, () => api.servers.start(s.id))
   const restart = (s: FleetServer) => void act(`restart ${s.name}`, () => api.servers.restart(s.id))
 
-  const issues = homeIssues({ fleet, servers, requests, feed: feed.items, now, go, start, refresh, markRead: feed.markRead })
+  const allIssues = homeIssues({ fleet, servers, requests, feed: feed.items, now, go, start, refresh, markRead: feed.markRead })
+  const dismissed = useDismissedIssues(dismissedFor(userId))
+  const { shown: issues, hidden } = splitDismissed(allIssues, dismissed)
+  const presentKeys = allIssues.map((i) => i.key).join(' ')
+  // Forget dismissals for issues that have cleared, so they show again if they
+  // recur. Agent requests may simply not have loaded yet.
+  useEffect(() => {
+    if (!userId) return
+    const store = useDismissedIssues.getState()
+    store.set(userId, pruneDismissed(dismissedFor(userId)(store), allIssues, (k) => !k.startsWith('req') || requests !== undefined))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- presentKeys stands for allIssues
+  }, [userId, presentKeys, requests])
+  const dismissIssue = (it: Issue) => (it.dismiss ? it.dismiss() : userId && useDismissedIssues.getState().dismiss(userId, it))
+  const restoreIssues = () => userId && useDismissedIssues.getState().restore(userId, hidden.map((i) => i.key))
 
   const running = servers.filter((s) => s.status === 'online')
   const players = fleet.figures.players_online
@@ -133,6 +152,11 @@ function Home({ fleet }: { fleet: FleetSummary }) {
           )}
         </h1>
         <span className="t3 small">{issues.length ? plural(issues.length, 'thing needs', 'things need') + ' attention' : 'All clear'}</span>
+        {hidden.length > 0 && (
+          <Btn size="sm" variant="quiet" onClick={restoreIssues} tip="Bring dismissed items back">
+            {hidden.length} dismissed
+          </Btn>
+        )}
         <span className="grow" />
         {admin && (
           <Btn size="sm" icon="plus" onClick={() => go(paths.newServer)}>
@@ -220,7 +244,7 @@ function Home({ fleet }: { fleet: FleetSummary }) {
             <h2 className="section-title">Needs attention</h2>
             <span className="t3 small">{issues.length}</span>
           </div>
-          <IssueList items={issues} permsFor={permsFor} />
+          <IssueList items={issues} permsFor={permsFor} onDismiss={dismissIssue} />
         </section>
       )}
 
@@ -340,6 +364,7 @@ export function homeIssues(o: {
       icon: 'bot',
       lead: `${r.client_name} wants to ${actionPhrase(r.action)} ${r.server_name || 'a server'}.`,
       rest: expires ? `The request expires ${relTime(expires, now)}.` : undefined,
+      fp: r.id,
       acts: r.requires_password
         ? [
             {
@@ -384,6 +409,7 @@ export function homeIssues(o: {
               lead: `${s.name} didn’t start.`,
               rest: 'The panel found what stopped it and how to fix it.',
               serverId: s.id,
+              fp: s.status + ':conflict',
               acts: [{ label: 'Fix it', primary: true, run: () => go(paths.server(s.id)) }],
             }
           : {
@@ -392,6 +418,7 @@ export function homeIssues(o: {
               lead: `${s.name} ${s.status === 'startup_failure' ? 'didn’t start' : 'crashed'}.`,
               rest: 'The console shows what happened.',
               serverId: s.id,
+              fp: s.status,
               acts: [
                 { label: 'Start it', primary: true, need: 'power.start', run: () => o.start(s) },
                 { label: 'Console', text: true, run: () => go(paths.server(s.id)) },
@@ -419,6 +446,7 @@ export function homeIssues(o: {
         lead: last ? `${s.name} hasn’t had a good backup in ${howLong(now - last)}.` : `${s.name} has never been backed up.`,
         rest: reason ? `The last backup failed: ${reason}.` : 'The last backup failed.',
         serverId: s.id,
+        fp: 'failed:' + s.backup_failed_at,
         acts: [{ label: 'Backups', run: () => go(paths.server(s.id, 'backups')) }],
       })
     } else if (last && backupLate(s)) {
@@ -428,6 +456,7 @@ export function homeIssues(o: {
         icon: 'archive',
         lead: `${s.name} hasn’t had a backup in ${howLong(now - last)}.`,
         serverId: s.id,
+        fp: 'late:' + s.last_backup_at,
         acts: [{ label: 'Backups', run: () => go(paths.server(s.id, 'backups')) }],
       })
     } else if (!last && played(s)) {
@@ -437,6 +466,7 @@ export function homeIssues(o: {
         icon: 'archive',
         lead: `${s.name} has never been backed up.`,
         serverId: s.id,
+        fp: 'never',
         acts: [
           {
             label: 'Back up now',
@@ -457,6 +487,7 @@ export function homeIssues(o: {
       icon: 'plug-off',
       lead: seen ? `${n.name} has been offline since ${now - seen > DAY ? relTime(seen, now) : fmtClock(seen)}.` : `${n.name} hasn’t been seen yet.`,
       rest: hosted.length ? `${joinNames(hosted.map((s) => s.name))} can’t run until it’s back.` : undefined,
+      fp: n.last_seen ?? '',
       acts: [{ label: 'Node', run: () => go(paths.nodes) }],
     })
   }
@@ -478,6 +509,7 @@ export function homeIssues(o: {
       lead: `${denied.player} tried to join ${s.name}${times}.`,
       rest: 'They aren’t on the whitelist.',
       serverId: s.id,
+      dismiss: markRead,
       acts: [
         {
           label: 'Add to whitelist',
@@ -489,7 +521,6 @@ export function homeIssues(o: {
               toast('ok', `${denied.player} is on the whitelist`)
             }),
         },
-        { label: 'Ignore', text: true, run: markRead },
       ],
     })
   }
@@ -501,7 +532,7 @@ function joinNames(names: string[]): string {
   return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]
 }
 
-function IssueList({ items, permsFor }: { items: Issue[]; permsFor: (id: string) => MyServerPermissions | null }) {
+function IssueList({ items, permsFor, onDismiss }: { items: Issue[]; permsFor: (id: string) => MyServerPermissions | null; onDismiss: (it: Issue) => void }) {
   return (
     <div className="issues">
       {items.map((it) => {
@@ -525,6 +556,7 @@ function IssueList({ items, permsFor }: { items: Issue[]; permsFor: (id: string)
                   </Btn>
                 ),
               )}
+              <IconBtn icon="x" label="Dismiss" className="issue-x" onClick={() => onDismiss(it)} />
             </div>
           </div>
         )

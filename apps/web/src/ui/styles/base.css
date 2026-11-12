@@ -428,6 +428,8 @@ tr:hover .hover-show, tr:focus-within .hover-show, .item:hover .hover-show, .ite
 .issue .mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; }
 .issue .mark.bad { background: var(--bad-bg); color: var(--bad); }
 .issue .mark.warn { background: var(--warn-bg); color: var(--warn); }
+.issue .issue-x { color: var(--text-3); margin-left: -2px; }
+.issue .issue-x:hover { color: var(--text); }
 
 .empty { padding: 32px 4px; color: var(--text-2); }
 .empty .empty-title { color: var(--text); font-weight: 600; margin-bottom: 4px; }

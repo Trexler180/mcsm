@@ -95,6 +95,18 @@ describe('homeIssues', () => {
     const [i] = issuesFor([srv('a')], { feed: [item] })
     expect(i.lead).toBe('ember_otter tried to join a three times.')
     expect(i.acts[0]).toMatchObject({ label: 'Add to whitelist', need: 'players.whitelist' })
+    expect(i.dismiss).toBeTypeOf('function')
+  })
+
+  it('fingerprints issues so a dismissed one comes back when its state changes', () => {
+    const failed = (at: string) => srv('a', { backup_failed_at: at })
+    const [one] = issuesFor([failed('2026-10-15T00:00:00Z')])
+    const [two] = issuesFor([failed('2026-10-16T00:00:00Z')])
+    expect(one.key).toBe(two.key)
+    expect(one.fp).not.toBe(two.fp)
+    const [crash] = issuesFor([srv('a', { status: 'crashed' })])
+    const [nostart] = issuesFor([srv('a', { status: 'startup_failure' })])
+    expect(crash.fp).not.toBe(nostart.fp)
   })
 })
 
